@@ -4,6 +4,7 @@ platforms = ["osx-arm64"]
 
 [environments]
 lint = { features = ["lint"], no-default-feature = true }
+python = { features = ["python"], no-default-feature = true }
 
 [dependencies]
 rust = "*"
@@ -17,3 +18,10 @@ typos = "*"
 
 [feature.lint.tasks]
 lefthook = { cmd = "lefthook", description = "Run lefthook" }
+
+[feature.python.dependencies]
+ipykernel = "*"
+
+[tasks.run]
+cmd = "cargo run"
+env = { JUPYTER_PATH = "/Users/maurosilber/git/slides-rs/.pixi/envs/python/share/jupyter" }
