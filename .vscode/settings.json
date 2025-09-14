@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.server.extraEnv": {
+        "PATH": "${workspaceFolder}/.pixi/envs/default/bin:/usr/bin"
+    },
+    "rust-analyzer.check.command": "clippy",
+}
