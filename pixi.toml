@@ -2,6 +2,18 @@
 channels = ["https://prefix.dev/conda-forge"]
 platforms = ["osx-arm64"]
 
+[environments]
+lint = { features = ["lint"], no-default-feature = true }
+
 [dependencies]
 rust = "*"
 rust-src = "*"
+
+[feature.lint.dependencies]
+lefthook = "*"
+ruff = "*"
+taplo = "*"
+typos = "*"
+
+[feature.lint.tasks]
+lefthook = { cmd = "lefthook", description = "Run lefthook" }
