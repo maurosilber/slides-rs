@@ -82,7 +82,7 @@
     let currentFragment = 0;
     slides[currentSlide].style.display = "block";
 
-    function updateSlide(i, fragment = 0) {
+    function updateSlide(i, fragment = 1) {
         if (i < 0 || i >= slides.length) return;
         slides[i].style.display = "block"
         slides[currentSlide].style.display = "none";
@@ -93,7 +93,7 @@
     // Hidden rather than removed, so the columns keep their place.
     function updateFragment(i) {
         const columns = fragments[currentSlide];
-        if (i < 0 || i > columns.length) return false;
+        if (i < 1 || i > columns.length) return false;
         columns.forEach((column, j) => {
             for (const element of column) {
                 element.style.visibility = j < i ? "visible" : "hidden";
@@ -103,7 +103,7 @@
         return true;
     }
 
-    updateFragment(0);
+    updateFragment(1);
 
     addEventListener("keydown", (event) => {
         if (event.code == "ArrowRight") {
@@ -111,9 +111,19 @@
         } else if (event.code == "ArrowLeft") {
             if (!updateFragment(currentFragment - 1)) updateSlide(currentSlide - 1, Infinity)
         } else if (event.code == "ArrowDown") {
-            updateSlide(currentSlide + 1)
+            // Alternate: finish this slide, then open the next one.
+            if (currentFragment < fragments[currentSlide].length) {
+                updateFragment(fragments[currentSlide].length)
+            } else {
+                updateSlide(currentSlide + 1, 1)
+            }
         } else if (event.code == "ArrowUp") {
-            updateSlide(currentSlide - 1)
+            // Alternate: finish this slide, then open the next one.
+            if (currentFragment > 1) {
+                updateFragment(1)
+            } else {
+                updateSlide(currentSlide - 1, Infinity)
+            }
         } else {
             console.log(event)
         }
