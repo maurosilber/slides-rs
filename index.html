@@ -62,15 +62,12 @@
 <script>
     const slides = document.getElementsByTagName("section");
 
-    // Each h3 starts a column and owns the elements up to the next h3 or h2.
-    // The h2s are spanners, so they stay visible and reset the column run.
+    // Each h2 and h3 starts a fragment, owning the elements that follow it.
     const fragments = [...slides].map((slide) => {
         const columns = [];
         let column = null;
         for (const child of slide.children) {
-            if (child.tagName == "H2") {
-                column = null;
-            } else if (child.tagName == "H3") {
+            if (child.tagName == "H2" || child.tagName == "H3") {
                 column = [];
                 columns.push(column);
             }
