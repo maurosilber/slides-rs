@@ -80,6 +80,7 @@
 
     let currentSlide = 0;
     let currentFragment = 0;
+    let fragmentsEnabled = true;
     slides[currentSlide].style.display = "block";
 
     function updateSlide(i, fragment = 1) {
@@ -91,41 +92,51 @@
     }
 
     // Hidden rather than removed, so the columns keep their place.
+    // currentFragment is tracked even while disabled, so re-enabling resumes here.
     function updateFragment(i) {
         const columns = fragments[currentSlide];
         if (i < 1 || i > columns.length) return false;
+        currentFragment = i;
+        const shown = fragmentsEnabled ? i : columns.length;
         columns.forEach((column, j) => {
             for (const element of column) {
-                element.style.visibility = j < i ? "visible" : "hidden";
+                element.style.visibility = j < shown ? "visible" : "hidden";
             }
         });
-        currentFragment = i;
         return true;
+    }
+
+    // Disabled fragments are all visible already, so stepping through them is a
+    // no-op: report failure and let the caller move a whole slide instead.
+    function stepFragment(i) {
+        return fragmentsEnabled && updateFragment(i);
     }
 
     updateFragment(1);
 
     addEventListener("keydown", (event) => {
         if (event.code == "ArrowRight") {
-            if (!updateFragment(currentFragment + 1)) updateSlide(currentSlide + 1)
+            if (!stepFragment(currentFragment + 1)) updateSlide(currentSlide + 1)
         } else if (event.code == "ArrowLeft") {
-            if (!updateFragment(currentFragment - 1)) updateSlide(currentSlide - 1, Infinity)
+            if (!stepFragment(currentFragment - 1)) updateSlide(currentSlide - 1, Infinity)
         } else if (event.code == "ArrowDown") {
             // Alternate: finish this slide, then open the next one.
-            if (currentFragment < fragments[currentSlide].length) {
+            if (fragmentsEnabled && currentFragment < fragments[currentSlide].length) {
                 updateFragment(fragments[currentSlide].length)
             } else {
                 updateSlide(currentSlide + 1, 1)
             }
         } else if (event.code == "ArrowUp") {
             // Alternate: finish this slide, then open the next one.
-            if (currentFragment > 1) {
+            if (fragmentsEnabled && currentFragment > 1) {
                 updateFragment(1)
             } else {
                 updateSlide(currentSlide - 1, Infinity)
             }
-        } else {
-            console.log(event)
+        } else if (event.code == "KeyA") {
+            // Toggle: off reveals the whole slide, on returns to where we were.
+            fragmentsEnabled = !fragmentsEnabled;
+            updateFragment(currentFragment);
         }
     })
 </script>
