@@ -2,7 +2,14 @@
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
-[dependencies]
+[environments]
+default = ["rust", "python"]
+python = ["python"]
+
+[feature.rust.dependencies]
 rust = "*"
 rust-src = "*"
 sccache = "*"
+
+[feature.python.dependencies]
+python = "*"
