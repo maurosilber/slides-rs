@@ -41,38 +41,41 @@ fn main() {
 fn render(markdown: &str) -> String {
     let mut metadata = false;
     let mut code: Option<String> = None;
-    let events = Parser::new_ext(markdown, Options::ENABLE_YAML_STYLE_METADATA_BLOCKS)
-        .into_offset_iter()
-        .filter_map(move |(event, range)| match event {
-            // The frontmatter is metadata, not content.
-            Event::Start(Tag::MetadataBlock(_)) => {
-                metadata = true;
-                None
-            }
-            Event::End(TagEnd::MetadataBlock(_)) => {
-                metadata = false;
-                None
-            }
-            _ if metadata => None,
-            // A tilde-fenced block is collected, and stands in for its hash.
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
-                if is_tilde_fenced(markdown, range.start) =>
-            {
-                code = Some(String::new());
-                None
-            }
-            Event::Text(text) if code.is_some() => {
-                code.as_mut().unwrap().push_str(&text);
-                None
-            }
-            Event::End(TagEnd::CodeBlock) if code.is_some() => {
-                let hash = hash(&code.take().unwrap());
-                Some(Event::Html(format!("<p>{hash:016x}</p>\n").into()))
-            }
-            // Every other rule delimits two slides.
-            Event::Rule => Some(Event::Html("</section>\n<section>\n".into())),
-            event => Some(event),
-        });
+    let events = Parser::new_ext(
+        markdown,
+        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS,
+    )
+    .into_offset_iter()
+    .filter_map(move |(event, range)| match event {
+        // The frontmatter is metadata, not content.
+        Event::Start(Tag::MetadataBlock(_)) => {
+            metadata = true;
+            None
+        }
+        Event::End(TagEnd::MetadataBlock(_)) => {
+            metadata = false;
+            None
+        }
+        _ if metadata => None,
+        // A tilde-fenced block is collected, and stands in for its hash.
+        Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
+            if is_tilde_fenced(markdown, range.start) =>
+        {
+            code = Some(String::new());
+            None
+        }
+        Event::Text(text) if code.is_some() => {
+            code.as_mut().unwrap().push_str(&text);
+            None
+        }
+        Event::End(TagEnd::CodeBlock) if code.is_some() => {
+            let hash = hash(&code.take().unwrap());
+            Some(Event::Html(format!("<p>{hash:016x}</p>\n").into()))
+        }
+        // Every other rule delimits two slides.
+        Event::Rule => Some(Event::Html("</section>\n<section>\n".into())),
+        event => Some(event),
+    });
 
     let mut rendered = String::from("<section>\n");
     html::push_html(&mut rendered, events);
