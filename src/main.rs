@@ -1,16 +1,28 @@
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use clap::Parser as _;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
 const TEMPLATE: &str = include_str!("template.html");
 
+/// Renders a markdown file into an HTML slide deck.
+#[derive(clap::Parser)]
+struct Cli {
+    /// The markdown file to render.
+    input: PathBuf,
+    /// Where to write the HTML. Defaults to the input with an `.html` extension.
+    output: Option<PathBuf>,
+}
+
 fn main() {
-    let path = Path::new("slides/index.md");
-    let markdown = fs::read_to_string(path).unwrap();
-    let body = render(&markdown, path.parent().unwrap());
-    fs::write("slides/index.html", TEMPLATE.replace("{body}", &body)).unwrap();
+    let cli = Cli::parse();
+    let markdown = fs::read_to_string(&cli.input).unwrap();
+    // Imports in the input are relative to it.
+    let body = render(&markdown, cli.input.parent().unwrap());
+    let output = cli.output.unwrap_or_else(|| cli.input.with_extension("html"));
+    fs::write(output, TEMPLATE.replace("{body}", &body)).unwrap();
 }
 
 /// Renders the markdown as one `<section>` per slide, indented to sit in the template.
