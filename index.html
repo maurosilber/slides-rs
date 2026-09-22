@@ -19,6 +19,12 @@
             &>h3:not(:first-of-type) {
                 break-before: column;
             }
+
+            /* A row with fewer H3s than --cols would otherwise be balanced
+               across every column, splitting a heading from its text. */
+            &>*:has(+ :not(h2):not(h3)) {
+                break-after: avoid;
+            }
         }
     </style>
 </head>
@@ -32,6 +38,8 @@
         <h3>Column 2</h3>
         <p>Column text</p>
         <h3>Column 3</h3>
+        <p>Column text</p>
+        <h3>Column 4</h3>
         <p>Column text</p>
 
         <h2>More first slide</h2>
