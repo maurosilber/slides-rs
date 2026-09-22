@@ -1,11 +1,18 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use clap::Parser as _;
+use notify::{RecursiveMode, Watcher};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
 const TEMPLATE: &str = include_str!("template.html");
+
+/// Marks an import in the rendered html, followed by its path and a newline.
+const IMPORT: char = '\u{0}';
 
 /// Renders a markdown file into an HTML slide deck.
 #[derive(clap::Parser)]
@@ -14,42 +21,171 @@ struct Cli {
     input: PathBuf,
     /// Where to write the HTML. Defaults to the input with an `.html` extension.
     output: Option<PathBuf>,
+    /// Re-render on every change to the input or to a file it imports.
+    #[arg(short, long)]
+    watch: bool,
 }
 
 fn main() {
-    let cli = Cli::parse();
-    let markdown = fs::read_to_string(&cli.input).unwrap();
-    // Imports in the input are relative to it.
-    let body = render(&markdown, cli.input.parent().unwrap());
-    let output = cli.output.unwrap_or_else(|| cli.input.with_extension("html"));
-    fs::write(output, TEMPLATE.replace("{body}", &body)).unwrap();
-}
+    let Cli {
+        input,
+        output,
+        watch: watching,
+    } = Cli::parse();
+    let output = output.unwrap_or_else(|| input.with_extension("html"));
+    // The cache is keyed by canonical path, as watch events report those.
+    let input = canonical(&input);
 
-/// Renders the markdown as one `<section>` per slide, indented to sit in the template.
-fn render(markdown: &str, dir: &Path) -> String {
-    // A slide break at either end of the document, or two in a row, leaves an empty slide.
-    let rendered = sections(markdown, dir).replace("<section>\n</section>\n", "");
+    let mut cache = Cache::default();
+    cache.load(&input);
+    cache.write(&input, &output);
 
-    // Indentation is cosmetic everywhere but inside `<pre>`, where it is content.
-    let mut indented = String::new();
-    let mut preformatted = false;
-    for line in rendered.lines() {
-        if !preformatted {
-            indented.push_str(match line {
-                "<section>" | "</section>" => "    ",
-                _ => "        ",
-            });
-        }
-        indented.push_str(line);
-        indented.push('\n');
-        preformatted = (preformatted || line.contains("<pre")) && !line.contains("</pre>");
+    if watching {
+        watch(&mut cache, &input, &output);
     }
-    indented
 }
 
-/// Renders the markdown into `<section>`s, dropping the YAML frontmatter
-/// and splitting on horizontal rules. Imports are rendered in place.
-fn sections(markdown: &str, dir: &Path) -> String {
+/// A file's slides, in the order they are rendered: its own html, and the
+/// files it imports, which bring their own.
+enum Part {
+    Html(String),
+    Import(PathBuf),
+}
+
+/// Each file is rendered on its own, so that a change re-renders only that file.
+#[derive(Default)]
+struct Cache {
+    files: HashMap<PathBuf, Vec<Part>>,
+}
+
+impl Cache {
+    /// Renders a file, along with every file it imports that is not cached yet.
+    fn load(&mut self, path: &Path) {
+        let parts = render(&read(path), parent(path));
+        let imports: Vec<PathBuf> = parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Import(path) => Some(path.clone()),
+                Part::Html(_) => None,
+            })
+            .collect();
+
+        // Caching before recursing keeps a cycle of imports from looping forever.
+        self.files.insert(path.to_path_buf(), parts);
+        for import in imports {
+            if !self.files.contains_key(&import) {
+                self.load(&import);
+            }
+        }
+    }
+
+    /// Concatenates the cached renders, following the imports from `path`.
+    fn body(&self, path: &Path, body: &mut String) {
+        for part in &self.files[path] {
+            match part {
+                Part::Html(html) => body.push_str(html),
+                Part::Import(import) => self.body(import, body),
+            }
+        }
+    }
+
+    fn write(&self, input: &Path, output: &Path) {
+        let mut body = String::new();
+        self.body(input, &mut body);
+        // A slide break at either end of a file, or two in a row, leaves an empty slide.
+        let body = indent(&body.replace("<section>\n</section>\n", ""));
+        fs::write(output, TEMPLATE.replace("{body}", &body)).unwrap();
+    }
+}
+
+/// Re-renders the deck whenever one of its files changes, until interrupted.
+fn watch(cache: &mut Cache, input: &Path, output: &Path) {
+    let (sender, receiver) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(sender).unwrap();
+    let mut watched = HashSet::new();
+    watch_dirs(&mut watcher, &mut watched, cache);
+    eprintln!("watching {} files", cache.files.len());
+
+    while let Ok(event) = receiver.recv() {
+        let mut paths: HashSet<PathBuf> = HashSet::new();
+        let mut collect = |event: notify::Result<notify::Event>| {
+            if let Ok(event) = event {
+                paths.extend(event.paths);
+            }
+        };
+        collect(event);
+        // A save arrives as a burst of events, and several files may be saved at once.
+        while let Ok(event) = receiver.recv_timeout(Duration::from_millis(50)) {
+            collect(event);
+        }
+
+        let changed: Vec<PathBuf> = paths
+            .iter()
+            .map(|path| canonical(path))
+            .filter(|path| cache.files.contains_key(path))
+            .collect();
+        if changed.is_empty() {
+            continue;
+        }
+
+        // Only the changed files are rendered again; an import they still
+        // share with the rest of the deck keeps its cached render.
+        for path in &changed {
+            cache.load(path);
+        }
+        watch_dirs(&mut watcher, &mut watched, cache);
+        cache.write(input, output);
+        eprintln!(
+            "rendered {} after {} changed",
+            output.display(),
+            changed.len()
+        );
+    }
+}
+
+/// Watches the directory of every file in the deck: an editor saves by replacing
+/// a file, which a watch on the file itself would not survive.
+fn watch_dirs(watcher: &mut impl Watcher, watched: &mut HashSet<PathBuf>, cache: &Cache) {
+    for path in cache.files.keys() {
+        let dir = parent(path).to_path_buf();
+        if watched.insert(dir.clone()) {
+            watcher.watch(&dir, RecursiveMode::NonRecursive).unwrap();
+        }
+    }
+}
+
+/// The canonical path of a file that need not exist yet, so that the same file
+/// is one cache entry however it is reached.
+fn canonical(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    match (parent(path).canonicalize(), path.file_name()) {
+        (Ok(dir), Some(name)) => dir.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// The directory holding a file, which for a bare file name is the current one.
+fn parent(path: &Path) -> &Path {
+    match path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    }
+}
+
+/// A file that cannot be read renders as nothing, so that watch mode
+/// survives until it is created.
+fn read(path: &Path) -> String {
+    fs::read_to_string(path).unwrap_or_else(|error| {
+        eprintln!("{}: {error}", path.display());
+        String::new()
+    })
+}
+
+/// Renders the markdown into `<section>`s, dropping the YAML frontmatter and
+/// splitting on horizontal rules, with a part boundary at every import.
+fn render(markdown: &str, dir: &Path) -> Vec<Part> {
     let mut metadata = false;
     let mut code: Option<String> = None;
     let events = Parser::new_ext(
@@ -89,11 +225,11 @@ fn sections(markdown: &str, dir: &Path) -> String {
             for line in raw.lines() {
                 match import_src(line) {
                     Some(src) => {
-                        let path = dir.join(src);
-                        let imported = fs::read_to_string(&path).unwrap();
+                        let path = canonical(&dir.join(src));
                         html.push_str("</section>\n");
-                        html.push_str(&sections(&imported, path.parent().unwrap()));
-                        html.push_str("<section>\n");
+                        html.push(IMPORT);
+                        html.push_str(path.to_str().unwrap());
+                        html.push_str("\n<section>\n");
                     }
                     None => {
                         html.push_str(line);
@@ -111,7 +247,37 @@ fn sections(markdown: &str, dir: &Path) -> String {
     let mut rendered = String::from("<section>\n");
     html::push_html(&mut rendered, events);
     rendered.push_str("</section>\n");
-    rendered
+
+    // Split at the markers, so every file is cached apart from the ones it imports.
+    let mut parts = Vec::new();
+    let mut rest = rendered.as_str();
+    while let Some((html, marked)) = rest.split_once(IMPORT) {
+        let (import, after) = marked.split_once('\n').unwrap();
+        parts.push(Part::Html(html.to_string()));
+        parts.push(Part::Import(PathBuf::from(import)));
+        rest = after;
+    }
+    parts.push(Part::Html(rest.to_string()));
+    parts
+}
+
+/// Indents the html to sit inside the template. Indentation is cosmetic
+/// everywhere but inside `<pre>`, where it is content.
+fn indent(html: &str) -> String {
+    let mut indented = String::new();
+    let mut preformatted = false;
+    for line in html.lines() {
+        if !preformatted {
+            indented.push_str(match line {
+                "<section>" | "</section>" => "    ",
+                _ => "        ",
+            });
+        }
+        indented.push_str(line);
+        indented.push('\n');
+        preformatted = (preformatted || line.contains("<pre")) && !line.contains("</pre>");
+    }
+    indented
 }
 
 /// The `src` of an `<import-slide src="..." />`, relative to the importing file.
