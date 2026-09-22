@@ -79,6 +79,26 @@ impl Cache {
         }
     }
 
+    /// Forgets the files that `input` no longer imports, so that a change
+    /// to one of them stops re-rendering the deck.
+    fn prune(&mut self, input: &Path) {
+        let mut imported = HashSet::new();
+        self.imported(input, &mut imported);
+        self.files.retain(|path, _| imported.contains(path));
+    }
+
+    /// The files the deck is made of, reached by following the imports.
+    fn imported(&self, path: &Path, imported: &mut HashSet<PathBuf>) {
+        if !imported.insert(path.to_path_buf()) {
+            return;
+        }
+        for part in self.files.get(path).into_iter().flatten() {
+            if let Part::Import(import) = part {
+                self.imported(import, imported);
+            }
+        }
+    }
+
     /// Concatenates the cached renders, following the imports from `path`.
     fn body(&self, path: &Path, body: &mut String) {
         for part in &self.files[path] {
@@ -133,6 +153,7 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
         for path in &changed {
             cache.load(path);
         }
+        cache.prune(input);
         watch_dirs(&mut watcher, &mut watched, cache);
         cache.write(input, output);
         eprintln!(
@@ -143,15 +164,22 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
     }
 }
 
-/// Watches the directory of every file in the deck: an editor saves by replacing
-/// a file, which a watch on the file itself would not survive.
+/// Watches the directory of every file in the deck, and no others: an editor
+/// saves by replacing a file, which a watch on the file itself would not survive.
 fn watch_dirs(watcher: &mut impl Watcher, watched: &mut HashSet<PathBuf>, cache: &Cache) {
-    for path in cache.files.keys() {
-        let dir = parent(path).to_path_buf();
-        if watched.insert(dir.clone()) {
-            watcher.watch(&dir, RecursiveMode::NonRecursive).unwrap();
-        }
+    let dirs: HashSet<PathBuf> = cache
+        .files
+        .keys()
+        .map(|path| parent(path).to_path_buf())
+        .collect();
+    for dir in dirs.difference(watched) {
+        watcher.watch(dir, RecursiveMode::NonRecursive).unwrap();
     }
+    for dir in watched.difference(&dirs) {
+        // The directory itself may be gone, which already ends the watch.
+        let _ = watcher.unwatch(dir);
+    }
+    *watched = dirs;
 }
 
 /// The canonical path of a file that need not exist yet, so that the same file
