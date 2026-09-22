@@ -13,3 +13,4 @@ sccache = "*"
 
 [feature.python.dependencies]
 python = "*"
+matplotlib = "*"
