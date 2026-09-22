@@ -43,7 +43,7 @@ fn render(markdown: &str) -> String {
     let mut code: Option<String> = None;
     let events = Parser::new_ext(
         markdown,
-        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS,
+        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS | Options::ENABLE_HEADING_ATTRIBUTES,
     )
     .into_offset_iter()
     .filter_map(move |(event, range)| match event {
