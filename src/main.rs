@@ -3,37 +3,12 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
-const TEMPLATE: &str = r#"<!DOCTYPE html>
-<html>
-
-<head>
-    <meta charset="UTF-8">
-    <link rel="stylesheet" href="slides.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/katex.min.css"
-        integrity="sha384-JctiRyLzXCrSoOOzFlSoWLdyzQl7OrrRnhyeBmzB6ZWtcjccUyc8lCQJqIbs3uQX" crossorigin="anonymous">
-    <script type="module">
-        import renderMathInElement from "https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/contrib/auto-render.mjs";
-        renderMathInElement(document.body, {
-            "delimiters": [
-                { left: "$$", right: "$$", display: true },
-                { left: "$", right: "$", display: false },
-            ]
-        });
-    </script>
-</head>
-
-<body>
-{body}</body>
-
-<script src="slides.js"></script>
-
-</html>
-"#;
+const TEMPLATE: &str = include_str!("template.html");
 
 fn main() {
-    let markdown = fs::read_to_string("index.md").unwrap();
+    let markdown = fs::read_to_string("slides/index.md").unwrap();
     let body = render(&markdown);
-    fs::write("index.html", TEMPLATE.replace("{body}", &body)).unwrap();
+    fs::write("slides/index.html", TEMPLATE.replace("{body}", &body)).unwrap();
 }
 
 /// Renders the markdown as one `<section>` per slide,
