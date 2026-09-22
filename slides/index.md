@@ -1,4 +1,4 @@
-## First slide
+## First slide { #some-id .myclass }
 
 ```python
 2 + 2
@@ -16,4 +16,4 @@ $$
 
 ---
 
-## Second slide
+# Second slide
