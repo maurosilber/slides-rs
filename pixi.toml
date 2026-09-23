@@ -2,13 +2,6 @@
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
-[environments]
-python = { features = ["python"], no-default-feature = true }
-
 [dependencies]
 rust = "*"
 rust-src = "*"
-
-[feature.python.dependencies]
-python = "*"
-numpy = "*"
