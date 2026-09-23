@@ -5,3 +5,4 @@ platforms = ["osx-arm64"]
 [dependencies]
 rust = "*"
 rust-src = "*"
+sccache = "*"
