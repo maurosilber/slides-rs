@@ -35,12 +35,27 @@ async fn main() -> Result<()> {
     tokio::fs::create_dir_all(root).await?;
     tokio::fs::write(root.join(".gitignore"), "*").await?;
 
+    let hashes = output::hashes(CELLS);
+    let missing: Vec<bool> = hashes
+        .iter()
+        .map(|hash| !output::exists(root, hash))
+        .collect();
+    if !missing.contains(&true) {
+        println!("every cell is already in {}", root.display());
+        return Ok(());
+    }
+
+    // One kernel runs every cell in order: a cell can use what an earlier one
+    // defined, so none of them can be skipped just because its output is
+    // already saved. Only the writing is skipped.
     let mut kernel = Kernel::start(KERNEL).await?;
-    // One kernel runs every cell in order, so a cell can use what an earlier
-    // one defined, and none of them can be skipped.
-    for code in CELLS {
+    for ((code, hash), missing) in CELLS.iter().zip(&hashes).zip(missing) {
         let outputs = kernel.run(code).await?;
-        let dir = output::save(root, code, &outputs).await?;
+        if !missing {
+            println!("{hash}: already saved");
+            continue;
+        }
+        let dir = output::save(root, hash, &outputs).await?;
         println!("{}: {} output(s)", dir.display(), outputs.len());
     }
     kernel.shutdown().await

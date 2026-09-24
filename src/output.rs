@@ -137,20 +137,40 @@ fn strip_ansi(text: &str) -> String {
     clean
 }
 
-/// The address of a cell: the hash of its code, and nothing else.
-pub fn hash(code: &str) -> String {
-    let digest = Sha256::digest(code.as_bytes());
-    digest
+/// The address of every cell: each one is the hash of all the code the kernel
+/// has run up to and including that cell, concatenated.
+///
+/// One kernel runs the whole document, so a cell's output depends on the state
+/// the cells before it left behind. Hashing a cell on its own would give the
+/// same address to two cells that read different values of the same name.
+pub fn hashes(cells: &[&str]) -> Vec<String> {
+    let mut hasher = Sha256::new();
+    cells
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()[..HASH_LEN]
-        .to_string()
+        .map(|code| {
+            hasher.update(code.as_bytes());
+            // Clone to read the digest so far without ending the chain.
+            hex(hasher.clone().finalize())
+        })
+        .collect()
 }
 
-/// Save a cell's outputs under `<root>/<hash of the code>/`, numbered in the
-/// order the kernel produced them.
-pub async fn save(root: &Path, code: &str, outputs: &[Output]) -> Result<PathBuf> {
-    let dir = root.join(hash(code));
+fn hex(digest: impl AsRef<[u8]>) -> String {
+    digest.as_ref()[..HASH_LEN / 2]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Whether this cell's outputs have already been saved.
+pub fn exists(root: &Path, hash: &str) -> bool {
+    root.join(hash).is_dir()
+}
+
+/// Save a cell's outputs under `<root>/<hash>/`, numbered in the order the
+/// kernel produced them.
+pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {
+    let dir = root.join(hash);
     // Replace the directory so a cell that now produces fewer outputs does not
     // leave a stale file behind for the renderer to pick up.
     match tokio::fs::remove_dir_all(&dir).await {
@@ -176,10 +196,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_hash_addresses_the_code() {
-        assert_eq!(hash("2 + 2").len(), HASH_LEN);
-        assert_eq!(hash("2 + 2"), hash("2 + 2"));
-        assert_ne!(hash("2 + 2"), hash("2 + 3"));
+    fn a_hash_covers_the_cells_before_it() {
+        let hashes = hashes(&["a = 1\n", "a\n"]);
+        assert_eq!(hashes.len(), 2);
+        assert!(hashes.iter().all(|hash| hash.len() == HASH_LEN));
+        // The first cell is addressed by its own code alone.
+        assert_eq!(hashes[0], self::hashes(&["a = 1\n"])[0]);
+        // The second is addressed as if both had been one cell.
+        assert_eq!(hashes[1], self::hashes(&["a = 1\na\n"])[0]);
+    }
+
+    #[test]
+    fn editing_a_cell_readdresses_the_ones_after_it() {
+        let before = hashes(&["a = 1\n", "a\n"]);
+        let after = hashes(&["a = 2\n", "a\n"]);
+        assert_ne!(before[0], after[0]);
+        assert_ne!(before[1], after[1]);
     }
 
     #[test]
