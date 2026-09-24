@@ -43,15 +43,16 @@ async fn kernelspec_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The installed kernelspec of this name.
-async fn find_kernelspec(name: &str) -> Result<KernelspecDir> {
+/// The first of `names` that is installed, so a document can run on whichever
+/// kernel the environment provides.
+async fn find_kernelspec(names: &[&str]) -> Result<KernelspecDir> {
     let mut installed = Vec::new();
     for dir in kernelspec_dirs().await {
         installed.extend(jupyter_zmq_client::read_kernelspec_jsons(&dir).await);
     }
-    installed
+    names
         .iter()
-        .find(|spec| spec.kernel_name == name)
+        .find_map(|name| installed.iter().find(|spec| spec.kernel_name == *name))
         .cloned()
         .with_context(|| {
             let names: Vec<&str> = installed.iter().map(|s| s.kernel_name.as_str()).collect();
@@ -60,12 +61,14 @@ async fn find_kernelspec(name: &str) -> Result<KernelspecDir> {
 }
 
 impl Kernel {
-    /// Start the kernel of the given kernelspec name (e.g. `xpython`) and
-    /// connect to it.
-    pub async fn start(kernel_name: &str) -> Result<Kernel> {
-        let kernelspec = find_kernelspec(kernel_name)
+    /// Start the first of these kernels that is installed, most preferred
+    /// first, and connect to it.
+    pub async fn start(kernel_names: &[&str]) -> Result<Kernel> {
+        let kernelspec = find_kernelspec(kernel_names)
             .await
-            .with_context(|| format!("could not find the `{kernel_name}` kernel"))?;
+            .with_context(|| format!("could not find any of the {kernel_names:?} kernels"))?;
+        let kernel_name = kernelspec.kernel_name.clone();
+        println!("running the cells on the `{kernel_name}` kernel");
 
         // The kernel binds these ports; we only pick ones that are free now.
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);

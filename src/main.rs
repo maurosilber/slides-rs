@@ -13,10 +13,11 @@ use kernel::Kernel;
 /// Where the outputs of every cell are stored.
 const OUTPUT_DIR: &str = "_outputs";
 
-/// The kernel to run the cells with, as `jupyter kernelspec list` names it.
-/// This is xeus-python's full kernel; its `xpython-raw` sibling has no shell to
-/// forward stdout or render figures, so it would quietly produce less.
-const KERNEL: &str = "xpython";
+/// The kernels the cells can run on, most preferred first, as
+/// `jupyter kernelspec list` names them: xeus-python's `xpython`, then
+/// ipykernel's `python3`. Both carry a shell that forwards stdout and renders
+/// figures, unlike xeus-python's `xpython-raw`, which is left out on purpose.
+const KERNELS: &[&str] = &["xpython", "python3"];
 
 const CELLS: &[&str] = &[
     "2 + 2",
@@ -36,7 +37,7 @@ async fn main() -> Result<()> {
     let root = Path::new(OUTPUT_DIR);
     tokio::fs::create_dir_all(root).await?;
 
-    let mut kernel = Kernel::start(KERNEL).await?;
+    let mut kernel = Kernel::start(KERNELS).await?;
     // One kernel runs every cell in order, so a cell can use what an earlier
     // one defined, and none of them can be skipped.
     for code in CELLS {
