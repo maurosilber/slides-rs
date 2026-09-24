@@ -19,6 +19,11 @@ use crate::output::{Output, Outputs};
 /// speaks the older protocol, which has no greeting.
 const WELCOME_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Run on every kernel before the first cell. matplotlib's inline backend
+/// sends figures as PNG only, unless asked for SVG, which stays sharp at any
+/// size on a slide.
+pub const SETUP: &str = "%config InlineBackend.figure_formats = ['svg']\n";
+
 /// A running Jupyter kernel. Cells sent to it share one interpreter, so state
 /// carries over from one cell to the next, exactly as in a notebook.
 pub struct Kernel {
@@ -118,12 +123,15 @@ impl Kernel {
         // first cell's output is not the one that goes missing.
         jupyter_zmq_client::wait_for_iopub_welcome(&mut iopub, WELCOME_TIMEOUT).await?;
 
-        Ok(Kernel {
+        let mut kernel = Kernel {
             process,
             shell,
             iopub,
             connection_file,
-        })
+        };
+        // The setup belongs to no cell, so what it prints is not kept.
+        kernel.run(SETUP).await?;
+        Ok(kernel)
     }
 
     /// Run one cell and collect everything the kernel publishes for it.
