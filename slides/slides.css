@@ -3,3 +3,22 @@ section {
     height: 100%;
     display: none;
 }
+
+/* H3 sections become columns; the H2 spans them all. */
+section {
+    column-count: var(--cols, 1);
+
+    &>h2 {
+        column-span: all;
+    }
+
+    &>h3:not(:first-of-type) {
+        break-before: column;
+    }
+
+    /* A row with fewer H3s than --cols would otherwise be balanced
+       across every column, splitting a heading from its text. */
+    &>*:has(+ :not(h2):not(h3)) {
+        break-after: avoid;
+    }
+}
