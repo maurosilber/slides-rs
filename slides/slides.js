@@ -1,11 +1,17 @@
 const slides = document.getElementsByTagName("section");
 
+// Elements marked as a step within a column: those of an SVG, by
+// `fragment="n"`, and those of math, by `data-fragment`, which \step{...},
+// \also{...} and \fragment{n}{...} write. Without a number, an element comes
+// one step after the last.
+const MARKED = "[fragment], [data-fragment]";
+
 // A slide is revealed in steps, and its n-th fragment shows the first n.
 // Each h2 and h3 starts a column, a step of its own. After each column, and
-// before the first one, come the elements its SVGs mark as `fragment="n"`, in
-// order of n, those sharing an n together. The first step is what the slide
-// opens with: the first column, unless an SVG fragment comes before it.
-const fragments = [...slides].map((slide) => {
+// before the first one, come the elements it marks, in order of their number,
+// those sharing a number together. The first step is what the slide opens
+// with: the first column, unless a marked element comes before it.
+function stepsOf(slide) {
     const groups = [[]];
     for (const child of slide.children) {
         if (child.tagName == "H2" || child.tagName == "H3") groups.push([]);
@@ -19,9 +25,12 @@ const fragments = [...slides].map((slide) => {
             else steps.push(group);
         }
         const numbered = new Map();
+        let last = 0;
         for (const element of group) {
-            for (const part of element.querySelectorAll("[fragment]")) {
-                const n = Number(part.getAttribute("fragment"));
+            for (const part of element.querySelectorAll(MARKED)) {
+                const value = part.getAttribute("fragment") ?? part.dataset.fragment;
+                const n = /^\d+$/.test(value) ? Number(value) : last + 1;
+                last = Math.max(last, n);
                 numbered.set(n, [...(numbered.get(n) ?? []), part]);
             }
         }
@@ -30,6 +39,14 @@ const fragments = [...slides].map((slide) => {
         }
     });
     return steps;
+}
+
+// Math is typeset by a module script, which runs after this one but before
+// DOMContentLoaded, so the steps it marks are only there from then on.
+let fragments = [];
+addEventListener("DOMContentLoaded", () => {
+    fragments = [...slides].map(stepsOf);
+    updateSlide(...positionFromHash());
 });
 
 // column-count has to fit the widest h2 group, not the whole slide.
@@ -91,8 +108,6 @@ function updateFragment(i) {
 function stepFragment(i) {
     return fragmentsEnabled && updateFragment(i);
 }
-
-updateSlide(...positionFromHash());
 
 addEventListener("keydown", (event) => {
     if (event.code == "ArrowRight") {

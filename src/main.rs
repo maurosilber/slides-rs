@@ -1,5 +1,6 @@
 mod execute;
 mod kernel;
+mod math;
 mod output;
 mod svg;
 
@@ -11,7 +12,7 @@ use std::time::Duration;
 
 use clap::{Parser as _, ValueEnum};
 use notify::{RecursiveMode, Watcher};
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 
 const TEMPLATE: &str = include_str!("template.html");
 
@@ -345,13 +346,16 @@ fn render(markdown: &str, path: &Path) -> File {
     let mut metadata = false;
     let mut frontmatter = String::new();
     let mut code: Option<String> = None;
+    let mut steps = math::Steps::default();
     let mut cells = Vec::new();
     // The events are consumed by the time the cells are needed again.
     let cell_codes = &mut cells;
     let yaml = &mut frontmatter;
     let events = Parser::new_ext(
         markdown,
-        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS | Options::ENABLE_HEADING_ATTRIBUTES,
+        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+            | Options::ENABLE_HEADING_ATTRIBUTES
+            | Options::ENABLE_MATH,
     )
     .into_offset_iter()
     .filter_map(move |(event, range)| match event {
@@ -390,6 +394,7 @@ fn render(markdown: &str, path: &Path) -> File {
             for line in raw.lines() {
                 match import_src(line) {
                     Some(src) => {
+                        steps.reset();
                         let path = canonical(&dir.join(src));
                         html.push_str("</section>\n");
                         html.push(IMPORT);
@@ -405,7 +410,20 @@ fn render(markdown: &str, path: &Path) -> File {
             Some(Event::Html(html.into()))
         }
         // Every other rule delimits two slides.
-        Event::Rule => Some(Event::Html("</section>\n<section>\n".into())),
+        Event::Rule => {
+            steps.reset();
+            Some(Event::Html("</section>\n<section>\n".into()))
+        }
+        // Each h2 and h3 starts a column, which counts its steps from one.
+        event @ Event::Start(Tag::Heading {
+            level: HeadingLevel::H2 | HeadingLevel::H3,
+            ..
+        }) => {
+            steps.reset();
+            Some(event)
+        }
+        Event::InlineMath(tex) => Some(Event::InlineMath(steps.number(&tex).into())),
+        Event::DisplayMath(tex) => Some(Event::DisplayMath(steps.number(&tex).into())),
         event => Some(event),
     });
 

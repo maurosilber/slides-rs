@@ -174,10 +174,11 @@ pre:not(:has(> code[class^="language-"])) {
     margin: 0.6em 0;
 }
 
-/* Figures */
+/* Figures. KaTeX draws parts of its math, like braces and roots, as SVGs
+   of its own, which are left to it. */
 
 img,
-svg {
+svg:not(.katex *) {
     display: block;
     max-width: 100%;
     max-height: 70vh;
@@ -185,7 +186,7 @@ svg {
     margin: 0.4em auto;
 }
 
-section svg {
+section svg:not(.katex *) {
     filter: var(--figure-filter);
 }
 
