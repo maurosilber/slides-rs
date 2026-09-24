@@ -5,7 +5,7 @@
 ```
 
 ~~~python
-2 + 2
+2 + 3
 ~~~
 
 $ 2 \cdot x $
@@ -17,3 +17,13 @@ $$
 ---
 
 # Second slide
+
+## Subtitle
+
+### Col 1
+
+Text 1
+
+### Col 2
+
+Text 2
