@@ -167,6 +167,20 @@ pub fn exists(root: &Path, hash: &str) -> bool {
     root.join(hash).is_dir()
 }
 
+/// The files a cell's outputs were saved in, in the order the kernel produced them.
+pub fn saved(root: &Path, hash: &str) -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<(usize, PathBuf)> = std::fs::read_dir(root.join(hash))?
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            let index = path.file_stem()?.to_str()?.parse().ok()?;
+            Some((index, path))
+        })
+        .collect();
+    // Sorted by number, as `10.txt` comes before `2.txt` by name.
+    files.sort();
+    Ok(files.into_iter().map(|(_, path)| path).collect())
+}
+
 /// Save a cell's outputs under `<root>/<hash>/`, numbered in the order the
 /// kernel produced them.
 pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {

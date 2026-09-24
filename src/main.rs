@@ -4,7 +4,6 @@ mod output;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -15,8 +14,15 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
 const TEMPLATE: &str = include_str!("template.html");
 
+/// Where the outputs of every cell are stored, next to the rendered html.
+const OUTPUT_DIR: &str = "_outputs";
+
 /// Marks an import in the rendered html, followed by its path and a newline.
 const IMPORT: char = '\u{0}';
+
+/// Marks a code cell in the rendered html, followed by a newline. The cells
+/// are marked in order, so the n-th marker stands for the n-th cell.
+const CELL: char = '\u{1}';
 
 /// Renders a markdown file into an HTML slide deck.
 #[derive(clap::Parser)]
@@ -46,11 +52,11 @@ enum KernelChoice {
 }
 
 impl KernelChoice {
-    /// The name this kernel is installed under.
-    fn kernelspec(self) -> &'static str {
+    /// The names this kernel is installed under.
+    fn kernelspecs(self) -> &'static [&'static str] {
         match self {
-            KernelChoice::Xpython => "xpython",
-            KernelChoice::Python3 => "python3",
+            KernelChoice::Xpython => &["xpython"],
+            KernelChoice::Python3 => &["python3"],
         }
     }
 }
@@ -60,14 +66,17 @@ fn main() {
         input,
         output,
         watch: watching,
-        kernel: _,
+        kernel,
     } = Cli::parse();
     let output = output.unwrap_or_else(|| input.with_extension("html"));
     // The cache is keyed by canonical path, as watch events report those.
     let input = canonical(&input);
+    // Naming a kernel narrows the search to that one, so asking for a kernel
+    // that is not installed is an error rather than a quiet fallback.
+    let kernels = kernel.map_or(execute::KERNELS, KernelChoice::kernelspecs);
 
-    let mut cache = Cache::default();
-    cache.load(&input);
+    let mut cache = Cache::new(parent(&output).join(OUTPUT_DIR), kernels);
+    cache.update(std::slice::from_ref(&input));
     cache.write(&input, &output);
 
     if watching {
@@ -75,38 +84,107 @@ fn main() {
     }
 }
 
-/// A file's slides, in the order they are rendered: its own html, and the
-/// files it imports, which bring their own.
+/// A file's slides, in the order they are rendered: its own html, the
+/// outputs of its code cells, and the files it imports, which bring their own.
 enum Part {
     Html(String),
+    /// A code cell, by the hash its outputs are saved under.
+    Cell(String),
     Import(PathBuf),
 }
 
+/// A rendered file. Its code cells make up a notebook, run on a kernel of its own.
+struct File {
+    parts: Vec<Part>,
+    cells: Vec<String>,
+}
+
 /// Each file is rendered on its own, so that a change re-renders only that file.
-#[derive(Default)]
 struct Cache {
-    files: HashMap<PathBuf, Vec<Part>>,
+    files: HashMap<PathBuf, File>,
+    /// Where the outputs of the cells are saved.
+    outputs: PathBuf,
+    /// The kernels the cells can run on, most preferred first.
+    kernels: &'static [&'static str],
+    runtime: tokio::runtime::Runtime,
 }
 
 impl Cache {
-    /// Renders a file, along with every file it imports that is not cached yet.
-    fn load(&mut self, path: &Path) {
-        let parts = render(&read(path), parent(path));
+    fn new(outputs: PathBuf, kernels: &'static [&'static str]) -> Cache {
+        Cache {
+            files: HashMap::new(),
+            outputs,
+            kernels,
+            runtime: tokio::runtime::Runtime::new().unwrap(),
+        }
+    }
+
+    /// Renders the files, along with every file they import that is not cached
+    /// yet, and runs the cells of those whose outputs are not saved yet.
+    fn update(&mut self, paths: &[PathBuf]) {
+        let mut loaded = Vec::new();
+        for path in paths {
+            self.load(path, &mut loaded);
+        }
+        self.execute(&loaded);
+    }
+
+    /// Renders a file, along with every file it imports that is not cached yet,
+    /// adding each one to `loaded`.
+    fn load(&mut self, path: &Path, loaded: &mut Vec<PathBuf>) {
+        let (parts, cells) = render(&read(path), parent(path));
         let imports: Vec<PathBuf> = parts
             .iter()
             .filter_map(|part| match part {
                 Part::Import(path) => Some(path.clone()),
-                Part::Html(_) => None,
+                Part::Html(_) | Part::Cell(_) => None,
             })
             .collect();
 
         // Caching before recursing keeps a cycle of imports from looping forever.
-        self.files.insert(path.to_path_buf(), parts);
+        self.files.insert(path.to_path_buf(), File { parts, cells });
+        loaded.push(path.to_path_buf());
         for import in imports {
             if !self.files.contains_key(&import) {
-                self.load(&import);
+                self.load(&import, loaded);
             }
         }
+    }
+
+    /// Runs the notebook of every file, all at once, as each one has a kernel
+    /// of its own. A notebook that fails leaves its missing outputs out of
+    /// the deck, rather than the rest of the deck too.
+    fn execute(&self, paths: &[PathBuf]) {
+        let notebooks: Vec<(&PathBuf, Vec<String>)> = paths
+            .iter()
+            .map(|path| (path, self.files[path].cells.clone()))
+            .filter(|(_, cells)| !cells.is_empty())
+            .collect();
+        if notebooks.is_empty() {
+            return;
+        }
+
+        fs::create_dir_all(&self.outputs).unwrap();
+        fs::write(self.outputs.join(".gitignore"), "*").unwrap();
+        self.runtime.block_on(async {
+            let tasks: Vec<_> = notebooks
+                .into_iter()
+                .map(|(path, cells)| {
+                    let root = self.outputs.clone();
+                    let task = execute::execute_cells(self.kernels, root, cells);
+                    (path, tokio::spawn(task))
+                })
+                .collect();
+            // Let every notebook finish, so a failure in one does not cut
+            // another short while it is still writing.
+            for (path, task) in tasks {
+                match task.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => eprintln!("{}: {error:#}", path.display()),
+                    Err(error) => eprintln!("{}: {error}", path.display()),
+                }
+            }
+        });
     }
 
     /// Forgets the files that `input` no longer imports, so that a change
@@ -122,7 +200,7 @@ impl Cache {
         if !imported.insert(path.to_path_buf()) {
             return;
         }
-        for part in self.files.get(path).into_iter().flatten() {
+        for part in self.files.get(path).into_iter().flat_map(|file| &file.parts) {
             if let Part::Import(import) = part {
                 self.imported(import, imported);
             }
@@ -131,9 +209,10 @@ impl Cache {
 
     /// Concatenates the cached renders, following the imports from `path`.
     fn body(&self, path: &Path, body: &mut String) {
-        for part in &self.files[path] {
+        for part in &self.files[path].parts {
             match part {
                 Part::Html(html) => body.push_str(html),
+                Part::Cell(hash) => body.push_str(&cell_html(&self.outputs, hash)),
                 Part::Import(import) => self.body(import, body),
             }
         }
@@ -180,9 +259,7 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
 
         // Only the changed files are rendered again; an import they still
         // share with the rest of the deck keeps its cached render.
-        for path in &changed {
-            cache.load(path);
-        }
+        cache.update(&changed);
         cache.prune(input);
         watch_dirs(&mut watcher, &mut watched, cache);
         cache.write(input, output);
@@ -242,10 +319,14 @@ fn read(path: &Path) -> String {
 }
 
 /// Renders the markdown into `<section>`s, dropping the YAML frontmatter and
-/// splitting on horizontal rules, with a part boundary at every import.
-fn render(markdown: &str, dir: &Path) -> Vec<Part> {
+/// splitting on horizontal rules, with a part boundary at every import and
+/// at every code cell. The code of the cells comes along, in order.
+fn render(markdown: &str, dir: &Path) -> (Vec<Part>, Vec<String>) {
     let mut metadata = false;
     let mut code: Option<String> = None;
+    let mut cells = Vec::new();
+    // The events are consumed by the time the cells are needed again.
+    let cell_codes = &mut cells;
     let events = Parser::new_ext(
         markdown,
         Options::ENABLE_YAML_STYLE_METADATA_BLOCKS | Options::ENABLE_HEADING_ATTRIBUTES,
@@ -262,7 +343,7 @@ fn render(markdown: &str, dir: &Path) -> Vec<Part> {
             None
         }
         _ if metadata => None,
-        // A tilde-fenced block is collected, and stands in for its hash.
+        // A tilde-fenced block is a code cell, which stands in for its outputs.
         Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
             if is_tilde_fenced(markdown, range.start) =>
         {
@@ -274,8 +355,8 @@ fn render(markdown: &str, dir: &Path) -> Vec<Part> {
             None
         }
         Event::End(TagEnd::CodeBlock) if code.is_some() => {
-            let hash = hash(&code.take().unwrap());
-            Some(Event::Html(format!("<p>{hash:016x}</p>\n").into()))
+            cell_codes.push(code.take().unwrap());
+            Some(Event::Html(format!("{CELL}\n").into()))
         }
         // An imported file brings its own slides, so it breaks out of this one.
         Event::Html(raw) if raw.contains("<import-slide") => {
@@ -306,17 +387,63 @@ fn render(markdown: &str, dir: &Path) -> Vec<Part> {
     html::push_html(&mut rendered, events);
     rendered.push_str("</section>\n");
 
-    // Split at the markers, so every file is cached apart from the ones it imports.
+    // Split at the markers, so every file is cached apart from the ones it
+    // imports, and apart from the outputs of its cells, which may come later.
+    let mut hashes = output::hashes(&cells).into_iter();
     let mut parts = Vec::new();
     let mut rest = rendered.as_str();
-    while let Some((html, marked)) = rest.split_once(IMPORT) {
-        let (import, after) = marked.split_once('\n').unwrap();
+    while let Some(start) = rest.find([IMPORT, CELL]) {
+        let (html, marked) = rest.split_at(start);
+        let (marker, after) = marked.split_once('\n').unwrap();
         parts.push(Part::Html(html.to_string()));
-        parts.push(Part::Import(PathBuf::from(import)));
+        parts.push(match marker.strip_prefix(IMPORT) {
+            Some(import) => Part::Import(PathBuf::from(import)),
+            None => Part::Cell(hashes.next().unwrap()),
+        });
         rest = after;
     }
     parts.push(Part::Html(rest.to_string()));
-    parts
+    (parts, cells)
+}
+
+/// The outputs a cell saved under `root`, in the order the kernel produced
+/// them. Images are linked, relative to the html, and the rest is inlined.
+fn cell_html(root: &Path, hash: &str) -> String {
+    let Ok(files) = output::saved(root, hash) else {
+        // The cell has not run, or its notebook failed; its error was reported then.
+        return format!("<!-- no outputs for cell {hash} -->\n");
+    };
+    let mut html = String::new();
+    for file in files {
+        let name = file.file_name().unwrap().to_str().unwrap();
+        let extension = file.extension().and_then(|extension| extension.to_str());
+        if let Some("png" | "jpeg" | "gif" | "svg") = extension {
+            html.push_str(&format!("<img src=\"{OUTPUT_DIR}/{hash}/{name}\">\n"));
+            continue;
+        }
+        let Ok(mut text) = fs::read_to_string(&file) else {
+            eprintln!("{}: could not read", file.display());
+            continue;
+        };
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        match extension {
+            Some("html") => html.push_str(&text),
+            Some("md") => html::push_html(&mut html, Parser::new(&text)),
+            // Plain text keeps its layout, and is escaped on the way in.
+            _ => html::push_html(
+                &mut html,
+                [
+                    Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)),
+                    Event::Text(text.into()),
+                    Event::End(TagEnd::CodeBlock),
+                ]
+                .into_iter(),
+            ),
+        }
+    }
+    html
 }
 
 /// Indents the html to sit inside the template. Indentation is cosmetic
@@ -349,11 +476,4 @@ fn import_src(line: &str) -> Option<&str> {
 /// The parser normalizes both fence styles, so the source says which one it was.
 fn is_tilde_fenced(markdown: &str, start: usize) -> bool {
     markdown[start..].trim_start().starts_with('~')
-}
-
-/// Identifies a code block by its content, so its output can be cached.
-fn hash(code: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    code.hash(&mut hasher);
-    hasher.finish()
 }

@@ -1,7 +1,7 @@
 //! Run the code cells of a document through a Jupyter kernel and save their
 //! outputs, ready to be inserted into HTML.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Result;
 
@@ -17,11 +17,11 @@ pub const KERNELS: &[&str] = &["xpython", "python3"];
 /// Runs the cells of one notebook, in order, on a kernel of its own (the
 /// first of `kernels` that is installed), and saves
 /// the outputs of those that are not saved yet under `root`.
-pub async fn execute_cells(kernels: &[&str], root: &Path, cells: &[String]) -> Result<()> {
-    let hashes = output::hashes(cells);
+pub async fn execute_cells(kernels: &[&str], root: PathBuf, cells: Vec<String>) -> Result<()> {
+    let hashes = output::hashes(&cells);
     let missing: Vec<bool> = hashes
         .iter()
-        .map(|hash| !output::exists(root, hash))
+        .map(|hash| !output::exists(&root, hash))
         .collect();
     if !missing.contains(&true) {
         println!("every cell is already in {}", root.display());
@@ -38,7 +38,7 @@ pub async fn execute_cells(kernels: &[&str], root: &Path, cells: &[String]) -> R
             println!("{hash}: already saved");
             continue;
         }
-        let dir = output::save(root, hash, &outputs).await?;
+        let dir = output::save(&root, hash, &outputs).await?;
         println!("{}: {} output(s)", dir.display(), outputs.len());
     }
     kernel.shutdown().await
