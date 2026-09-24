@@ -37,12 +37,20 @@ async fn main() -> Result<()> {
     tokio::fs::create_dir_all(root).await?;
     tokio::fs::write(root.join(".gitignore"), "*").await?;
 
-    execute_cells(root, INDEP_CELLS).await?;
-    execute_cells(root, DEP_CELLS).await?;
-    Ok(())
+    // Each set brings up a kernel of its own, so the sets run at the same time.
+    // Cells within a set still run in order, on that one kernel.
+    let tasks = [INDEP_CELLS, DEP_CELLS].map(|cells| tokio::spawn(execute_cells(root, cells)));
+
+    // Let every set finish before reporting, so a failure in one does not cut
+    // the other short while it is still writing.
+    let mut result = Ok(());
+    for task in tasks {
+        result = result.and(task.await?);
+    }
+    result
 }
 
-async fn execute_cells(root: &Path, cells: &[&str]) -> Result<()> {
+async fn execute_cells(root: &'static Path, cells: &'static [&'static str]) -> Result<()> {
     let hashes = output::hashes(cells);
     let missing: Vec<bool> = hashes
         .iter()
