@@ -9,7 +9,7 @@ use jupyter_protocol::connection_info::Transport;
 use jupyter_protocol::{
     ConnectionInfo, ExecuteRequest, ExecutionState, JupyterMessage, JupyterMessageContent,
 };
-use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection};
+use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection, KernelspecDir};
 use tokio::process::Child;
 use uuid::Uuid;
 
@@ -28,13 +28,47 @@ pub struct Kernel {
     connection_file: PathBuf,
 }
 
+/// Where to look for kernelspecs.
+///
+/// The crate searches the Jupyter data directories and asks the `jupyter`
+/// command for the rest. xeus-python installs no `jupyter` command, though, so
+/// under pixi or conda that leaves the environment's own kernels invisible;
+/// look under the prefix ourselves.
+async fn kernelspec_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(prefix) = std::env::var_os("CONDA_PREFIX") {
+        dirs.push(PathBuf::from(prefix).join("share").join("jupyter"));
+    }
+    dirs.extend(jupyter_zmq_client::dirs::data_dirs_with_jupyter_paths().await);
+    dirs
+}
+
+/// The first of `names` that is installed, so a document can run on whichever
+/// kernel the environment provides.
+async fn find_kernelspec(names: &[&str]) -> Result<KernelspecDir> {
+    let mut installed = Vec::new();
+    for dir in kernelspec_dirs().await {
+        installed.extend(jupyter_zmq_client::read_kernelspec_jsons(&dir).await);
+    }
+    names
+        .iter()
+        .find_map(|name| installed.iter().find(|spec| spec.kernel_name == *name))
+        .cloned()
+        .with_context(|| {
+            let names: Vec<&str> = installed.iter().map(|s| s.kernel_name.as_str()).collect();
+            format!("the kernels installed here are {names:?}")
+        })
+}
+
 impl Kernel {
-    /// Start the kernel of the given kernelspec name (e.g. `python3`) and
-    /// connect to it.
-    pub async fn start(kernel_name: &str) -> Result<Kernel> {
-        let kernelspec = jupyter_zmq_client::find_kernelspec_with_jupyter_paths(kernel_name)
+    /// Start the first of these kernels that is installed, most preferred
+    /// first, and connect to it.
+    pub async fn start(kernel_names: &[&str]) -> Result<Kernel> {
+        let kernelspec = find_kernelspec(kernel_names)
             .await
-            .with_context(|| format!("could not find the `{kernel_name}` kernel"))?;
+            .with_context(|| format!("could not find any of the {kernel_names:?} kernels"))?;
+        let kernel_name = kernelspec.kernel_name.clone();
+        println!("running the cells on the `{kernel_name}` kernel");
 
         // The kernel binds these ports; we only pick ones that are free now.
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);

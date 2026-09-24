@@ -8,12 +8,16 @@ use anyhow::Result;
 use crate::kernel::Kernel;
 use crate::output;
 
-/// The kernelspec to run the cells with, as `jupyter kernelspec list` names it.
-const KERNEL: &str = "python3";
+/// The kernels the cells can run on, most preferred first, as
+/// `jupyter kernelspec list` names them: xeus-python's `xpython`, then
+/// ipykernel's `python3`. Both carry a shell that forwards stdout and renders
+/// figures, unlike xeus-python's `xpython-raw`, which is left out on purpose.
+pub const KERNELS: &[&str] = &["xpython", "python3"];
 
-/// Runs the cells of one notebook, in order, on a kernel of its own, and saves
+/// Runs the cells of one notebook, in order, on a kernel of its own (the
+/// first of `kernels` that is installed), and saves
 /// the outputs of those that are not saved yet under `root`.
-pub async fn execute_cells(root: &Path, cells: &[String]) -> Result<()> {
+pub async fn execute_cells(kernels: &[&str], root: &Path, cells: &[String]) -> Result<()> {
     let hashes = output::hashes(cells);
     let missing: Vec<bool> = hashes
         .iter()
@@ -27,7 +31,7 @@ pub async fn execute_cells(root: &Path, cells: &[String]) -> Result<()> {
     // One kernel runs every cell in order: a cell can use what an earlier one
     // defined, so none of them can be skipped just because its output is
     // already saved. Only the writing is skipped.
-    let mut kernel = Kernel::start(KERNEL).await?;
+    let mut kernel = Kernel::start(kernels).await?;
     for ((code, hash), missing) in cells.iter().zip(&hashes).zip(missing) {
         let outputs = kernel.run(code).await?;
         if !missing {

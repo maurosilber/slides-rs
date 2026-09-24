@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use clap::Parser as _;
+use clap::{Parser as _, ValueEnum};
 use notify::{RecursiveMode, Watcher};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
@@ -28,6 +28,31 @@ struct Cli {
     /// Re-render on every change to the input or to a file it imports.
     #[arg(short, long)]
     watch: bool,
+    /// Kernel to run the cells on. Without this, the first of xpython and
+    /// python3 that is installed is used.
+    #[arg(short, long, value_enum)]
+    kernel: Option<KernelChoice>,
+}
+
+/// Which kernel to run the cells on.
+#[derive(Clone, Copy, ValueEnum)]
+enum KernelChoice {
+    /// xeus-python's kernel.
+    #[value(name = "xpython")]
+    Xpython,
+    /// ipykernel's kernel.
+    #[value(name = "python3")]
+    Python3,
+}
+
+impl KernelChoice {
+    /// The name this kernel is installed under.
+    fn kernelspec(self) -> &'static str {
+        match self {
+            KernelChoice::Xpython => "xpython",
+            KernelChoice::Python3 => "python3",
+        }
+    }
 }
 
 fn main() {
@@ -35,6 +60,7 @@ fn main() {
         input,
         output,
         watch: watching,
+        kernel: _,
     } = Cli::parse();
     let output = output.unwrap_or_else(|| input.with_extension("html"));
     // The cache is keyed by canonical path, as watch events report those.
