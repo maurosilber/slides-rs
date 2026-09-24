@@ -7,6 +7,7 @@ mod output;
 use std::path::Path;
 
 use anyhow::Result;
+use clap::{Parser, ValueEnum};
 
 use kernel::Kernel;
 
@@ -18,6 +19,38 @@ const OUTPUT_DIR: &str = "_outputs";
 /// ipykernel's `python3`. Both carry a shell that forwards stdout and renders
 /// figures, unlike xeus-python's `xpython-raw`, which is left out on purpose.
 const KERNELS: &[&str] = &["xpython", "python3"];
+
+/// Which kernel to run the cells on.
+#[derive(Clone, Copy, ValueEnum)]
+enum KernelChoice {
+    /// xeus-python's kernel.
+    #[value(name = "xpython")]
+    Xpython,
+    /// ipykernel's kernel.
+    #[value(name = "python3")]
+    Python3,
+}
+
+impl KernelChoice {
+    /// The name this kernel is installed under.
+    fn kernelspec(self) -> &'static str {
+        match self {
+            KernelChoice::Xpython => "xpython",
+            KernelChoice::Python3 => "python3",
+        }
+    }
+}
+
+/// Run the code cells of a document through a Jupyter kernel and save their
+/// outputs.
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    /// Kernel to run the cells on. Without this, the first of xpython and
+    /// python3 that is installed is used.
+    #[arg(short, long, value_enum)]
+    kernel: Option<KernelChoice>,
+}
 
 const CELLS: &[&str] = &[
     "2 + 2",
@@ -34,10 +67,18 @@ plt.plot([1, 2, 1])
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+    // Naming a kernel narrows the search to that one, so asking for a kernel
+    // that is not installed is an error rather than a quiet fallback.
+    let kernels = match args.kernel {
+        Some(kernel) => &[kernel.kernelspec()][..],
+        None => KERNELS,
+    };
+
     let root = Path::new(OUTPUT_DIR);
     tokio::fs::create_dir_all(root).await?;
 
-    let mut kernel = Kernel::start(KERNELS).await?;
+    let mut kernel = Kernel::start(kernels).await?;
     // One kernel runs every cell in order, so a cell can use what an earlier
     // one defined, and none of them can be skipped.
     for code in CELLS {
