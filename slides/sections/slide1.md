@@ -1,12 +1,4 @@
-## First slide { #some-id .myclass }
-
-```python
-2 + 2
-```
-
-~~~python
-2 + 3
-~~~
+# First slide { #some-id .myclass }
 
 $ 2 \cdot x $
 

@@ -1,0 +1,196 @@
+/* The look shared by every theme. A theme imports this file and sets the
+   variables below; slides.css keeps the layout, and this only dresses it. */
+
+:root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --heading: #0f172a;
+    --accent: #2563eb;
+    --code-bg: #f3f4f6;
+    --output-bg: transparent;
+    --rule: #d0d7de;
+
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-heading: var(--font-body);
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --heading-weight: 700;
+
+    /* Everything is sized off the viewport, so a slide looks the same at
+       any window size. Raise it for a big room, lower it for dense slides. */
+    --scale: 1;
+    --radius: 0.4em;
+
+    /* Figures are drawn by matplotlib in black on white; a dark theme
+       inverts them, turning the hues back so the colours stay recognisable. */
+    --figure-filter: none;
+}
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: calc(var(--scale) * 3.2vmin);
+    line-height: 1.4;
+}
+
+section {
+    box-sizing: border-box;
+    padding: 6vmin 8vmin;
+    column-gap: 5vmin;
+    overflow: hidden;
+}
+
+/* Headings */
+
+h1,
+h2,
+h3 {
+    font-family: var(--font-heading);
+    font-weight: var(--heading-weight);
+    color: var(--heading);
+    line-height: 1.15;
+    margin: 0 0 0.5em;
+}
+
+h1 {
+    font-size: 2em;
+    /* The title spans the columns, like the h2 below it. */
+    column-span: all;
+    padding-bottom: 0.25em;
+    border-bottom: 0.08em solid var(--accent);
+}
+
+h2 {
+    font-size: 1.45em;
+}
+
+h3 {
+    font-size: 1.1em;
+    color: var(--accent);
+}
+
+/* Text */
+
+p,
+ul,
+ol,
+blockquote,
+table {
+    margin: 0 0 0.7em;
+}
+
+li + li {
+    margin-top: 0.25em;
+}
+
+li::marker {
+    color: var(--accent);
+}
+
+a {
+    color: var(--accent);
+    text-decoration-thickness: 0.06em;
+    text-underline-offset: 0.15em;
+}
+
+strong {
+    color: var(--heading);
+}
+
+blockquote {
+    padding-left: 0.8em;
+    border-left: 0.2em solid var(--accent);
+    color: var(--muted);
+    font-style: italic;
+}
+
+hr {
+    border: none;
+    border-top: 0.06em solid var(--rule);
+}
+
+table {
+    border-collapse: collapse;
+}
+
+th,
+td {
+    padding: 0.3em 0.8em;
+    border-bottom: 0.05em solid var(--rule);
+    text-align: left;
+}
+
+th {
+    color: var(--heading);
+    border-bottom-width: 0.1em;
+}
+
+/* Code */
+
+code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 0.1em 0.3em;
+    border-radius: 0.25em;
+}
+
+pre {
+    font-size: 0.75em;
+    line-height: 1.4;
+    padding: 0.8em 1em;
+    border-radius: var(--radius);
+    overflow: auto;
+}
+
+pre code {
+    font-size: 1em;
+    background: none;
+    padding: 0;
+}
+
+/* A cell's source carries its language; what it printed does not. */
+pre:has(> code[class^="language-"]) {
+    background: var(--code-bg);
+}
+
+pre:not(:has(> code[class^="language-"])) {
+    background: var(--output-bg);
+    color: var(--muted);
+    border-left: 0.2em solid var(--rule);
+    border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* Math */
+
+.katex-display {
+    margin: 0.6em 0;
+}
+
+/* Figures */
+
+img,
+svg {
+    display: block;
+    max-width: 100%;
+    max-height: 70vh;
+    height: auto;
+    margin: 0.4em auto;
+}
+
+section svg {
+    filter: var(--figure-filter);
+}
+
+/* matplotlib paints the figure and each axes white; let the slide show through. */
+section svg g[id^="figure_"] > g[id^="patch_"]:first-child path,
+section svg g[id^="axes_"] > g[id^="patch_"]:first-child path {
+    fill: transparent !important;
+}
