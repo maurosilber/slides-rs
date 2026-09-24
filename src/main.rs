@@ -98,6 +98,9 @@ enum Part {
 struct File {
     parts: Vec<Part>,
     cells: Vec<String>,
+    /// The theme its frontmatter asks for. Only the input's is used, so an
+    /// imported file can keep the theme it was written with.
+    theme: Option<String>,
 }
 
 /// Each file is rendered on its own, so that a change re-renders only that file.
@@ -133,8 +136,9 @@ impl Cache {
     /// Renders a file, along with every file it imports that is not cached yet,
     /// adding each one to `loaded`.
     fn load(&mut self, path: &Path, loaded: &mut Vec<PathBuf>) {
-        let (parts, cells) = render(&read(path), parent(path));
-        let imports: Vec<PathBuf> = parts
+        let file = render(&read(path), path);
+        let imports: Vec<PathBuf> = file
+            .parts
             .iter()
             .filter_map(|part| match part {
                 Part::Import(path) => Some(path.clone()),
@@ -143,7 +147,7 @@ impl Cache {
             .collect();
 
         // Caching before recursing keeps a cycle of imports from looping forever.
-        self.files.insert(path.to_path_buf(), File { parts, cells });
+        self.files.insert(path.to_path_buf(), file);
         loaded.push(path.to_path_buf());
         for import in imports {
             if !self.files.contains_key(&import) {
@@ -224,7 +228,20 @@ impl Cache {
         self.body(input, &mut body);
         // A slide break at either end of a file, or two in a row, leaves an empty slide.
         let body = indent(&body.replace("<section>\n</section>\n", ""));
-        fs::write(output, TEMPLATE.replace("{body}", &body)).unwrap();
+        let theme = match &self.files[input].theme {
+            Some(theme) => {
+                let href = theme_href(theme);
+                if !parent(output).join(&href).is_file() {
+                    eprintln!("{}: no theme {href} next to it", output.display());
+                }
+                format!("    <link rel=\"stylesheet\" href=\"{}\">\n", escape(&href))
+            }
+            None => String::new(),
+        };
+        let html = TEMPLATE
+            .replace("    {theme}\n", &theme)
+            .replace("{body}", &body);
+        fs::write(output, html).unwrap();
     }
 }
 
@@ -319,15 +336,19 @@ fn read(path: &Path) -> String {
     })
 }
 
-/// Renders the markdown into `<section>`s, dropping the YAML frontmatter and
-/// splitting on horizontal rules, with a part boundary at every import and
-/// at every code cell. The code of the cells comes along, in order.
-fn render(markdown: &str, dir: &Path) -> (Vec<Part>, Vec<String>) {
+/// Renders the markdown of the file at `path` into `<section>`s, taking the
+/// YAML frontmatter out and splitting on horizontal rules, with a part
+/// boundary at every import and at every code cell. The code of the cells
+/// comes along, in order.
+fn render(markdown: &str, path: &Path) -> File {
+    let dir = parent(path);
     let mut metadata = false;
+    let mut frontmatter = String::new();
     let mut code: Option<String> = None;
     let mut cells = Vec::new();
     // The events are consumed by the time the cells are needed again.
     let cell_codes = &mut cells;
+    let yaml = &mut frontmatter;
     let events = Parser::new_ext(
         markdown,
         Options::ENABLE_YAML_STYLE_METADATA_BLOCKS | Options::ENABLE_HEADING_ATTRIBUTES,
@@ -341,6 +362,10 @@ fn render(markdown: &str, dir: &Path) -> (Vec<Part>, Vec<String>) {
         }
         Event::End(TagEnd::MetadataBlock(_)) => {
             metadata = false;
+            None
+        }
+        Event::Text(text) if metadata => {
+            yaml.push_str(&text);
             None
         }
         _ if metadata => None,
@@ -404,7 +429,50 @@ fn render(markdown: &str, dir: &Path) -> (Vec<Part>, Vec<String>) {
         rest = after;
     }
     parts.push(Part::Html(rest.to_string()));
-    (parts, cells)
+    File {
+        parts,
+        cells,
+        theme: Frontmatter::parse(&frontmatter, path).theme,
+    }
+}
+
+/// What a file's frontmatter sets. Keys the deck does not read are ignored,
+/// so the frontmatter can hold a title, an author, or notes of its own.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct Frontmatter {
+    theme: Option<String>,
+}
+
+impl Frontmatter {
+    /// Frontmatter that is not valid YAML is reported and left out, rather
+    /// than keeping the rest of the file from rendering.
+    fn parse(yaml: &str, path: &Path) -> Frontmatter {
+        if yaml.trim().is_empty() {
+            return Frontmatter::default();
+        }
+        serde_saphyr::from_str(yaml).unwrap_or_else(|error| {
+            eprintln!("{}: invalid frontmatter: {error}", path.display());
+            Frontmatter::default()
+        })
+    }
+}
+
+/// The stylesheet a theme names, relative to the html: one of the
+/// `theme-<name>.css` next to `slides.css`, or a stylesheet of its own.
+fn theme_href(theme: &str) -> String {
+    if theme.ends_with(".css") {
+        theme.to_string()
+    } else {
+        format!("theme-{theme}.css")
+    }
+}
+
+/// Escapes text for an html attribute.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
 }
 
 /// The outputs a cell saved under `root`, in the order the kernel produced
@@ -482,4 +550,48 @@ fn import_src(line: &str) -> Option<&str> {
 /// The parser normalizes both fence styles, so the source says which one it was.
 fn is_tilde_fenced(markdown: &str, start: usize) -> bool {
     markdown[start..].trim_start().starts_with('~')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn theme(yaml: &str) -> Option<String> {
+        Frontmatter::parse(yaml, Path::new("slides.md")).theme
+    }
+
+    #[test]
+    fn the_theme_comes_from_the_frontmatter() {
+        let markdown = "---\ntitle: Talk\ntheme: dark\n---\n# Slide\n";
+        let file = render(markdown, Path::new("slides.md"));
+        assert_eq!(file.theme.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn a_theme_is_read_as_yaml() {
+        assert_eq!(theme("theme: \"paper\"").as_deref(), Some("paper"));
+        assert_eq!(theme("theme: 'my theme.css'").as_deref(), Some("my theme.css"));
+        assert_eq!(theme("theme: light # for daytime").as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn without_a_theme_there_is_none() {
+        assert_eq!(theme(""), None);
+        assert_eq!(theme("title: Talk"), None);
+        assert_eq!(theme("theme:"), None);
+        // An indented key belongs to some other mapping.
+        assert_eq!(theme("slides:\n  theme: dark"), None);
+    }
+
+    #[test]
+    fn invalid_frontmatter_is_left_out() {
+        assert_eq!(theme("theme: [dark"), None);
+        assert_eq!(theme("theme: [dark]"), None);
+    }
+
+    #[test]
+    fn a_theme_names_a_bundled_stylesheet_or_its_own() {
+        assert_eq!(theme_href("dark"), "theme-dark.css");
+        assert_eq!(theme_href("custom/talk.css"), "custom/talk.css");
+    }
 }
