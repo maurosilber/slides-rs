@@ -33,6 +33,7 @@ plt.plot([1, 2, 1])
 async fn main() -> Result<()> {
     let root = Path::new(OUTPUT_DIR);
     tokio::fs::create_dir_all(root).await?;
+    tokio::fs::write(root.join(".gitignore"), "*").await?;
 
     let mut kernel = Kernel::start(KERNEL).await?;
     // One kernel runs every cell in order, so a cell can use what an earlier
