@@ -13,8 +13,10 @@ use kernel::Kernel;
 /// Where the outputs of every cell are stored.
 const OUTPUT_DIR: &str = "_outputs";
 
-/// The kernelspec to run the cells with, as `jupyter kernelspec list` names it.
-const KERNEL: &str = "python3";
+/// The kernel to run the cells with, as `jupyter kernelspec list` names it.
+/// This is xeus-python's full kernel; its `xpython-raw` sibling has no shell to
+/// forward stdout or render figures, so it would quietly produce less.
+const KERNEL: &str = "xpython";
 
 const CELLS: &[&str] = &[
     "2 + 2",

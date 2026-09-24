@@ -9,7 +9,7 @@ use jupyter_protocol::connection_info::Transport;
 use jupyter_protocol::{
     ConnectionInfo, ExecuteRequest, ExecutionState, JupyterMessage, JupyterMessageContent,
 };
-use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection};
+use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection, KernelspecDir};
 use tokio::process::Child;
 use uuid::Uuid;
 
@@ -28,11 +28,42 @@ pub struct Kernel {
     connection_file: PathBuf,
 }
 
+/// Where to look for kernelspecs.
+///
+/// The crate searches the Jupyter data directories and asks the `jupyter`
+/// command for the rest. xeus-python installs no `jupyter` command, though, so
+/// under pixi or conda that leaves the environment's own kernels invisible;
+/// look under the prefix ourselves.
+async fn kernelspec_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(prefix) = std::env::var_os("CONDA_PREFIX") {
+        dirs.push(PathBuf::from(prefix).join("share").join("jupyter"));
+    }
+    dirs.extend(jupyter_zmq_client::dirs::data_dirs_with_jupyter_paths().await);
+    dirs
+}
+
+/// The installed kernelspec of this name.
+async fn find_kernelspec(name: &str) -> Result<KernelspecDir> {
+    let mut installed = Vec::new();
+    for dir in kernelspec_dirs().await {
+        installed.extend(jupyter_zmq_client::read_kernelspec_jsons(&dir).await);
+    }
+    installed
+        .iter()
+        .find(|spec| spec.kernel_name == name)
+        .cloned()
+        .with_context(|| {
+            let names: Vec<&str> = installed.iter().map(|s| s.kernel_name.as_str()).collect();
+            format!("the kernels installed here are {names:?}")
+        })
+}
+
 impl Kernel {
-    /// Start the kernel of the given kernelspec name (e.g. `python3`) and
+    /// Start the kernel of the given kernelspec name (e.g. `xpython`) and
     /// connect to it.
     pub async fn start(kernel_name: &str) -> Result<Kernel> {
-        let kernelspec = jupyter_zmq_client::find_kernelspec_with_jupyter_paths(kernel_name)
+        let kernelspec = find_kernelspec(kernel_name)
             .await
             .with_context(|| format!("could not find the `{kernel_name}` kernel"))?;
 
