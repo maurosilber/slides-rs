@@ -1,3 +1,7 @@
+mod execute;
+mod kernel;
+mod output;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
