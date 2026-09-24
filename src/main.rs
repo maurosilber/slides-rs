@@ -1,124 +1,113 @@
-//! Execute the `{python}` cells of a markdown document into a
-//! content-addressed store of Jupyter outputs.
+use jupyter_protocol::{
+    ConnectionInfo, ExecuteRequest, ExecutionState, JupyterMessage, JupyterMessageContent,
+};
+use uuid::Uuid;
 
-mod markdown;
-mod outputs;
-mod python;
-
-use std::fs;
-use std::path::PathBuf;
-use std::process::ExitCode;
-
-use outputs::Store;
-
-const USAGE: &str = "\
-usage: slides-rs [INPUT] [--out DIR] [--python EXE] [--force]
-
-    INPUT         markdown document to read (default: index.md)
-    --out DIR     where to write the outputs (default: outputs)
-    --python EXE  interpreter to run the cells with (default: python3)
-    --force       re-run cells whose outputs are already stored
-";
-
-struct Args {
-    input: PathBuf,
-    out: PathBuf,
-    interpreter: Option<String>,
-    force: bool,
-}
-
-fn parse_args() -> Result<Args, String> {
-    let mut args = Args {
-        input: PathBuf::from("index.md"),
-        out: PathBuf::from("outputs"),
-        interpreter: None,
-        force: false,
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    use jupyter_protocol::{
+        ConnectionInfo, ExecuteRequest, ExecutionState, JupyterMessage, JupyterMessageContent,
     };
-    let mut input_seen = false;
-    let mut argv = std::env::args().skip(1);
-    while let Some(arg) = argv.next() {
-        let mut value = |flag: &str| {
-            argv.next()
-                .ok_or_else(|| format!("{flag} needs a value\n\n{USAGE}"))
-        };
-        match arg.as_str() {
-            "--out" => args.out = value("--out")?.into(),
-            "--python" => args.interpreter = Some(value("--python")?),
-            "--force" => args.force = true,
-            "-h" | "--help" => return Err(USAGE.to_string()),
-            flag if flag.starts_with('-') => {
-                return Err(format!("unknown option {flag}\n\n{USAGE}"));
-            }
-            _ if input_seen => return Err(format!("too many inputs\n\n{USAGE}")),
-            _ => {
-                args.input = arg.into();
-                input_seen = true;
-            }
-        }
-    }
-    Ok(args)
-}
+    use uuid::Uuid;
 
-fn main() -> ExitCode {
-    match run() {
-        Ok(failed) if failed > 0 => {
-            eprintln!("{failed} cell(s) raised");
-            ExitCode::FAILURE
-        }
-        Ok(_) => ExitCode::SUCCESS,
-        Err(message) if message == USAGE => {
-            println!("{message}");
-            ExitCode::SUCCESS
-        }
-        Err(message) => {
-            eprintln!("{message}");
-            ExitCode::FAILURE
-        }
-    }
-}
+    let kernel_name = "python";
+    let kernelspecs = jupyter_zmq_client::list_kernelspecs_with_jupyter_paths().await;
+    let kernel_specification = kernelspecs
+        .iter()
+        .find(|k| k.kernel_name.eq(kernel_name))
+        .ok_or(anyhow::anyhow!("Python kernel not found"))?;
 
-/// Runs every cell and returns how many of them raised.
-fn run() -> Result<usize, String> {
-    let args = parse_args()?;
-    let source = fs::read_to_string(&args.input)
-        .map_err(|e| format!("could not read {}: {e}", args.input.display()))?;
-    let cells = markdown::python_cells(&source);
-    if cells.is_empty() {
-        println!("no `{{python}}` cells in {}", args.input.display());
-        return Ok(0);
-    }
+    let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+    let ports = jupyter_zmq_client::peek_ports(ip, 5).await?;
+    assert_eq!(ports.len(), 5);
 
-    let store = Store::new(&args.out)?;
-    let interpreter = match args.interpreter {
-        Some(interpreter) => interpreter,
-        None => python::find_interpreter()?,
+    let connection_info = ConnectionInfo {
+        transport: jupyter_protocol::connection_info::Transport::TCP,
+        ip: ip.to_string(),
+        stdin_port: ports[0],
+        control_port: ports[1],
+        hb_port: ports[2],
+        shell_port: ports[3],
+        iopub_port: ports[4],
+        signature_scheme: "hmac-sha256".to_string(),
+        key: uuid::Uuid::new_v4().to_string(),
+        kernel_name: Some(kernel_name.to_string()),
     };
 
-    let mut failed = 0;
-    for cell in &cells {
-        let hash = outputs::hash(&cell.code);
-        let at = format!("{}:{}", args.input.display(), cell.line);
+    let runtime_dir = jupyter_zmq_client::dirs::runtime_dir();
+    tokio::fs::create_dir_all(&runtime_dir).await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to create jupyter runtime dir {:?}: {}",
+            runtime_dir,
+            e
+        )
+    })?;
 
-        let cell_outputs = if args.force || !store.contains(&hash) {
-            let cell_outputs = python::run_cell(&interpreter, &cell.code)?;
-            let written = store.write(&hash, &cell_outputs)?;
-            let written: Vec<_> = written.iter().map(|p| p.display().to_string()).collect();
-            println!("{at}: ran {hash} -> {}", written.join(", "));
-            cell_outputs
-        } else {
-            println!("{at}: cached {hash}");
-            store.read(&hash)?
-        };
+    let connection_path = runtime_dir.join("kernel-example.json");
+    let content = serde_json::to_string(&connection_info)?;
+    tokio::fs::write(connection_path.clone(), content).await?;
 
-        for error in cell_outputs
-            .iter()
-            .filter(|output| output["output_type"] == "error")
-        {
-            failed += 1;
-            let name = error["ename"].as_str().unwrap_or("error");
-            let value = error["evalue"].as_str().unwrap_or_default();
-            eprintln!("{at}: {name}: {value}");
+    let working_directory = "/tmp";
+
+    let mut process = kernel_specification
+        .clone()
+        .command(&connection_path, None, None)?
+        .current_dir(working_directory)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+
+    let session_id = Uuid::new_v4().to_string();
+
+    // Listen for display data, execute result, stdout messages, etc.
+    let mut iopub_socket =
+        jupyter_zmq_client::create_client_iopub_connection(&connection_info, "", &session_id).await?;
+    let mut shell_socket =
+        jupyter_zmq_client::create_client_shell_connection(&connection_info, &session_id).await?;
+    // Control socket is for kernel management, not used here
+    // let mut control_socket =
+    //     jupyter_zmq_client::create_client_control_connection(&connection_info, &session_id).await?;
+
+    let execute_request = ExecuteRequest::new("print('Hello, World!')".to_string());
+    let execute_request: JupyterMessage = execute_request.into();
+
+    let execute_request_id = execute_request.header.msg_id.clone();
+
+    let iopub_handle = tokio::spawn({
+        async move {
+            loop {
+                match iopub_socket.read().await {
+                    Ok(message) => match message.content {
+                        JupyterMessageContent::Status(status) => {
+                            //
+                            if status.execution_state == ExecutionState::Idle
+                                && message.parent_header.as_ref().map(|h| h.msg_id.as_str())
+                                    == Some(execute_request_id.as_str())
+                            {
+                                println!("Execution finalized, exiting...");
+                                break;
+                            }
+                        }
+                        _ => {
+                            println!("{:?}", message.content);
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Error receiving iopub message: {}", e);
+                        break;
+                    }
+                }
+            }
         }
-    }
-    Ok(failed)
+    });
+
+    shell_socket.send(execute_request).await?;
+
+    iopub_handle.await?;
+
+    process.start_kill()?;
+
+    Ok(())
 }
