@@ -16,7 +16,7 @@ const OUTPUT_DIR: &str = "_outputs";
 /// The kernelspec to run the cells with, as `jupyter kernelspec list` names it.
 const KERNEL: &str = "python3";
 
-const CELLS: &[&str] = &[
+const INDEP_CELLS: &[&str] = &[
     "2 + 2",
     r#"
 for i in range(3):
@@ -29,13 +29,21 @@ plt.plot([1, 2, 1])
 "#,
 ];
 
+const DEP_CELLS: &[&str] = &["x = 1", "x", "2 * x"];
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let root = Path::new(OUTPUT_DIR);
     tokio::fs::create_dir_all(root).await?;
     tokio::fs::write(root.join(".gitignore"), "*").await?;
 
-    let hashes = output::hashes(CELLS);
+    execute_cells(root, INDEP_CELLS).await?;
+    execute_cells(root, DEP_CELLS).await?;
+    Ok(())
+}
+
+async fn execute_cells(root: &Path, cells: &[&str]) -> Result<()> {
+    let hashes = output::hashes(cells);
     let missing: Vec<bool> = hashes
         .iter()
         .map(|hash| !output::exists(root, hash))
@@ -49,7 +57,7 @@ async fn main() -> Result<()> {
     // defined, so none of them can be skipped just because its output is
     // already saved. Only the writing is skipped.
     let mut kernel = Kernel::start(KERNEL).await?;
-    for ((code, hash), missing) in CELLS.iter().zip(&hashes).zip(missing) {
+    for ((code, hash), missing) in cells.iter().zip(&hashes).zip(missing) {
         let outputs = kernel.run(code).await?;
         if !missing {
             println!("{hash}: already saved");
