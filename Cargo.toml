@@ -5,9 +5,11 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+base64 = "0.23.1"
 jupyter-protocol = "2.0.2"
 jupyter-zmq-client = { version = "1.0.1", features = ["tokio-runtime"] }
 serde_json = "1.0.151"
-tokio = "1.53.1"
-uuid = "1.26.1"
+sha2 = "0.11.0"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "time"] }
+uuid = { version = "1.26.1", features = ["v4"] }
 
