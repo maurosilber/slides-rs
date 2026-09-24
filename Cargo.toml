@@ -11,6 +11,7 @@ jupyter-protocol = "2.0.2"
 jupyter-zmq-client = { version = "1.0.1", features = ["tokio-runtime"] }
 notify = "8.2.0"
 pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+quick-xml = "0.42.0"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "time"] }

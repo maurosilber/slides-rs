@@ -1,6 +1,7 @@
 mod execute;
 mod kernel;
 mod output;
+mod svg;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -407,7 +408,8 @@ fn render(markdown: &str, dir: &Path) -> (Vec<Part>, Vec<String>) {
 }
 
 /// The outputs a cell saved under `root`, in the order the kernel produced
-/// them. Images are linked, relative to the html, and the rest is inlined.
+/// them. Raster images are linked, relative to the html, and the rest is
+/// inlined: an SVG too, so that the slides can reach into it for fragments.
 fn cell_html(root: &Path, hash: &str) -> String {
     let Ok(files) = output::saved(root, hash) else {
         // The cell has not run, or its notebook failed; its error was reported then.
@@ -417,7 +419,7 @@ fn cell_html(root: &Path, hash: &str) -> String {
     for file in files {
         let name = file.file_name().unwrap().to_str().unwrap();
         let extension = file.extension().and_then(|extension| extension.to_str());
-        if let Some("png" | "jpeg" | "gif" | "svg") = extension {
+        if let Some("png" | "jpeg" | "gif") = extension {
             html.push_str(&format!("<img src=\"{OUTPUT_DIR}/{hash}/{name}\">\n"));
             continue;
         }
@@ -430,6 +432,10 @@ fn cell_html(root: &Path, hash: &str) -> String {
         }
         match extension {
             Some("html") => html.push_str(&text),
+            Some("svg") => match svg::inline(&text) {
+                Ok(svg) => html.push_str(&svg),
+                Err(error) => eprintln!("{}: {error:#}", file.display()),
+            },
             Some("md") => html::push_html(&mut html, Parser::new(&text)),
             // Plain text keeps its layout, and is escaped on the way in.
             _ => html::push_html(

@@ -1,17 +1,35 @@
 const slides = document.getElementsByTagName("section");
 
-// Each h2 and h3 starts a fragment, owning the elements that follow it.
+// A slide is revealed in steps, and its n-th fragment shows the first n.
+// Each h2 and h3 starts a column, a step of its own. After each column, and
+// before the first one, come the elements its SVGs mark as `fragment="n"`, in
+// order of n, those sharing an n together. The first step is what the slide
+// opens with: the first column, unless an SVG fragment comes before it.
 const fragments = [...slides].map((slide) => {
-    const columns = [];
-    let column = null;
+    const groups = [[]];
     for (const child of slide.children) {
-        if (child.tagName == "H2" || child.tagName == "H3") {
-            column = [];
-            columns.push(column);
-        }
-        column?.push(child);
+        if (child.tagName == "H2" || child.tagName == "H3") groups.push([]);
+        groups.at(-1).push(child);
     }
-    return columns;
+    const steps = [[]];
+    groups.forEach((group, i) => {
+        // What comes before the first heading is always shown.
+        if (i > 0) {
+            if (i == 1 && steps.length == 1) steps[0].push(...group);
+            else steps.push(group);
+        }
+        const numbered = new Map();
+        for (const element of group) {
+            for (const part of element.querySelectorAll("[fragment]")) {
+                const n = Number(part.getAttribute("fragment"));
+                numbered.set(n, [...(numbered.get(n) ?? []), part]);
+            }
+        }
+        for (const n of [...numbered.keys()].sort((a, b) => a - b)) {
+            steps.push(numbered.get(n));
+        }
+    });
+    return steps;
 });
 
 // column-count has to fit the widest h2 group, not the whole slide.
@@ -47,7 +65,6 @@ function updateSlide(i, fragment = 1) {
     slides[currentSlide].style.display = "none";
     slides[i].style.display = "block";
     currentSlide = i;
-    // A slide without headings has no fragments, and is shown whole.
     currentFragment = Math.max(1, Math.min(fragment, fragments[i].length));
     updateFragment(currentFragment);
     showPosition();
@@ -56,12 +73,12 @@ function updateSlide(i, fragment = 1) {
 // Hidden rather than removed, so the columns keep their place.
 // currentFragment is tracked even while disabled, so re-enabling resumes here.
 function updateFragment(i) {
-    const columns = fragments[currentSlide];
-    if (i < 1 || i > columns.length) return false;
+    const steps = fragments[currentSlide];
+    if (i < 1 || i > steps.length) return false;
     currentFragment = i;
-    const shown = fragmentsEnabled ? i : columns.length;
-    columns.forEach((column, j) => {
-        for (const element of column) {
+    const shown = fragmentsEnabled ? i : steps.length;
+    steps.forEach((step, j) => {
+        for (const element of step) {
             element.style.visibility = j < shown ? "visible" : "hidden";
         }
     });
