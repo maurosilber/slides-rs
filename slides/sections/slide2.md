@@ -1,4 +1,4 @@
-# Cuadratica
+# Cuadratic
 
 ~~~python
 import numpy as np
@@ -8,6 +8,7 @@ x = np.linspace(-10, 10, 100)
 ~~~
 
 ~~~python
+plt.plot(x, x)
 plt.plot(x, x**2)
 None
 ~~~
