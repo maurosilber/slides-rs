@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="slides.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/katex.min.css"
+        integrity="sha384-JctiRyLzXCrSoOOzFlSoWLdyzQl7OrrRnhyeBmzB6ZWtcjccUyc8lCQJqIbs3uQX" crossorigin="anonymous">
+    <script type="module">
+        import renderMathInElement from "https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/contrib/auto-render.mjs";
+        renderMathInElement(document.body, {
+            "delimiters": [
+                { left: "$$", right: "$$", display: true },
+                { left: "$", right: "$", display: false },
+            ]
+        });
+    </script>
+</head>
+
+<body>
+    <section>
+        <h2 id="some-id" class="myclass">First slide</h2>
+        <pre><code class="language-python">2 + 2
+</code></pre>
+        <p>8110b386c7b72cd1</p>
+        <p>$ 2 \cdot x $</p>
+        <p>$$
+        \frac{\partial u}{\partial t} + (u \cdot \nabla) u = \text{solved}
+        $$</p>
+    </section>
+    <section>
+        <h1>Second slide</h1>
+    </section>
+    <section>
+        <h1>Third slide</h1>
+        <p>Example</p>
+    </section>
+    <section>
+        <h1>Fourth slide</h1>
+    </section>
+
+</body>
+
+<script src="slides.js"></script>
+
+</html>
