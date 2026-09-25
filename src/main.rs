@@ -101,6 +101,8 @@ struct File {
     cells: Vec<String>,
     /// The hash each cell's outputs are saved under.
     hashes: Vec<String>,
+    /// The lock file of the environment its cells run in, which their hashes cover.
+    lock: Option<PathBuf>,
     /// The theme its frontmatter asks for. Only the input's is used, so an
     /// imported file can keep the theme it was written with.
     theme: Option<String>,
@@ -279,10 +281,19 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
             collect(event);
         }
 
-        let changed: Vec<PathBuf> = paths
+        let paths: HashSet<PathBuf> = paths.iter().map(|path| canonical(path)).collect();
+        // A lock file that changes, appears or goes away changes the hashes
+        // of the cells in every file below it.
+        let locks: Vec<&Path> = paths
             .iter()
-            .map(|path| canonical(path))
-            .filter(|path| cache.files.contains_key(path))
+            .filter(|path| is_lock_file(path))
+            .filter_map(|path| path.parent())
+            .collect();
+        let changed: Vec<PathBuf> = cache
+            .files
+            .keys()
+            .filter(|path| paths.contains(*path) || locks.iter().any(|dir| path.starts_with(dir)))
+            .cloned()
             .collect();
         if changed.is_empty() {
             continue;
@@ -305,12 +316,15 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
     }
 }
 
-/// Watches the directory of every file in the deck, and no others: an editor
-/// saves by replacing a file, which a watch on the file itself would not survive.
+/// Watches the directory of every file in the deck and of the lock files
+/// they use, and no others: an editor saves by replacing a file, which a
+/// watch on the file itself would not survive.
 fn watch_dirs(watcher: &mut impl Watcher, watched: &mut HashSet<PathBuf>, cache: &Cache) {
     let dirs: HashSet<PathBuf> = cache
         .files
-        .keys()
+        .iter()
+        .flat_map(|(path, file)| [Some(path), file.lock.as_ref()])
+        .flatten()
         .map(|path| parent(path).to_path_buf())
         .collect();
     for dir in dirs.difference(watched) {
@@ -321,6 +335,12 @@ fn watch_dirs(watcher: &mut impl Watcher, watched: &mut HashSet<PathBuf>, cache:
         let _ = watcher.unwatch(dir);
     }
     *watched = dirs;
+}
+
+fn is_lock_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| output::LOCK_FILES.contains(&name))
 }
 
 /// The canonical path of a file that need not exist yet, so that the same file
@@ -448,7 +468,8 @@ fn render(markdown: &str, path: &Path) -> File {
 
     // Split at the markers, so every file is cached apart from the ones it
     // imports, and apart from the outputs of its cells, which may come later.
-    let hashes = output::hashes(&output::environment(dir), &cells);
+    let lock = output::lock_file(dir);
+    let hashes = output::hashes(&output::environment(lock.as_deref()), &cells);
     let mut next_hash = hashes.iter().cloned();
     let mut parts = Vec::new();
     let mut rest = rendered.as_str();
@@ -467,6 +488,7 @@ fn render(markdown: &str, path: &Path) -> File {
         parts,
         cells,
         hashes,
+        lock,
         theme: Frontmatter::parse(&frontmatter, path).theme,
     }
 }

@@ -160,18 +160,23 @@ pub fn hashes(environment: &[u8], cells: &[impl AsRef<str>]) -> Vec<String> {
 }
 
 /// The lock files that pin the Python environment, most preferred first.
-const LOCK_FILES: &[&str] = &["pixi.lock", "uv.lock"];
+pub const LOCK_FILES: &[&str] = &["pixi.lock", "uv.lock"];
 
-/// The contents of the lock file in `dir` or the closest directory above it,
-/// or nothing when the environment is not locked.
-pub fn environment(dir: &Path) -> Vec<u8> {
+/// The lock file in `dir` or the closest directory above it, if the
+/// environment is locked at all.
+pub fn lock_file(dir: &Path) -> Option<PathBuf> {
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-    dir.ancestors()
-        .find_map(|dir| {
-            LOCK_FILES
-                .iter()
-                .find_map(|name| std::fs::read(dir.join(name)).ok())
-        })
+    dir.ancestors().find_map(|dir| {
+        LOCK_FILES
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|path| path.is_file())
+    })
+}
+
+/// What the cells' hashes start from: the contents of `lock`, or nothing.
+pub fn environment(lock: Option<&Path>) -> Vec<u8> {
+    lock.and_then(|path| std::fs::read(path).ok())
         .unwrap_or_default()
 }
 
