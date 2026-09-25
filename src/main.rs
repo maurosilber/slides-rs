@@ -275,10 +275,12 @@ impl Cache {
             .map(String::as_str)
             .collect();
         match output::remove_stale(&self.outputs, &keep) {
-            Ok((removed, bytes)) => eprintln!(
-                "removed {removed} stale output(s) from {}, recovering {}",
+            Ok(removed) => eprintln!(
+                "removed {} stale cell(s) and {} output(s) from {}, recovering {}",
+                removed.cells,
+                removed.outputs,
                 self.outputs.display(),
-                output::human_size(bytes)
+                output::human_size(removed.bytes)
             ),
             Err(error) => eprintln!("{}: {error}", self.outputs.display()),
         }
@@ -669,7 +671,7 @@ fn cell_html(root: &Path, hash: &str) -> String {
         let name = file.file_name().unwrap().to_str().unwrap();
         let extension = file.extension().and_then(|extension| extension.to_str());
         if let Some("png" | "jpeg" | "gif") = extension {
-            html.push_str(&format!("<img src=\"{OUTPUT_DIR}/{hash}/{name}\">\n"));
+            html.push_str(&format!("<img src=\"{OUTPUT_DIR}/{name}\">\n"));
             continue;
         }
         let Ok(mut text) = fs::read_to_string(&file) else {

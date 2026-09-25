@@ -14,14 +14,20 @@ use sha2::{Digest, Sha256};
 
 use crate::python;
 
-/// Hex characters kept from the SHA-256 of a cell. 64 bits keeps the paths
-/// readable and collisions out of reach for one document.
+/// Hex characters kept from the SHA-256 of a cell or an output. 64 bits
+/// keeps the paths readable and collisions out of reach for one document.
 const HASH_LEN: usize = 16;
 
 /// The file in a cell's directory listing the files read up to that cell,
 /// outside the environment, with the hash of each, in the format of
-/// `sha256sum`. It is not an output, which are named by number.
-pub const FILES: &str = "files.txt";
+/// `sha256sum`.
+pub const INPUTS: &str = "inputs.txt";
+
+/// The file in a cell's directory listing its outputs, one file name per
+/// line, in the order the kernel produced them. Each output is saved next to
+/// the cells' directories, named by the hash of its contents, so cells with
+/// the same output share one file.
+const OUTPUTS: &str = "outputs.txt";
 
 /// Stands for the hash of a file that cannot be read, such as one that does
 /// not exist, so that creating it later re-runs the cell.
@@ -208,13 +214,16 @@ fn hex(digest: impl AsRef<[u8]>) -> String {
 }
 
 /// Whether this cell's outputs have been saved, and the files it read have
-/// not changed since. Outputs saved without a list of files are not trusted.
+/// not changed since. Outputs saved without a list of the files read are
+/// not trusted.
 pub fn is_fresh(root: &Path, hash: &str) -> bool {
-    listed(root, hash).is_some_and(|files| {
-        files
-            .iter()
-            .all(|(hash, path)| file_hash(Path::new(path)) == *hash)
-    })
+    let saved = saved(root, hash).is_ok_and(|outputs| outputs.iter().all(|path| path.is_file()));
+    saved
+        && listed(root, hash).is_some_and(|files| {
+            files
+                .iter()
+                .all(|(hash, path)| file_hash(Path::new(path)) == *hash)
+        })
 }
 
 /// The files a cell read, as listed with its outputs, or none if there is no
@@ -230,7 +239,7 @@ pub fn read_files(root: &Path, hash: &str) -> Vec<PathBuf> {
 /// The hash and path of every file listed with a cell's outputs, or `None`
 /// if there is no list or it cannot be parsed.
 fn listed(root: &Path, hash: &str) -> Option<Vec<(String, String)>> {
-    let files = std::fs::read_to_string(root.join(hash).join(FILES)).ok()?;
+    let files = std::fs::read_to_string(root.join(hash).join(INPUTS)).ok()?;
     files
         .lines()
         .map(|line| {
@@ -289,43 +298,73 @@ fn file_hash(path: &Path) -> String {
 
 /// The files a cell's outputs were saved in, in the order the kernel produced them.
 pub fn saved(root: &Path, hash: &str) -> std::io::Result<Vec<PathBuf>> {
-    let mut files: Vec<(usize, PathBuf)> = std::fs::read_dir(root.join(hash))?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            let index = path.file_stem()?.to_str()?.parse().ok()?;
-            Some((index, path))
-        })
-        .collect();
-    // Sorted by number, as `10.txt` comes before `2.txt` by name.
-    files.sort();
-    Ok(files.into_iter().map(|(_, path)| path).collect())
+    let list = std::fs::read_to_string(root.join(hash).join(OUTPUTS))?;
+    Ok(list.lines().map(|name| root.join(name)).collect())
 }
 
-/// Removes the saved outputs under `root` whose hash is not in `keep`,
-/// returning how many were removed and how many bytes they took.
-/// Anything that is not a cell's directory is left alone.
-pub fn remove_stale(root: &Path, keep: &HashSet<&str>) -> std::io::Result<(usize, u64)> {
-    let mut removed = 0;
-    let mut bytes = 0;
-    let entries = match std::fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+/// What `remove_stale` removed.
+#[derive(Debug, PartialEq)]
+pub struct Removed {
+    pub cells: usize,
+    pub outputs: usize,
+    pub bytes: u64,
+}
+
+/// Removes the directories of the cells under `root` whose hash is not in
+/// `keep`, and then the outputs no remaining cell lists. Anything else is
+/// left alone.
+pub fn remove_stale(root: &Path, keep: &HashSet<&str>) -> std::io::Result<Removed> {
+    let mut removed = Removed {
+        cells: 0,
+        outputs: 0,
+        bytes: 0,
+    };
+    let entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(root) {
+        Ok(entries) => entries.collect::<std::io::Result<_>>()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
         Err(error) => return Err(error),
     };
-    for entry in entries {
-        let entry = entry?;
+
+    // A cell that is kept keeps its outputs, whichever cell saved them first.
+    let mut listed = HashSet::new();
+    for entry in &entries {
         let name = entry.file_name();
-        let Some(hash) = name.to_str() else { continue };
-        let is_hash = hash.len() == HASH_LEN && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
-        if !is_hash || !entry.file_type()?.is_dir() || keep.contains(hash) {
+        let Some(hash) = name.to_str().filter(|name| is_hash(name)) else {
+            continue;
+        };
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        if keep.contains(hash) {
+            listed.extend(saved(root, hash).unwrap_or_default());
             continue;
         }
         let dir = entry.path();
-        bytes += size(&dir)?;
+        removed.bytes += size(&dir)?;
         std::fs::remove_dir_all(&dir)?;
-        removed += 1;
+        removed.cells += 1;
     }
-    Ok((removed, bytes))
+    for entry in &entries {
+        let path = entry.path();
+        let is_output = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(is_hash)
+            && path.extension().is_some();
+        if !is_output || listed.contains(&path) || !entry.file_type()?.is_file() {
+            continue;
+        }
+        removed.bytes += entry.metadata()?.len();
+        std::fs::remove_file(&path)?;
+        removed.outputs += 1;
+    }
+    Ok(removed)
+}
+
+/// Whether `name` is a hash, as the cells' directories and the outputs are
+/// named.
+fn is_hash(name: &str) -> bool {
+    name.len() == HASH_LEN && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// The bytes taken by the files in `dir`, however deep.
@@ -358,12 +397,36 @@ pub fn human_size(bytes: u64) -> String {
     format!("{size:.1} {}", UNITS[unit])
 }
 
-/// Save a cell's outputs under `<root>/<hash>/`, numbered in the order the
-/// kernel produced them.
+/// Saves each of a cell's outputs under `root`, named by the hash of its
+/// contents, unless one with the same contents is there already, and lists
+/// them in `<root>/<hash>/`, which it returns.
 pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {
+    let mut list = String::new();
+    for output in outputs {
+        let name = format!(
+            "{}.{}",
+            hex(Sha256::digest(&output.bytes)),
+            output.extension
+        );
+        let path = root.join(&name);
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            // Written aside and moved into place, so that a notebook that
+            // saves the same output at the same time never reads it halfway.
+            let partial = root.join(format!(".{name}.{}", uuid::Uuid::new_v4()));
+            tokio::fs::write(&partial, &output.bytes)
+                .await
+                .with_context(|| format!("could not write {}", partial.display()))?;
+            tokio::fs::rename(&partial, &path)
+                .await
+                .with_context(|| format!("could not write {}", path.display()))?;
+        }
+        list.push_str(&name);
+        list.push('\n');
+    }
+
     let dir = root.join(hash);
-    // Replace the directory so a cell that now produces fewer outputs does not
-    // leave a stale file behind for the renderer to pick up.
+    // Replace the directory, so that the list of the files the cell read
+    // from before does not outlive the outputs it was made for.
     match tokio::fs::remove_dir_all(&dir).await {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -372,13 +435,10 @@ pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf
     tokio::fs::create_dir_all(&dir)
         .await
         .with_context(|| format!("could not create {}", dir.display()))?;
-
-    for (i, output) in outputs.iter().enumerate() {
-        let path = dir.join(format!("{i}.{}", output.extension));
-        tokio::fs::write(&path, &output.bytes)
-            .await
-            .with_context(|| format!("could not write {}", path.display()))?;
-    }
+    let path = dir.join(OUTPUTS);
+    tokio::fs::write(&path, list)
+        .await
+        .with_context(|| format!("could not write {}", path.display()))?;
     Ok(dir)
 }
 
@@ -428,41 +488,130 @@ mod tests {
         assert_ne!(before[1], after[1]);
     }
 
-    #[test]
-    fn stale_outputs_are_removed_and_measured() {
+    fn temp_root() -> PathBuf {
         let root = std::env::temp_dir().join(format!("slides-rs-{}", uuid::Uuid::new_v4()));
-        let kept = "0123456789abcdef";
-        let stale = "fedcba9876543210";
-        std::fs::create_dir_all(root.join(kept)).unwrap();
-        std::fs::create_dir_all(root.join(stale)).unwrap();
-        std::fs::write(root.join(kept).join("0.txt"), "kept").unwrap();
-        std::fs::write(root.join(stale).join("0.txt"), "stale").unwrap();
-        std::fs::write(root.join(stale).join("1.png"), [0; 100]).unwrap();
-        std::fs::write(root.join(".gitignore"), "*").unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
 
-        let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
-        assert_eq!(removed, (1, 105));
-        assert!(root.join(kept).is_dir());
-        assert!(!root.join(stale).exists());
-        assert!(root.join(".gitignore").exists());
+    fn text(text: &str) -> Output {
+        Output::text("txt", text)
+    }
+
+    /// Saves a cell's outputs, with an empty list of the files it read.
+    async fn save_cell(root: &Path, hash: &str, outputs: &[Output]) {
+        let dir = save(root, hash, outputs).await.unwrap();
+        std::fs::write(dir.join(INPUTS), "").unwrap();
+    }
+
+    #[tokio::test]
+    async fn outputs_are_saved_by_their_contents_in_order() {
+        let root = temp_root();
+        let hash = "0123456789abcdef";
+        save_cell(
+            &root,
+            hash,
+            &[text("b"), Output::image("png", "AAAA").unwrap(), text("a")],
+        )
+        .await;
+
+        let saved = saved(&root, hash).unwrap();
+        let contents: Vec<Vec<u8>> = saved
+            .iter()
+            .map(|path| std::fs::read(path).unwrap())
+            .collect();
+        assert_eq!(contents, [b"b".to_vec(), vec![0; 3], b"a".to_vec()]);
+        let name = |path: &PathBuf| path.file_name().unwrap().to_str().unwrap().to_string();
+        assert_eq!(
+            name(&saved[0]),
+            format!("{}.txt", hex(Sha256::digest(b"b")))
+        );
+        assert!(name(&saved[1]).ends_with(".png"));
+        assert_eq!(saved[0].parent().unwrap(), root);
+        assert!(is_fresh(&root, hash));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[test]
-    fn a_cell_is_fresh_until_a_file_it_read_changes() {
-        let root = std::env::temp_dir().join(format!("slides-rs-{}", uuid::Uuid::new_v4()));
+    #[tokio::test]
+    async fn cells_with_the_same_output_share_its_file() {
+        let root = temp_root();
+        save_cell(&root, "0123456789abcdef", &[text("same"), text("one")]).await;
+        save_cell(&root, "fedcba9876543210", &[text("same")]).await;
+
+        let first = saved(&root, "0123456789abcdef").unwrap();
+        let second = saved(&root, "fedcba9876543210").unwrap();
+        assert_eq!(first[0], second[0]);
+        let outputs = std::fs::read_dir(&root)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_type().unwrap().is_file())
+            .count();
+        assert_eq!(outputs, 2);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn saving_again_replaces_the_list_of_outputs() {
+        let root = temp_root();
+        let hash = "0123456789abcdef";
+        save_cell(&root, hash, &[text("one"), text("two")]).await;
+        save(&root, hash, &[text("one")]).await.unwrap();
+        assert_eq!(saved(&root, hash).unwrap().len(), 1);
+        // The list of the files read went with the outputs it was made for.
+        assert!(!is_fresh(&root, hash));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_cells_and_their_outputs_are_removed_and_measured() {
+        let root = temp_root();
+        let kept = "0123456789abcdef";
+        let stale = "fedcba9876543210";
+        save_cell(&root, kept, &[text("kept"), text("shared")]).await;
+        save_cell(&root, stale, &[text("shared"), text("stale")]).await;
+        std::fs::write(root.join(".gitignore"), "*").unwrap();
+        std::fs::write(root.join("notes.txt"), "not an output").unwrap();
+
+        let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
+        // The stale cell's list of outputs, its empty list of the files it
+        // read, and the one output no kept cell lists.
+        let outputs_list = 2 * (HASH_LEN + ".txt\n".len());
+        let expected_bytes = (outputs_list + "stale".len()) as u64;
+        assert_eq!(
+            removed,
+            Removed {
+                cells: 1,
+                outputs: 1,
+                bytes: expected_bytes
+            }
+        );
+        assert!(
+            saved(&root, kept)
+                .unwrap()
+                .iter()
+                .all(|path| path.is_file())
+        );
+        assert!(is_fresh(&root, kept));
+        assert!(!root.join(stale).exists());
+        assert!(root.join(".gitignore").exists());
+        assert!(root.join("notes.txt").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_cell_is_fresh_until_a_file_it_read_changes() {
+        let root = temp_root();
         let hash = "0123456789abcdef";
         let data = root.join("data.txt");
         let created = root.join("created.txt");
-        std::fs::create_dir_all(root.join(hash)).unwrap();
         std::fs::write(&data, "1").unwrap();
-        // No list of files yet.
+        let dir = save(&root, hash, &[text("out")]).await.unwrap();
+        // No list of the files read yet.
         assert!(!is_fresh(&root, hash));
 
-        let files = root.join(hash).join(FILES);
+        let inputs = dir.join(INPUTS);
         let list = format!("{}\n{}\n", data.display(), created.display());
-        std::fs::write(&files, list).unwrap();
-        hash_files(&files).unwrap();
+        std::fs::write(&inputs, list).unwrap();
+        hash_files(&inputs).unwrap();
         assert!(is_fresh(&root, hash));
 
         std::fs::write(&data, "2").unwrap();
@@ -471,6 +620,11 @@ mod tests {
         assert!(is_fresh(&root, hash));
 
         std::fs::write(&created, "").unwrap();
+        assert!(!is_fresh(&root, hash));
+        std::fs::remove_file(&created).unwrap();
+
+        // An output that went missing makes the cell run again.
+        std::fs::remove_file(&saved(&root, hash).unwrap()[0]).unwrap();
         assert!(!is_fresh(&root, hash));
         std::fs::remove_dir_all(&root).unwrap();
     }

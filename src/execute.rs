@@ -52,7 +52,7 @@ pub async fn execute_cells(
         let dir = output::save(&root, hash, &outputs).await?;
         saved += 1;
         // The kernel may run in another directory, so it gets the full path.
-        let files = std::path::absolute(dir.join(output::FILES))?;
+        let files = std::path::absolute(dir.join(output::INPUTS))?;
         let listed = async {
             kernel.run_silent(&audit::save(&files)).await?;
             output::hash_files(&files)?;
