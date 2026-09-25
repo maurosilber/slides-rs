@@ -224,7 +224,10 @@ impl Cache {
         }
     }
 
-    fn write(&self, input: &Path, output: &Path) {
+    /// Writes the deck, unless the html on disk is already the same, so that
+    /// a save that changes nothing does not reload the slides. Returns whether
+    /// it wrote.
+    fn write(&self, input: &Path, output: &Path) -> bool {
         let mut body = String::new();
         self.body(input, &mut body);
         // A slide break at either end of a file, or two in a row, leaves an empty slide.
@@ -242,7 +245,11 @@ impl Cache {
         let html = TEMPLATE
             .replace("    {theme}\n", &theme)
             .replace("{body}", &body);
+        if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
+            return false;
+        }
         fs::write(output, html).unwrap();
+        true
     }
 }
 
@@ -281,12 +288,15 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
         cache.update(&changed);
         cache.prune(input);
         watch_dirs(&mut watcher, &mut watched, cache);
-        cache.write(input, output);
-        eprintln!(
-            "rendered {} after {} changed",
-            output.display(),
-            changed.len()
-        );
+        if cache.write(input, output) {
+            eprintln!(
+                "rendered {} after {} changed",
+                output.display(),
+                changed.len()
+            );
+        } else {
+            eprintln!("{} is unchanged", output.display());
+        }
     }
 }
 
