@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use jupyter_protocol::connection_info::Transport;
 use jupyter_protocol::{
-    ConnectionInfo, ExecuteRequest, ExecutionState, JupyterMessage, JupyterMessageContent,
+    ConnectionInfo, ExecuteReply, ExecuteRequest, ExecutionState, JupyterMessage,
+    JupyterMessageContent, ReplyStatus,
 };
 use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection, KernelspecDir};
 use tokio::process::Child;
@@ -136,7 +137,33 @@ impl Kernel {
 
     /// Run one cell and collect everything the kernel publishes for it.
     pub async fn run(&mut self, code: &str) -> Result<Vec<Output>> {
-        let request: JupyterMessage = ExecuteRequest::new(code.to_string()).into();
+        let (outputs, _) = self.execute(ExecuteRequest::new(code.to_string())).await?;
+        Ok(outputs)
+    }
+
+    /// Run code that belongs to no cell: it is left out of the history and
+    /// the execution count, and fails if the code raises.
+    pub async fn run_silent(&mut self, code: &str) -> Result<()> {
+        let mut request = ExecuteRequest::new(code.to_string());
+        request.silent = true;
+        request.store_history = false;
+        let (_, reply) = self.execute(request).await?;
+        match reply.content {
+            JupyterMessageContent::ExecuteReply(ExecuteReply {
+                status: ReplyStatus::Ok,
+                ..
+            }) => Ok(()),
+            JupyterMessageContent::ExecuteReply(ExecuteReply {
+                error: Some(error), ..
+            }) => anyhow::bail!("{}: {}", error.ename, error.evalue),
+            other => anyhow::bail!("unexpected reply {other:?}"),
+        }
+    }
+
+    /// Send an execute request, and collect everything the kernel publishes
+    /// for it along with its reply.
+    async fn execute(&mut self, request: ExecuteRequest) -> Result<(Vec<Output>, JupyterMessage)> {
+        let request: JupyterMessage = request.into();
         let request_id = request.header.msg_id.clone();
         self.shell.send(request).await?;
 
@@ -166,8 +193,8 @@ impl Kernel {
 
         // The reply reaches shell before that idle status, so it is waiting for
         // us now. Read it so it does not sit in front of the next cell's.
-        self.shell.read().await?;
-        Ok(outputs.into_vec())
+        let reply = self.shell.read().await?;
+        Ok((outputs.into_vec(), reply))
     }
 
     pub async fn shutdown(mut self) -> Result<()> {

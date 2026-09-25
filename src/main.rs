@@ -1,3 +1,4 @@
+mod audit;
 mod execute;
 mod kernel;
 mod math;

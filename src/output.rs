@@ -16,6 +16,10 @@ use crate::python;
 /// readable and collisions out of reach for one document.
 const HASH_LEN: usize = 16;
 
+/// The file in a cell's directory listing the files read up to that cell. It
+/// is not an output, which are named by number.
+pub const FILES: &str = "files.txt";
+
 /// One output of a cell: either text or an image, with the file extension it
 /// should be saved under.
 pub struct Output {

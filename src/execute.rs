@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::kernel::Kernel;
-use crate::output;
+use crate::{audit, output};
 
 /// The kernels the cells can run on, most preferred first, as
 /// `jupyter kernelspec list` names them: xeus-python's `xpython`, then
@@ -37,6 +37,7 @@ pub async fn execute_cells(
     // defined, so none of them can be skipped just because its output is
     // already saved. Only the writing is skipped.
     let mut kernel = Kernel::start(kernels).await?;
+    kernel.run_silent(&audit::install()).await?;
     for ((code, hash), missing) in cells.iter().zip(&hashes).zip(missing) {
         let outputs = kernel.run(code).await?;
         if !missing {
@@ -45,6 +46,11 @@ pub async fn execute_cells(
         }
         let dir = output::save(&root, hash, &outputs).await?;
         println!("{}: {} output(s)", dir.display(), outputs.len());
+        // The kernel may run in another directory, so it gets the full path.
+        let files = std::path::absolute(dir.join(output::FILES))?;
+        if let Err(error) = kernel.run_silent(&audit::save(&files)).await {
+            eprintln!("{}: {error:#}", files.display());
+        }
     }
     kernel.shutdown().await
 }
