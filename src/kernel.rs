@@ -28,6 +28,8 @@ pub const SETUP: &str = "%config InlineBackend.figure_formats = ['svg']\n";
 /// A running Jupyter kernel. Cells sent to it share one interpreter, so state
 /// carries over from one cell to the next, exactly as in a notebook.
 pub struct Kernel {
+    /// The name of the kernelspec it was started from.
+    pub name: String,
     process: Child,
     shell: ClientShellConnection,
     iopub: ClientIoPubConnection,
@@ -66,6 +68,24 @@ async fn find_kernelspec(names: &[&str]) -> Result<KernelspecDir> {
         })
 }
 
+/// How often to check whether a starting kernel listens on its ports.
+const PORT_POLL: Duration = Duration::from_millis(5);
+
+/// Waits until the kernel listens on each of `ports`, or fails if it exits
+/// first. zeromq retries a refused connection only after more than a second,
+/// which a kernel that is still starting up would always cost.
+async fn wait_for_ports(process: &mut Child, name: &str, ip: IpAddr, ports: &[u16]) -> Result<()> {
+    for &port in ports {
+        while tokio::net::TcpStream::connect((ip, port)).await.is_err() {
+            if let Some(status) = process.try_wait()? {
+                anyhow::bail!("the `{name}` kernel exited on startup with {status}");
+            }
+            tokio::time::sleep(PORT_POLL).await;
+        }
+    }
+    Ok(())
+}
+
 impl Kernel {
     /// Start the first of these kernels that is installed, most preferred
     /// first, in the directory `dir`, and connect to it.
@@ -74,7 +94,6 @@ impl Kernel {
             .await
             .with_context(|| format!("could not find any of the {kernel_names:?} kernels"))?;
         let kernel_name = kernelspec.kernel_name.clone();
-        println!("running the cells on the `{kernel_name}` kernel");
 
         // The kernel binds these ports; we only pick ones that are free now.
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -101,12 +120,15 @@ impl Kernel {
             .await
             .with_context(|| format!("could not write {}", connection_file.display()))?;
 
-        let process = kernelspec
+        let mut process = kernelspec
             .command(&connection_file, None, None)?
             .current_dir(dir)
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("could not start the `{kernel_name}` kernel"))?;
+
+        let listening = [connection_info.shell_port, connection_info.iopub_port];
+        wait_for_ports(&mut process, &kernel_name, ip, &listening).await?;
 
         let session_id = Uuid::new_v4().to_string();
         let mut iopub =
@@ -126,6 +148,7 @@ impl Kernel {
         jupyter_zmq_client::wait_for_iopub_welcome(&mut iopub, WELCOME_TIMEOUT).await?;
 
         let mut kernel = Kernel {
+            name: kernel_name,
             process,
             shell,
             iopub,

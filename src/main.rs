@@ -3,6 +3,7 @@ mod execute;
 mod kernel;
 mod math;
 mod output;
+mod progress;
 mod python;
 mod svg;
 
@@ -10,9 +11,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::{Parser as _, ValueEnum};
+use indicatif::MultiProgress;
 use notify::{RecursiveMode, Watcher};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
 
@@ -85,9 +87,15 @@ fn main() {
     // that is not installed is an error rather than a quiet fallback.
     let kernels = kernel.map_or(execute::KERNELS, KernelChoice::kernelspecs);
 
+    let start = Instant::now();
     let mut cache = Cache::new(parent(&output).join(OUTPUT_DIR), kernels);
     cache.update(std::slice::from_ref(&input));
     cache.write(&input, &output);
+    eprintln!(
+        "rendered {} in {}",
+        output.display(),
+        progress::duration(start.elapsed())
+    );
     if clean {
         cache.clean();
     }
@@ -172,17 +180,24 @@ impl Cache {
         }
     }
 
-    /// Runs the notebook of every file, all at once, as each one has a kernel
-    /// of its own. A notebook that fails leaves its missing outputs out of
-    /// the deck, rather than the rest of the deck too.
+    /// Runs the notebook of every file with a cell whose outputs are not
+    /// saved, all at once, as each one has a kernel of its own. A notebook
+    /// that fails leaves its missing outputs out of the deck, rather than the
+    /// rest of the deck too.
     fn execute(&self, paths: &[PathBuf]) {
-        let notebooks: Vec<(&PathBuf, Vec<String>, Vec<String>)> = paths
+        let notebooks: Vec<_> = paths
             .iter()
-            .map(|path| {
+            .filter_map(|path| {
                 let file = &self.files[path];
-                (path, file.cells.clone(), file.hashes.clone())
+                let missing: Vec<bool> = file
+                    .hashes
+                    .iter()
+                    .map(|hash| !output::is_fresh(&self.outputs, hash))
+                    .collect();
+                missing
+                    .contains(&true)
+                    .then(move || (path, file.cells.clone(), file.hashes.clone(), missing))
             })
-            .filter(|(_, cells, _)| !cells.is_empty())
             .collect();
         if notebooks.is_empty() {
             return;
@@ -190,27 +205,65 @@ impl Cache {
 
         fs::create_dir_all(&self.outputs).unwrap();
         fs::write(self.outputs.join(".gitignore"), "*").unwrap();
+        let multi = MultiProgress::new();
+        // With a single notebook, its own bar already says it all.
+        let total = (notebooks.len() > 1).then(|| progress::total(&multi, notebooks.len()));
         self.runtime.block_on(async {
             let tasks: Vec<_> = notebooks
                 .into_iter()
-                .map(|(path, cells, hashes)| {
+                .map(|(path, cells, hashes, missing)| {
                     // A cell reads and writes files next to the markdown it is in.
                     let dir = parent(path).to_path_buf();
                     let root = self.outputs.clone();
-                    let task = execute::execute_cells(self.kernels, dir, root, cells, hashes);
+                    let bar = progress::notebook(&multi, path, cells.len());
+                    let total = total.clone();
+                    let kernels = self.kernels;
+                    let name = progress::relative(path).display().to_string();
+                    let task = async move {
+                        let start = Instant::now();
+                        let result = execute::execute_cells(
+                            kernels,
+                            dir,
+                            root,
+                            cells,
+                            hashes,
+                            missing,
+                            bar.clone(),
+                        )
+                        .await;
+                        let cells = bar.length().unwrap_or(0);
+                        let took = progress::duration(start.elapsed());
+                        progress::log(
+                            &bar,
+                            match &result {
+                                Ok(saved) => format!(
+                                    "{:>8} {name}: {cells} cell(s), {saved} saved, in {took}",
+                                    "done",
+                                ),
+                                Err(error) => {
+                                    format!("{:>8} {name} after {took}: {error:#}", "failed")
+                                }
+                            },
+                        );
+                        bar.finish_and_clear();
+                        if let Some(total) = total {
+                            total.inc(1);
+                        }
+                    };
                     (path, tokio::spawn(task))
                 })
                 .collect();
             // Let every notebook finish, so a failure in one does not cut
             // another short while it is still writing.
             for (path, task) in tasks {
-                match task.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => eprintln!("{}: {error:#}", path.display()),
-                    Err(error) => eprintln!("{}: {error}", path.display()),
+                if let Err(error) = task.await {
+                    eprintln!("{}: {error}", path.display());
                 }
             }
         });
+        if let Some(total) = total {
+            total.finish_and_clear();
+        }
     }
 
     /// Removes the saved outputs that no cell of the deck uses.
@@ -258,7 +311,12 @@ impl Cache {
         if !imported.insert(path.to_path_buf()) {
             return;
         }
-        for part in self.files.get(path).into_iter().flat_map(|file| &file.parts) {
+        for part in self
+            .files
+            .get(path)
+            .into_iter()
+            .flat_map(|file| &file.parts)
+        {
             if let Part::Import(import) = part {
                 self.imported(import, imported);
             }
@@ -353,18 +411,21 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
 
         // Only the changed files are rendered again; an import they still
         // share with the rest of the deck keeps its cached render.
+        let start = Instant::now();
+        let names: Vec<String> = changed
+            .iter()
+            .map(|path| progress::relative(path).display().to_string())
+            .collect();
+        eprintln!("changed: {}", names.join(", "));
         cache.update(&changed);
         cache.prune(input);
         readers = cache.readers();
         watch_dirs(&mut watcher, &mut watched, cache, &readers);
+        let took = progress::duration(start.elapsed());
         if cache.write(input, output) {
-            eprintln!(
-                "rendered {} after {} changed",
-                output.display(),
-                changed.len()
-            );
+            eprintln!("rendered {} in {took}", output.display());
         } else {
-            eprintln!("{} is unchanged", output.display());
+            eprintln!("{} is unchanged, after {took}", output.display());
         }
     }
 }
@@ -690,8 +751,14 @@ mod tests {
     #[test]
     fn a_theme_is_read_as_yaml() {
         assert_eq!(theme("theme: \"paper\"").as_deref(), Some("paper"));
-        assert_eq!(theme("theme: 'my theme.css'").as_deref(), Some("my theme.css"));
-        assert_eq!(theme("theme: light # for daytime").as_deref(), Some("light"));
+        assert_eq!(
+            theme("theme: 'my theme.css'").as_deref(),
+            Some("my theme.css")
+        );
+        assert_eq!(
+            theme("theme: light # for daytime").as_deref(),
+            Some("light")
+        );
     }
 
     #[test]
