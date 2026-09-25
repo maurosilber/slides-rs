@@ -45,8 +45,8 @@ struct Cli {
     #[arg(short, long, value_enum)]
     kernel: Option<KernelChoice>,
     /// After rendering, remove the saved outputs that no cell of the deck
-    /// uses anymore. The outputs directory is shared by every deck rendered
-    /// next to it, so their outputs are removed too.
+    /// uses anymore, and anything else in the outputs directory. It is shared
+    /// by every deck rendered next to it, so their outputs are removed too.
     #[arg(long)]
     clean: bool,
 }
@@ -204,7 +204,7 @@ impl Cache {
         }
 
         fs::create_dir_all(&self.outputs).unwrap();
-        fs::write(self.outputs.join(".gitignore"), "*").unwrap();
+        fs::write(self.outputs.join(output::GITIGNORE), "*").unwrap();
         let multi = MultiProgress::new();
         // With a single notebook, its own bar already says it all.
         let total = (notebooks.len() > 1).then(|| progress::total(&multi, notebooks.len()));
@@ -276,9 +276,10 @@ impl Cache {
             .collect();
         match output::remove_stale(&self.outputs, &keep) {
             Ok(removed) => eprintln!(
-                "removed {} stale cell(s) and {} output(s) from {}, recovering {}",
+                "removed {} stale cell(s), {} output(s) and {} other file(s) from {}, recovering {}",
                 removed.cells,
                 removed.outputs,
+                removed.other,
                 self.outputs.display(),
                 output::human_size(removed.bytes)
             ),

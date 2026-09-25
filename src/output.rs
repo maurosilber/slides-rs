@@ -14,9 +14,12 @@ use sha2::{Digest, Sha256};
 
 use crate::python;
 
-/// Hex characters kept from the SHA-256 of a cell or an output. 64 bits
-/// keeps the paths readable and collisions out of reach for one document.
+/// Hex characters kept from the SHA-256 of a cell. 64 bits keeps the paths
+/// readable and collisions out of reach for one document.
 const HASH_LEN: usize = 16;
+
+/// Hex characters in the full SHA-256 of an output, which names its file.
+const OUTPUT_HASH_LEN: usize = 64;
 
 /// The file in a cell's directory listing the files read up to that cell,
 /// outside the environment, with the hash of each, in the format of
@@ -206,8 +209,14 @@ pub fn environment(lock: Option<&Path>) -> Vec<u8> {
         .unwrap_or_default()
 }
 
+/// The first `HASH_LEN` hex characters of a digest.
 fn hex(digest: impl AsRef<[u8]>) -> String {
-    digest.as_ref()[..HASH_LEN / 2]
+    full_hex(&digest.as_ref()[..HASH_LEN / 2])
+}
+
+fn full_hex(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
@@ -283,10 +292,7 @@ fn file_hash(path: &Path) -> String {
     // A file written again after its metadata was read keeps the older time,
     // so the next check reads it again rather than trusting this hash.
     let hash: String = match std::fs::read(path) {
-        Ok(bytes) => Sha256::digest(bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
+        Ok(bytes) => full_hex(Sha256::digest(bytes)),
         Err(_) => return UNREADABLE.to_string(),
     };
     FILE_HASHES
@@ -302,69 +308,99 @@ pub fn saved(root: &Path, hash: &str) -> std::io::Result<Vec<PathBuf>> {
     Ok(list.lines().map(|name| root.join(name)).collect())
 }
 
+/// Keeps the outputs out of git, next to them.
+pub const GITIGNORE: &str = ".gitignore";
+
 /// What `remove_stale` removed.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Removed {
     pub cells: usize,
     pub outputs: usize,
+    /// Whatever else was there, such as the outputs of an older layout.
+    pub other: usize,
     pub bytes: u64,
 }
 
-/// Removes the directories of the cells under `root` whose hash is not in
-/// `keep`, and then the outputs no remaining cell lists. Anything else is
-/// left alone.
+impl Removed {
+    /// Removes `path`, whatever it is, counting its bytes.
+    fn remove(&mut self, path: &Path, file_type: std::fs::FileType) -> std::io::Result<()> {
+        if file_type.is_dir() {
+            self.bytes += size(path)?;
+            std::fs::remove_dir_all(path)
+        } else {
+            self.bytes += std::fs::symlink_metadata(path)?.len();
+            std::fs::remove_file(path)
+        }
+    }
+}
+
+/// Removes everything under `root` but its `.gitignore`, the directories of
+/// the cells whose hash is in `keep`, holding only their lists, and the
+/// outputs those cells list.
 pub fn remove_stale(root: &Path, keep: &HashSet<&str>) -> std::io::Result<Removed> {
-    let mut removed = Removed {
-        cells: 0,
-        outputs: 0,
-        bytes: 0,
-    };
+    let mut removed = Removed::default();
     let entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(root) {
         Ok(entries) => entries.collect::<std::io::Result<_>>()?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
         Err(error) => return Err(error),
     };
 
-    // A cell that is kept keeps its outputs, whichever cell saved them first.
+    // The cells go first, as a cell that is kept keeps its outputs, whichever
+    // cell saved them first.
     let mut listed = HashSet::new();
     for entry in &entries {
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir() {
+            continue;
+        }
         let name = entry.file_name();
-        let Some(hash) = name.to_str().filter(|name| is_hash(name)) else {
-            continue;
-        };
-        if !entry.file_type()?.is_dir() {
-            continue;
+        let hash = name.to_str().filter(|name| is_hash(name, HASH_LEN));
+        match hash {
+            Some(hash) if keep.contains(hash) => {
+                listed.extend(saved(root, hash).unwrap_or_default());
+                for entry in std::fs::read_dir(entry.path())? {
+                    let entry = entry?;
+                    if entry.file_name() != INPUTS && entry.file_name() != OUTPUTS {
+                        removed.remove(&entry.path(), entry.file_type()?)?;
+                        removed.other += 1;
+                    }
+                }
+            }
+            Some(_) => {
+                removed.remove(&entry.path(), file_type)?;
+                removed.cells += 1;
+            }
+            None => {
+                removed.remove(&entry.path(), file_type)?;
+                removed.other += 1;
+            }
         }
-        if keep.contains(hash) {
-            listed.extend(saved(root, hash).unwrap_or_default());
-            continue;
-        }
-        let dir = entry.path();
-        removed.bytes += size(&dir)?;
-        std::fs::remove_dir_all(&dir)?;
-        removed.cells += 1;
     }
     for entry in &entries {
+        let file_type = entry.file_type()?;
         let path = entry.path();
+        if file_type.is_dir() || entry.file_name() == GITIGNORE || listed.contains(&path) {
+            continue;
+        }
         let is_output = path
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .is_some_and(is_hash)
+            .is_some_and(|stem| is_hash(stem, OUTPUT_HASH_LEN))
             && path.extension().is_some();
-        if !is_output || listed.contains(&path) || !entry.file_type()?.is_file() {
-            continue;
+        removed.remove(&path, file_type)?;
+        if is_output {
+            removed.outputs += 1;
+        } else {
+            removed.other += 1;
         }
-        removed.bytes += entry.metadata()?.len();
-        std::fs::remove_file(&path)?;
-        removed.outputs += 1;
     }
     Ok(removed)
 }
 
-/// Whether `name` is a hash, as the cells' directories and the outputs are
-/// named.
-fn is_hash(name: &str) -> bool {
-    name.len() == HASH_LEN && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+/// Whether `name` is a hash of `len` hex characters, as the cells'
+/// directories and the outputs are named.
+fn is_hash(name: &str, len: usize) -> bool {
+    name.len() == len && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// The bytes taken by the files in `dir`, however deep.
@@ -405,7 +441,7 @@ pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf
     for output in outputs {
         let name = format!(
             "{}.{}",
-            hex(Sha256::digest(&output.bytes)),
+            full_hex(Sha256::digest(&output.bytes)),
             output.extension
         );
         let path = root.join(&name);
@@ -524,7 +560,7 @@ mod tests {
         let name = |path: &PathBuf| path.file_name().unwrap().to_str().unwrap().to_string();
         assert_eq!(
             name(&saved[0]),
-            format!("{}.txt", hex(Sha256::digest(b"b")))
+            format!("{}.txt", full_hex(Sha256::digest(b"b")))
         );
         assert!(name(&saved[1]).ends_with(".png"));
         assert_eq!(saved[0].parent().unwrap(), root);
@@ -568,19 +604,19 @@ mod tests {
         let stale = "fedcba9876543210";
         save_cell(&root, kept, &[text("kept"), text("shared")]).await;
         save_cell(&root, stale, &[text("shared"), text("stale")]).await;
-        std::fs::write(root.join(".gitignore"), "*").unwrap();
-        std::fs::write(root.join("notes.txt"), "not an output").unwrap();
+        std::fs::write(root.join(GITIGNORE), "*").unwrap();
 
         let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
         // The stale cell's list of outputs, its empty list of the files it
         // read, and the one output no kept cell lists.
-        let outputs_list = 2 * (HASH_LEN + ".txt\n".len());
+        let outputs_list = 2 * (OUTPUT_HASH_LEN + ".txt\n".len());
         let expected_bytes = (outputs_list + "stale".len()) as u64;
         assert_eq!(
             removed,
             Removed {
                 cells: 1,
                 outputs: 1,
+                other: 0,
                 bytes: expected_bytes
             }
         );
@@ -592,8 +628,45 @@ mod tests {
         );
         assert!(is_fresh(&root, kept));
         assert!(!root.join(stale).exists());
-        assert!(root.join(".gitignore").exists());
-        assert!(root.join("notes.txt").exists());
+        assert!(root.join(GITIGNORE).exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn anything_else_is_removed_too() {
+        let root = temp_root();
+        let kept = "0123456789abcdef";
+        save_cell(&root, kept, &[text("kept")]).await;
+        std::fs::write(root.join(GITIGNORE), "*").unwrap();
+        // An older layout: numbered outputs, next to a list of the files read.
+        std::fs::write(root.join(kept).join("0.txt"), "old").unwrap();
+        std::fs::write(root.join(kept).join("files.txt"), "").unwrap();
+        // An output named by a shorter hash, a file left half written, and
+        // things that were never outputs.
+        std::fs::write(root.join("0123456789abcdef.txt"), "short").unwrap();
+        std::fs::write(root.join(".partial.txt.1234"), "half").unwrap();
+        std::fs::write(root.join("notes.txt"), "notes").unwrap();
+        std::fs::create_dir_all(root.join("images")).unwrap();
+        std::fs::write(root.join("images").join("a.png"), "png").unwrap();
+
+        let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
+        assert_eq!((removed.cells, removed.outputs, removed.other), (0, 0, 6));
+        assert_eq!(removed.bytes, 3 + 5 + 4 + 5 + 3);
+        let mut left: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        let output = saved(&root, kept).unwrap()[0].clone();
+        let output = output.file_name().unwrap().to_str().unwrap();
+        assert_eq!(left, [GITIGNORE, kept, output]);
+        let mut lists: Vec<String> = std::fs::read_dir(root.join(kept))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        lists.sort();
+        assert_eq!(lists, [INPUTS, OUTPUTS]);
+        assert!(is_fresh(&root, kept));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
