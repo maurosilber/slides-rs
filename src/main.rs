@@ -194,8 +194,10 @@ impl Cache {
             let tasks: Vec<_> = notebooks
                 .into_iter()
                 .map(|(path, cells, hashes)| {
+                    // A cell reads and writes files next to the markdown it is in.
+                    let dir = parent(path).to_path_buf();
                     let root = self.outputs.clone();
-                    let task = execute::execute_cells(self.kernels, root, cells, hashes);
+                    let task = execute::execute_cells(self.kernels, dir, root, cells, hashes);
                     (path, tokio::spawn(task))
                 })
                 .collect();
@@ -227,6 +229,20 @@ impl Cache {
             ),
             Err(error) => eprintln!("{}: {error}", self.outputs.display()),
         }
+    }
+
+    /// The markdown files whose cells read each file, as listed with their
+    /// outputs.
+    fn readers(&self) -> HashMap<PathBuf, HashSet<PathBuf>> {
+        let mut readers: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+        for (path, file) in &self.files {
+            for hash in &file.hashes {
+                for read in output::read_files(&self.outputs, hash) {
+                    readers.entry(read).or_default().insert(path.clone());
+                }
+            }
+        }
+        readers
     }
 
     /// Forgets the files that `input` no longer imports, so that a change
@@ -294,8 +310,9 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
     let (sender, receiver) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(sender).unwrap();
     let mut watched = HashSet::new();
-    watch_dirs(&mut watcher, &mut watched, cache);
-    eprintln!("watching {} files", cache.files.len());
+    let mut readers = cache.readers();
+    watch_dirs(&mut watcher, &mut watched, cache, &readers);
+    eprintln!("watching {} files", cache.files.len() + readers.len());
 
     while let Ok(event) = receiver.recv() {
         let mut paths: HashSet<PathBuf> = HashSet::new();
@@ -318,12 +335,18 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
             .filter(|path| is_lock_file(path))
             .filter_map(|path| path.parent())
             .collect();
-        let changed: Vec<PathBuf> = cache
+        let mut changed: HashSet<PathBuf> = cache
             .files
             .keys()
             .filter(|path| paths.contains(*path) || locks.iter().any(|dir| path.starts_with(dir)))
             .cloned()
             .collect();
+        // A file a cell read may have changed its outputs. Rendering the
+        // markdown it is in again re-runs whichever of its cells are stale.
+        for path in &paths {
+            changed.extend(readers.get(path).into_iter().flatten().cloned());
+        }
+        let changed: Vec<PathBuf> = changed.into_iter().collect();
         if changed.is_empty() {
             continue;
         }
@@ -332,7 +355,8 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
         // share with the rest of the deck keeps its cached render.
         cache.update(&changed);
         cache.prune(input);
-        watch_dirs(&mut watcher, &mut watched, cache);
+        readers = cache.readers();
+        watch_dirs(&mut watcher, &mut watched, cache, &readers);
         if cache.write(input, output) {
             eprintln!(
                 "rendered {} after {} changed",
@@ -345,19 +369,29 @@ fn watch(cache: &mut Cache, input: &Path, output: &Path) {
     }
 }
 
-/// Watches the directory of every file in the deck and of the lock files
-/// they use, and no others: an editor saves by replacing a file, which a
-/// watch on the file itself would not survive.
-fn watch_dirs(watcher: &mut impl Watcher, watched: &mut HashSet<PathBuf>, cache: &Cache) {
-    let dirs: HashSet<PathBuf> = cache
+/// Watches the directory of every file in the deck, of the lock files they
+/// use and of the files their cells read, and no others: an editor saves by
+/// replacing a file, which a watch on the file itself would not survive.
+fn watch_dirs(
+    watcher: &mut impl Watcher,
+    watched: &mut HashSet<PathBuf>,
+    cache: &Cache,
+    readers: &HashMap<PathBuf, HashSet<PathBuf>>,
+) {
+    let mut dirs: HashSet<PathBuf> = cache
         .files
         .iter()
         .flat_map(|(path, file)| [Some(path), file.lock.as_ref()])
         .flatten()
+        .chain(readers.keys())
         .map(|path| parent(path).to_path_buf())
         .collect();
-    for dir in dirs.difference(watched) {
-        watcher.watch(dir, RecursiveMode::NonRecursive).unwrap();
+    let new: Vec<PathBuf> = dirs.difference(watched).cloned().collect();
+    for dir in new {
+        // A cell may have tried to read a file in a directory that does not exist.
+        if watcher.watch(&dir, RecursiveMode::NonRecursive).is_err() {
+            dirs.remove(&dir);
+        }
     }
     for dir in watched.difference(&dirs) {
         // The directory itself may be gone, which already ends the watch.
@@ -498,7 +532,7 @@ fn render(markdown: &str, path: &Path) -> File {
     // Split at the markers, so every file is cached apart from the ones it
     // imports, and apart from the outputs of its cells, which may come later.
     let lock = output::lock_file(dir);
-    let hashes = output::hashes(&output::environment(lock.as_deref()), &cells);
+    let hashes = output::hashes(dir, &output::environment(lock.as_deref()), &cells);
     let mut next_hash = hashes.iter().cloned();
     let mut parts = Vec::new();
     let mut rest = rendered.as_str();

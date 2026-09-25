@@ -16,9 +16,14 @@ use crate::python;
 /// readable and collisions out of reach for one document.
 const HASH_LEN: usize = 16;
 
-/// The file in a cell's directory listing the files read up to that cell. It
-/// is not an output, which are named by number.
+/// The file in a cell's directory listing the files read up to that cell,
+/// outside the environment, with the hash of each, in the format of
+/// `sha256sum`. It is not an output, which are named by number.
 pub const FILES: &str = "files.txt";
+
+/// Stands for the hash of a file that cannot be read, such as one that does
+/// not exist, so that creating it later re-runs the cell.
+const UNREADABLE: &str = "-";
 
 /// One output of a cell: either text or an image, with the file extension it
 /// should be saved under.
@@ -152,10 +157,15 @@ fn strip_ansi(text: &str) -> String {
 /// the cells before it left behind. Hashing a cell on its own would give the
 /// same address to two cells that read different values of the same name.
 ///
-/// The chain starts from `environment`, the lock file of the packages the
-/// kernel imports, so that changing a package re-runs every cell.
-pub fn hashes(environment: &[u8], cells: &[impl AsRef<str>]) -> Vec<String> {
+/// The chain starts from `dir`, the directory the kernel runs in, as the same
+/// code reads other files elsewhere, and from `environment`, the lock file of
+/// the packages the kernel imports, so that changing a package re-runs every
+/// cell.
+pub fn hashes(dir: &Path, environment: &[u8], cells: &[impl AsRef<str>]) -> Vec<String> {
     let mut hasher = Sha256::new();
+    // A path holds no NUL, which ends it unambiguously.
+    hasher.update(dir.as_os_str().as_encoded_bytes());
+    hasher.update([0]);
     hasher.update(environment);
     cells
         .iter()
@@ -195,9 +205,58 @@ fn hex(digest: impl AsRef<[u8]>) -> String {
         .collect()
 }
 
-/// Whether this cell's outputs have already been saved.
-pub fn exists(root: &Path, hash: &str) -> bool {
-    root.join(hash).is_dir()
+/// Whether this cell's outputs have been saved, and the files it read have
+/// not changed since. Outputs saved without a list of files are not trusted.
+pub fn is_fresh(root: &Path, hash: &str) -> bool {
+    listed(root, hash).is_some_and(|files| {
+        files
+            .iter()
+            .all(|(hash, path)| file_hash(Path::new(path)) == *hash)
+    })
+}
+
+/// The files a cell read, as listed with its outputs, or none if there is no
+/// list.
+pub fn read_files(root: &Path, hash: &str) -> Vec<PathBuf> {
+    listed(root, hash)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, path)| PathBuf::from(path))
+        .collect()
+}
+
+/// The hash and path of every file listed with a cell's outputs, or `None`
+/// if there is no list or it cannot be parsed.
+fn listed(root: &Path, hash: &str) -> Option<Vec<(String, String)>> {
+    let files = std::fs::read_to_string(root.join(hash).join(FILES)).ok()?;
+    files
+        .lines()
+        .map(|line| {
+            let (hash, path) = line.split_once("  ")?;
+            Some((hash.to_string(), path.to_string()))
+        })
+        .collect()
+}
+
+/// Replaces the list of files at `files`, one path per line, with the same
+/// list along with the hash of each file as it is now.
+pub fn hash_files(files: &Path) -> std::io::Result<()> {
+    let list = std::fs::read_to_string(files)?;
+    let hashed: String = list
+        .lines()
+        .map(|path| format!("{}  {path}\n", file_hash(Path::new(path))))
+        .collect();
+    std::fs::write(files, hashed)
+}
+
+fn file_hash(path: &Path) -> String {
+    match std::fs::read(path) {
+        Ok(bytes) => Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+        Err(_) => UNREADABLE.to_string(),
+    }
 }
 
 /// The files a cell's outputs were saved in, in the order the kernel produced them.
@@ -301,34 +360,42 @@ mod tests {
 
     #[test]
     fn a_hash_covers_the_cells_before_it() {
-        let hashes = hashes(b"", &["a = 1\n", "a\n"]);
+        let deck = Path::new("/deck");
+        let hashes = hashes(deck, b"", &["a = 1\n", "a\n"]);
         assert_eq!(hashes.len(), 2);
         assert!(hashes.iter().all(|hash| hash.len() == HASH_LEN));
         // The first cell is addressed by its own code alone.
-        assert_eq!(hashes[0], self::hashes(b"", &["a = 1\n"])[0]);
+        assert_eq!(hashes[0], self::hashes(deck, b"", &["a = 1\n"])[0]);
         // The second is addressed by both.
-        assert_ne!(hashes[1], self::hashes(b"", &["a\n"])[0]);
+        assert_ne!(hashes[1], self::hashes(deck, b"", &["a\n"])[0]);
     }
 
     #[test]
     fn editing_a_cell_readdresses_the_ones_after_it() {
-        let before = hashes(b"", &["a = 1\n", "a\n"]);
-        let after = hashes(b"", &["a = 2\n", "a\n"]);
+        let before = hashes(Path::new("/deck"), b"", &["a = 1\n", "a\n"]);
+        let after = hashes(Path::new("/deck"), b"", &["a = 2\n", "a\n"]);
         assert_ne!(before[0], after[0]);
         assert_ne!(before[1], after[1]);
     }
 
     #[test]
     fn reformatting_a_cell_keeps_every_address() {
-        let before = hashes(b"", &["a = 1\n", "a\n"]);
-        let after = hashes(b"", &["a=1  # one\n\n", "a\n"]);
+        let before = hashes(Path::new("/deck"), b"", &["a = 1\n", "a\n"]);
+        let after = hashes(Path::new("/deck"), b"", &["a=1  # one\n\n", "a\n"]);
         assert_eq!(before, after);
     }
 
     #[test]
+    fn the_same_cells_elsewhere_have_other_addresses() {
+        let here = hashes(Path::new("/deck"), b"", &["open('data.txt')\n"]);
+        let there = hashes(Path::new("/deck/sub"), b"", &["open('data.txt')\n"]);
+        assert_ne!(here, there);
+    }
+
+    #[test]
     fn changing_the_environment_readdresses_every_cell() {
-        let before = hashes(b"numpy 1", &["a = 1\n", "a\n"]);
-        let after = hashes(b"numpy 2", &["a = 1\n", "a\n"]);
+        let before = hashes(Path::new("/deck"), b"numpy 1", &["a = 1\n", "a\n"]);
+        let after = hashes(Path::new("/deck"), b"numpy 2", &["a = 1\n", "a\n"]);
         assert_ne!(before[0], after[0]);
         assert_ne!(before[1], after[1]);
     }
@@ -350,6 +417,33 @@ mod tests {
         assert!(root.join(kept).is_dir());
         assert!(!root.join(stale).exists());
         assert!(root.join(".gitignore").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_cell_is_fresh_until_a_file_it_read_changes() {
+        let root = std::env::temp_dir().join(format!("slides-rs-{}", uuid::Uuid::new_v4()));
+        let hash = "0123456789abcdef";
+        let data = root.join("data.txt");
+        let created = root.join("created.txt");
+        std::fs::create_dir_all(root.join(hash)).unwrap();
+        std::fs::write(&data, "1").unwrap();
+        // No list of files yet.
+        assert!(!is_fresh(&root, hash));
+
+        let files = root.join(hash).join(FILES);
+        let list = format!("{}\n{}\n", data.display(), created.display());
+        std::fs::write(&files, list).unwrap();
+        hash_files(&files).unwrap();
+        assert!(is_fresh(&root, hash));
+
+        std::fs::write(&data, "2").unwrap();
+        assert!(!is_fresh(&root, hash));
+        std::fs::write(&data, "1").unwrap();
+        assert!(is_fresh(&root, hash));
+
+        std::fs::write(&created, "").unwrap();
+        assert!(!is_fresh(&root, hash));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -1,7 +1,7 @@
 //! Driving a Jupyter kernel over ZeroMQ.
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -68,8 +68,8 @@ async fn find_kernelspec(names: &[&str]) -> Result<KernelspecDir> {
 
 impl Kernel {
     /// Start the first of these kernels that is installed, most preferred
-    /// first, and connect to it.
-    pub async fn start(kernel_names: &[&str]) -> Result<Kernel> {
+    /// first, in the directory `dir`, and connect to it.
+    pub async fn start(kernel_names: &[&str], dir: &Path) -> Result<Kernel> {
         let kernelspec = find_kernelspec(kernel_names)
             .await
             .with_context(|| format!("could not find any of the {kernel_names:?} kernels"))?;
@@ -103,6 +103,7 @@ impl Kernel {
 
         let process = kernelspec
             .command(&connection_file, None, None)?
+            .current_dir(dir)
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("could not start the `{kernel_name}` kernel"))?;

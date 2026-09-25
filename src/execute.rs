@@ -15,18 +15,19 @@ use crate::{audit, output};
 pub const KERNELS: &[&str] = &["xpython", "python3"];
 
 /// Runs the cells of one notebook, in order, on a kernel of its own (the
-/// first of `kernels` that is installed), and saves
+/// first of `kernels` that is installed) started in `dir`, and saves
 /// the outputs of those that are not saved yet under `root`, each under its
-/// hash in `hashes`.
+/// hash in `hashes`, or that read a file that changed since.
 pub async fn execute_cells(
     kernels: &[&str],
+    dir: PathBuf,
     root: PathBuf,
     cells: Vec<String>,
     hashes: Vec<String>,
 ) -> Result<()> {
     let missing: Vec<bool> = hashes
         .iter()
-        .map(|hash| !output::exists(&root, hash))
+        .map(|hash| !output::is_fresh(&root, hash))
         .collect();
     if !missing.contains(&true) {
         println!("every cell is already in {}", root.display());
@@ -36,7 +37,7 @@ pub async fn execute_cells(
     // One kernel runs every cell in order: a cell can use what an earlier one
     // defined, so none of them can be skipped just because its output is
     // already saved. Only the writing is skipped.
-    let mut kernel = Kernel::start(kernels).await?;
+    let mut kernel = Kernel::start(kernels, &dir).await?;
     kernel.run_silent(&audit::install()).await?;
     for ((code, hash), missing) in cells.iter().zip(&hashes).zip(missing) {
         let outputs = kernel.run(code).await?;
@@ -48,7 +49,12 @@ pub async fn execute_cells(
         println!("{}: {} output(s)", dir.display(), outputs.len());
         // The kernel may run in another directory, so it gets the full path.
         let files = std::path::absolute(dir.join(output::FILES))?;
-        if let Err(error) = kernel.run_silent(&audit::save(&files)).await {
+        let saved = async {
+            kernel.run_silent(&audit::save(&files)).await?;
+            output::hash_files(&files)?;
+            anyhow::Ok(())
+        };
+        if let Err(error) = saved.await {
             eprintln!("{}: {error:#}", files.display());
         }
     }
