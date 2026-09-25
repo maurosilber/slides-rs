@@ -14,7 +14,8 @@ use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection, Kernelspe
 use tokio::process::Child;
 use uuid::Uuid;
 
-use crate::output::{Output, Outputs};
+use super::outputs::Outputs;
+use crate::store::Output;
 
 /// How long to wait for the kernel to greet us on iopub before assuming it
 /// speaks the older protocol, which has no greeting.
