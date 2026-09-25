@@ -26,6 +26,12 @@ const OUTPUT_DIR: &str = "_outputs";
 /// Marks an import in the rendered html, followed by its path and a newline.
 const IMPORT: char = '\u{0}';
 
+/// Opens every slide in the rendered html.
+const SECTION: &str = "<section>";
+
+/// Opens a slide whose fragments all show at once.
+const NO_FRAGMENTS: &str = "<section data-fragments=\"false\">";
+
 /// Marks a code cell in the rendered html, followed by a newline. The cells
 /// are marked in order, so the n-th marker stands for the n-th cell.
 const CELL: char = '\u{1}';
@@ -125,6 +131,9 @@ struct File {
     /// The theme its frontmatter asks for. Only the input's is used, so an
     /// imported file can keep the theme it was written with.
     theme: Option<String>,
+    /// Whether its frontmatter steps through its slides' fragments. Without
+    /// a say, it does as the file importing it does.
+    fragments: Option<bool>,
 }
 
 /// Each file is rendered on its own, so that a change re-renders only that file.
@@ -327,12 +336,17 @@ impl Cache {
     }
 
     /// Concatenates the cached renders, following the imports from `path`.
-    fn body(&self, path: &Path, body: &mut String) {
-        for part in &self.files[path].parts {
+    /// The slides of a file whose fragments are off, as set in its own
+    /// frontmatter or, without it, as `fragments` says, are marked so.
+    fn body(&self, path: &Path, fragments: bool, body: &mut String) {
+        let file = &self.files[path];
+        let fragments = file.fragments.unwrap_or(fragments);
+        for part in &file.parts {
             match part {
-                Part::Html(html) => body.push_str(html),
+                Part::Html(html) if fragments => body.push_str(html),
+                Part::Html(html) => body.push_str(&html.replace(SECTION, NO_FRAGMENTS)),
                 Part::Cell(hash) => body.push_str(&cell_html(&self.outputs, hash)),
-                Part::Import(import) => self.body(import, body),
+                Part::Import(import) => self.body(import, fragments, body),
             }
         }
     }
@@ -342,9 +356,12 @@ impl Cache {
     /// it wrote.
     fn write(&self, input: &Path, output: &Path) -> bool {
         let mut body = String::new();
-        self.body(input, &mut body);
+        self.body(input, true, &mut body);
         // A slide break at either end of a file, or two in a row, leaves an empty slide.
-        let body = indent(&body.replace("<section>\n</section>\n", ""));
+        let body = body
+            .replace(&format!("{SECTION}\n</section>\n"), "")
+            .replace(&format!("{NO_FRAGMENTS}\n</section>\n"), "");
+        let body = indent(&body);
         let theme = match &self.files[input].theme {
             Some(theme) => {
                 let href = theme_href(theme);
@@ -595,6 +612,7 @@ fn render(markdown: &str, path: &Path) -> File {
 
     // Split at the markers, so every file is cached apart from the ones it
     // imports, and apart from the outputs of its cells, which may come later.
+    let frontmatter = Frontmatter::parse(&frontmatter, path);
     let lock = output::lock_file(dir);
     let hashes = output::hashes(dir, &output::environment(lock.as_deref()), &cells);
     let mut next_hash = hashes.iter().cloned();
@@ -616,7 +634,8 @@ fn render(markdown: &str, path: &Path) -> File {
         cells,
         hashes,
         lock,
-        theme: Frontmatter::parse(&frontmatter, path).theme,
+        theme: frontmatter.theme,
+        fragments: frontmatter.fragments,
     }
 }
 
@@ -626,6 +645,9 @@ fn render(markdown: &str, path: &Path) -> File {
 #[serde(default)]
 struct Frontmatter {
     theme: Option<String>,
+    /// Whether to step through the fragments of the file's slides, and of
+    /// those it imports that do not say. Unset, they are stepped through.
+    fragments: Option<bool>,
 }
 
 impl Frontmatter {
@@ -712,7 +734,7 @@ fn indent(html: &str) -> String {
     for line in html.lines() {
         if !preformatted {
             indented.push_str(match line {
-                "<section>" | "</section>" => "    ",
+                SECTION | NO_FRAGMENTS | "</section>" => "    ",
                 _ => "        ",
             });
         }
@@ -777,6 +799,52 @@ mod tests {
     fn invalid_frontmatter_is_left_out() {
         assert_eq!(theme("theme: [dark"), None);
         assert_eq!(theme("theme: [dark]"), None);
+    }
+
+    #[test]
+    fn fragments_are_set_in_the_frontmatter() {
+        let fragments = |yaml| Frontmatter::parse(yaml, Path::new("slides.md")).fragments;
+        assert_eq!(fragments("fragments: false"), Some(false));
+        assert_eq!(fragments("fragments: true"), Some(true));
+        assert_eq!(fragments("theme: dark"), None);
+        assert_eq!(fragments(""), None);
+    }
+
+    #[test]
+    fn an_imported_file_steps_through_fragments_as_its_importer_unless_it_says() {
+        let mut cache = Cache::new(PathBuf::from("/deck/_outputs"), execute::KERNELS);
+        let files = [
+            (
+                "/deck/index.md",
+                "---\nfragments: false\n---\n# Off\n\n<import-slide src=\"same.md\" />\n<import-slide src=\"on.md\" />\n",
+            ),
+            ("/deck/same.md", "# Inherited\n"),
+            ("/deck/on.md", "---\nfragments: true\n---\n# On\n"),
+        ];
+        for (path, markdown) in files {
+            cache
+                .files
+                .insert(PathBuf::from(path), render(markdown, Path::new(path)));
+        }
+        let mut body = String::new();
+        cache.body(Path::new("/deck/index.md"), true, &mut body);
+        let opening = |title: &str| {
+            let heading = body.find(&format!(">{title}</h1>")).unwrap();
+            let section = body[..heading].rfind("<section").unwrap();
+            body[section..].lines().next().unwrap().to_string()
+        };
+        assert_eq!(opening("Off"), NO_FRAGMENTS);
+        assert_eq!(opening("Inherited"), NO_FRAGMENTS);
+        assert_eq!(opening("On"), SECTION);
+    }
+
+    #[test]
+    fn a_heading_can_turn_fragments_off_with_an_attribute() {
+        let file = render("# Title { fragments=false }\n", Path::new("slides.md"));
+        let Part::Html(html) = &file.parts[0] else {
+            panic!("the slide renders as html");
+        };
+        assert!(html.contains("<h1 fragments=\"false\">Title</h1>"));
     }
 
     #[test]

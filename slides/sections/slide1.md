@@ -1,9 +1,9 @@
 # First slide { #some-id .myclass }
 
-$2 \cdot x$
+$\step{\color{red}{2} \cdot} x$
 
 $$
-\frac{\partial u}{\partial t} + (u \cdot \nabla) u = \text{solved}
+\frac{\partial u}{\partial t} + (u \cdot \nabla) u \step{= \text{solved}}
 $$
 
 ---
@@ -31,8 +31,10 @@ $$
 
 ### Col 1
 
-Text 1
+- First item
+- Second item
 
-### Col 2
+### Col 2 {fragments=false}
 
-Text 2
+- First and
+- Second item together
