@@ -1,7 +1,9 @@
 //! Cell outputs, saved as the bytes an HTML document will embed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -249,14 +251,40 @@ pub fn hash_files(files: &Path) -> std::io::Result<()> {
     std::fs::write(files, hashed)
 }
 
+/// The hash of each file as last read, along with its size and modification
+/// time then, so that a file is read again only once it changes. Every cell
+/// lists the files read by the cells before it too, so without this the same
+/// files would be read once per cell, and again on every change in watch mode.
+static FILE_HASHES: LazyLock<Mutex<HashMap<PathBuf, HashedFile>>> = LazyLock::new(Default::default);
+
+/// A file's size and modification time, and the hash of its contents then.
+type HashedFile = (u64, SystemTime, String);
+
 fn file_hash(path: &Path) -> String {
-    match std::fs::read(path) {
+    let Ok((len, modified)) =
+        std::fs::metadata(path).and_then(|metadata| Ok((metadata.len(), metadata.modified()?)))
+    else {
+        return UNREADABLE.to_string();
+    };
+    if let Some((cached_len, cached_modified, hash)) = FILE_HASHES.lock().unwrap().get(path)
+        && (*cached_len, *cached_modified) == (len, modified)
+    {
+        return hash.clone();
+    }
+    // A file written again after its metadata was read keeps the older time,
+    // so the next check reads it again rather than trusting this hash.
+    let hash: String = match std::fs::read(path) {
         Ok(bytes) => Sha256::digest(bytes)
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect(),
-        Err(_) => UNREADABLE.to_string(),
-    }
+        Err(_) => return UNREADABLE.to_string(),
+    };
+    FILE_HASHES
+        .lock()
+        .unwrap()
+        .insert(path.to_path_buf(), (len, modified, hash.clone()));
+    hash
 }
 
 /// The files a cell's outputs were saved in, in the order the kernel produced them.

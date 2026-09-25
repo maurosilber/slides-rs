@@ -21,3 +21,13 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "fs", "time", "net"] }
 uuid = { version = "1.26.1", features = ["v4"] }
+
+# Dependencies build without debug info, which cuts a clean build by a tenth.
+# Backtraces still name their functions, without file and line.
+[profile.dev.package."*"]
+debug = false
+
+# Hashing the files the cells read is most of a render that runs no cell,
+# and is several times slower unoptimized.
+[profile.dev.package.sha2]
+opt-level = 3

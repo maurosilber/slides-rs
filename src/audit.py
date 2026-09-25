@@ -7,24 +7,33 @@ class Audit:
 
     def __init__(self):
         self.files: set[str] = set()
-        # The environment's files are pinned by its lock file.
-        self.environment = {
-            os.path.realpath(prefix)
-            for prefix in (
-                sys.prefix,
-                sys.exec_prefix,
-                sys.base_prefix,
-                sys.base_exec_prefix,
-            )
-        }
+        # The absolute paths already added, as given, as the same ones come
+        # up again. A relative one may stand for another file after a chdir.
+        self.seen: set[str] = set()
+        # The environment's files are pinned by its lock file. Each prefix is
+        # kept both as given and as its real path, followed by a separator,
+        # for `str.startswith`.
+        prefixes = (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix)
+        self.environment = tuple(
+            {
+                os.path.join(path, "")
+                for prefix in prefixes
+                for path in (os.path.normpath(prefix), os.path.realpath(prefix))
+            }
+        )
 
     def add(self, path: str):
         """Record a file by its real path, unless it is in the environment."""
+        if os.path.isabs(path):
+            if path in self.seen:
+                return
+            self.seen.add(path)
+            # Most files opened are the environment's, which a comparison of
+            # strings settles without the lookups of `realpath`.
+            if os.path.normpath(path).startswith(self.environment):
+                return
         path = os.path.realpath(path)
-        if not any(
-            path == prefix or path.startswith(prefix + os.sep)
-            for prefix in self.environment
-        ):
+        if not path.startswith(self.environment):
             self.files.add(path)
 
     def install_audit_hook(self):

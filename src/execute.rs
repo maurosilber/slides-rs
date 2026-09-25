@@ -29,6 +29,12 @@ pub async fn execute_cells(
     missing: Vec<bool>,
     bar: ProgressBar,
 ) -> Result<usize> {
+    // The cells after the last one to save need not run: none of them is
+    // saved, and no cell to save comes after them to use what they define.
+    let Some(last) = missing.iter().rposition(|&missing| missing) else {
+        return Ok(0);
+    };
+    bar.set_length(last as u64 + 1);
     bar.set_message("starting the kernel");
     // One kernel runs every cell in order: a cell can use what an earlier one
     // defined, so none of them can be skipped just because its output is
@@ -37,7 +43,7 @@ pub async fn execute_cells(
     kernel.run_silent(&audit::install()).await?;
     bar.set_message(format!("on {}", kernel.name));
     let mut saved = 0;
-    for ((code, hash), missing) in cells.iter().zip(&hashes).zip(missing) {
+    for ((code, hash), missing) in cells.iter().zip(&hashes).zip(missing).take(last + 1) {
         let outputs = kernel.run(code).await?;
         bar.inc(1);
         if !missing {
