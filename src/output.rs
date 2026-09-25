@@ -1,5 +1,6 @@
 //! Cell outputs, saved as the bytes an HTML document will embed.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -209,6 +210,63 @@ pub fn saved(root: &Path, hash: &str) -> std::io::Result<Vec<PathBuf>> {
     Ok(files.into_iter().map(|(_, path)| path).collect())
 }
 
+/// Removes the saved outputs under `root` whose hash is not in `keep`,
+/// returning how many were removed and how many bytes they took.
+/// Anything that is not a cell's directory is left alone.
+pub fn remove_stale(root: &Path, keep: &HashSet<&str>) -> std::io::Result<(usize, u64)> {
+    let mut removed = 0;
+    let mut bytes = 0;
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(hash) = name.to_str() else { continue };
+        let is_hash = hash.len() == HASH_LEN && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+        if !is_hash || !entry.file_type()?.is_dir() || keep.contains(hash) {
+            continue;
+        }
+        let dir = entry.path();
+        bytes += size(&dir)?;
+        std::fs::remove_dir_all(&dir)?;
+        removed += 1;
+    }
+    Ok((removed, bytes))
+}
+
+/// The bytes taken by the files in `dir`, however deep.
+fn size(dir: &Path) -> std::io::Result<u64> {
+    let mut bytes = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            bytes += size(&entry.path())?;
+        } else {
+            bytes += entry.metadata()?.len();
+        }
+    }
+    Ok(bytes)
+}
+
+/// A size in bytes, in the largest binary unit that keeps it at least one.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut size = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{size:.1} {}", UNITS[unit])
+}
+
 /// Save a cell's outputs under `<root>/<hash>/`, numbered in the order the
 /// kernel produced them.
 pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {
@@ -269,6 +327,34 @@ mod tests {
         let after = hashes(b"numpy 2", &["a = 1\n", "a\n"]);
         assert_ne!(before[0], after[0]);
         assert_ne!(before[1], after[1]);
+    }
+
+    #[test]
+    fn stale_outputs_are_removed_and_measured() {
+        let root = std::env::temp_dir().join(format!("slides-rs-{}", uuid::Uuid::new_v4()));
+        let kept = "0123456789abcdef";
+        let stale = "fedcba9876543210";
+        std::fs::create_dir_all(root.join(kept)).unwrap();
+        std::fs::create_dir_all(root.join(stale)).unwrap();
+        std::fs::write(root.join(kept).join("0.txt"), "kept").unwrap();
+        std::fs::write(root.join(stale).join("0.txt"), "stale").unwrap();
+        std::fs::write(root.join(stale).join("1.png"), [0; 100]).unwrap();
+        std::fs::write(root.join(".gitignore"), "*").unwrap();
+
+        let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
+        assert_eq!(removed, (1, 105));
+        assert!(root.join(kept).is_dir());
+        assert!(!root.join(stale).exists());
+        assert!(root.join(".gitignore").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn sizes_are_shown_in_binary_units() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1536), "1.5 KiB");
+        assert_eq!(human_size(5 * 1024 * 1024), "5.0 MiB");
     }
 
     #[test]

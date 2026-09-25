@@ -41,6 +41,11 @@ struct Cli {
     /// python3 that is installed is used.
     #[arg(short, long, value_enum)]
     kernel: Option<KernelChoice>,
+    /// After rendering, remove the saved outputs that no cell of the deck
+    /// uses anymore. The outputs directory is shared by every deck rendered
+    /// next to it, so their outputs are removed too.
+    #[arg(long)]
+    clean: bool,
 }
 
 /// Which kernel to run the cells on.
@@ -70,6 +75,7 @@ fn main() {
         output,
         watch: watching,
         kernel,
+        clean,
     } = Cli::parse();
     let output = output.unwrap_or_else(|| input.with_extension("html"));
     // The cache is keyed by canonical path, as watch events report those.
@@ -81,6 +87,9 @@ fn main() {
     let mut cache = Cache::new(parent(&output).join(OUTPUT_DIR), kernels);
     cache.update(std::slice::from_ref(&input));
     cache.write(&input, &output);
+    if clean {
+        cache.clean();
+    }
 
     if watching {
         watch(&mut cache, &input, &output);
@@ -199,6 +208,24 @@ impl Cache {
                 }
             }
         });
+    }
+
+    /// Removes the saved outputs that no cell of the deck uses.
+    fn clean(&self) {
+        let keep: HashSet<&str> = self
+            .files
+            .values()
+            .flat_map(|file| &file.hashes)
+            .map(String::as_str)
+            .collect();
+        match output::remove_stale(&self.outputs, &keep) {
+            Ok((removed, bytes)) => eprintln!(
+                "removed {removed} stale output(s) from {}, recovering {}",
+                self.outputs.display(),
+                output::human_size(bytes)
+            ),
+            Err(error) => eprintln!("{}: {error}", self.outputs.display()),
+        }
     }
 
     /// Forgets the files that `input` no longer imports, so that a change
