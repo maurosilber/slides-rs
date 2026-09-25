@@ -16,9 +16,14 @@ pub const KERNELS: &[&str] = &["xpython", "python3"];
 
 /// Runs the cells of one notebook, in order, on a kernel of its own (the
 /// first of `kernels` that is installed), and saves
-/// the outputs of those that are not saved yet under `root`.
-pub async fn execute_cells(kernels: &[&str], root: PathBuf, cells: Vec<String>) -> Result<()> {
-    let hashes = output::hashes(&cells);
+/// the outputs of those that are not saved yet under `root`, each under its
+/// hash in `hashes`.
+pub async fn execute_cells(
+    kernels: &[&str],
+    root: PathBuf,
+    cells: Vec<String>,
+    hashes: Vec<String>,
+) -> Result<()> {
     let missing: Vec<bool> = hashes
         .iter()
         .map(|hash| !output::exists(&root, hash))

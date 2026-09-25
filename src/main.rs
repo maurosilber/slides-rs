@@ -99,6 +99,8 @@ enum Part {
 struct File {
     parts: Vec<Part>,
     cells: Vec<String>,
+    /// The hash each cell's outputs are saved under.
+    hashes: Vec<String>,
     /// The theme its frontmatter asks for. Only the input's is used, so an
     /// imported file can keep the theme it was written with.
     theme: Option<String>,
@@ -161,10 +163,13 @@ impl Cache {
     /// of its own. A notebook that fails leaves its missing outputs out of
     /// the deck, rather than the rest of the deck too.
     fn execute(&self, paths: &[PathBuf]) {
-        let notebooks: Vec<(&PathBuf, Vec<String>)> = paths
+        let notebooks: Vec<(&PathBuf, Vec<String>, Vec<String>)> = paths
             .iter()
-            .map(|path| (path, self.files[path].cells.clone()))
-            .filter(|(_, cells)| !cells.is_empty())
+            .map(|path| {
+                let file = &self.files[path];
+                (path, file.cells.clone(), file.hashes.clone())
+            })
+            .filter(|(_, cells, _)| !cells.is_empty())
             .collect();
         if notebooks.is_empty() {
             return;
@@ -175,9 +180,9 @@ impl Cache {
         self.runtime.block_on(async {
             let tasks: Vec<_> = notebooks
                 .into_iter()
-                .map(|(path, cells)| {
+                .map(|(path, cells, hashes)| {
                     let root = self.outputs.clone();
-                    let task = execute::execute_cells(self.kernels, root, cells);
+                    let task = execute::execute_cells(self.kernels, root, cells, hashes);
                     (path, tokio::spawn(task))
                 })
                 .collect();
@@ -443,7 +448,8 @@ fn render(markdown: &str, path: &Path) -> File {
 
     // Split at the markers, so every file is cached apart from the ones it
     // imports, and apart from the outputs of its cells, which may come later.
-    let mut hashes = output::hashes(&cells).into_iter();
+    let hashes = output::hashes(&output::environment(dir), &cells);
+    let mut next_hash = hashes.iter().cloned();
     let mut parts = Vec::new();
     let mut rest = rendered.as_str();
     while let Some(start) = rest.find([IMPORT, CELL]) {
@@ -452,7 +458,7 @@ fn render(markdown: &str, path: &Path) -> File {
         parts.push(Part::Html(html.to_string()));
         parts.push(match marker.strip_prefix(IMPORT) {
             Some(import) => Part::Import(PathBuf::from(import)),
-            None => Part::Cell(hashes.next().unwrap()),
+            None => Part::Cell(next_hash.next().unwrap()),
         });
         rest = after;
     }
@@ -460,6 +466,7 @@ fn render(markdown: &str, path: &Path) -> File {
     File {
         parts,
         cells,
+        hashes,
         theme: Frontmatter::parse(&frontmatter, path).theme,
     }
 }

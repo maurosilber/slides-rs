@@ -143,8 +143,12 @@ fn strip_ansi(text: &str) -> String {
 /// One kernel runs the whole document, so a cell's output depends on the state
 /// the cells before it left behind. Hashing a cell on its own would give the
 /// same address to two cells that read different values of the same name.
-pub fn hashes(cells: &[impl AsRef<str>]) -> Vec<String> {
+///
+/// The chain starts from `environment`, the lock file of the packages the
+/// kernel imports, so that changing a package re-runs every cell.
+pub fn hashes(environment: &[u8], cells: &[impl AsRef<str>]) -> Vec<String> {
     let mut hasher = Sha256::new();
+    hasher.update(environment);
     cells
         .iter()
         .map(|code| {
@@ -153,6 +157,22 @@ pub fn hashes(cells: &[impl AsRef<str>]) -> Vec<String> {
             hex(hasher.clone().finalize())
         })
         .collect()
+}
+
+/// The lock files that pin the Python environment, most preferred first.
+const LOCK_FILES: &[&str] = &["pixi.lock", "uv.lock"];
+
+/// The contents of the lock file in `dir` or the closest directory above it,
+/// or nothing when the environment is not locked.
+pub fn environment(dir: &Path) -> Vec<u8> {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    dir.ancestors()
+        .find_map(|dir| {
+            LOCK_FILES
+                .iter()
+                .find_map(|name| std::fs::read(dir.join(name)).ok())
+        })
+        .unwrap_or_default()
 }
 
 fn hex(digest: impl AsRef<[u8]>) -> String {
@@ -211,19 +231,27 @@ mod tests {
 
     #[test]
     fn a_hash_covers_the_cells_before_it() {
-        let hashes = hashes(&["a = 1\n", "a\n"]);
+        let hashes = hashes(b"", &["a = 1\n", "a\n"]);
         assert_eq!(hashes.len(), 2);
         assert!(hashes.iter().all(|hash| hash.len() == HASH_LEN));
         // The first cell is addressed by its own code alone.
-        assert_eq!(hashes[0], self::hashes(&["a = 1\n"])[0]);
+        assert_eq!(hashes[0], self::hashes(b"", &["a = 1\n"])[0]);
         // The second is addressed as if both had been one cell.
-        assert_eq!(hashes[1], self::hashes(&["a = 1\na\n"])[0]);
+        assert_eq!(hashes[1], self::hashes(b"", &["a = 1\na\n"])[0]);
     }
 
     #[test]
     fn editing_a_cell_readdresses_the_ones_after_it() {
-        let before = hashes(&["a = 1\n", "a\n"]);
-        let after = hashes(&["a = 2\n", "a\n"]);
+        let before = hashes(b"", &["a = 1\n", "a\n"]);
+        let after = hashes(b"", &["a = 2\n", "a\n"]);
+        assert_ne!(before[0], after[0]);
+        assert_ne!(before[1], after[1]);
+    }
+
+    #[test]
+    fn changing_the_environment_readdresses_every_cell() {
+        let before = hashes(b"numpy 1", &["a = 1\n", "a\n"]);
+        let after = hashes(b"numpy 2", &["a = 1\n", "a\n"]);
         assert_ne!(before[0], after[0]);
         assert_ne!(before[1], after[1]);
     }
