@@ -9,6 +9,8 @@ use jupyter_protocol::media::MediaType;
 use jupyter_protocol::{ErrorOutput, Media, StreamContent};
 use sha2::{Digest, Sha256};
 
+use crate::python;
+
 /// Hex characters kept from the SHA-256 of a cell. 64 bits keeps the paths
 /// readable and collisions out of reach for one document.
 const HASH_LEN: usize = 16;
@@ -138,7 +140,8 @@ fn strip_ansi(text: &str) -> String {
 }
 
 /// The address of every cell: each one is the hash of all the code the kernel
-/// has run up to and including that cell, concatenated.
+/// has run up to and including that cell, one cell after another. A cell is
+/// hashed by its syntax tree, so reformatting it keeps its address.
 ///
 /// One kernel runs the whole document, so a cell's output depends on the state
 /// the cells before it left behind. Hashing a cell on its own would give the
@@ -152,7 +155,7 @@ pub fn hashes(environment: &[u8], cells: &[impl AsRef<str>]) -> Vec<String> {
     cells
         .iter()
         .map(|code| {
-            hasher.update(code.as_ref().as_bytes());
+            python::update(&mut hasher, code.as_ref());
             // Clone to read the digest so far without ending the chain.
             hex(hasher.clone().finalize())
         })
@@ -241,8 +244,8 @@ mod tests {
         assert!(hashes.iter().all(|hash| hash.len() == HASH_LEN));
         // The first cell is addressed by its own code alone.
         assert_eq!(hashes[0], self::hashes(b"", &["a = 1\n"])[0]);
-        // The second is addressed as if both had been one cell.
-        assert_eq!(hashes[1], self::hashes(b"", &["a = 1\na\n"])[0]);
+        // The second is addressed by both.
+        assert_ne!(hashes[1], self::hashes(b"", &["a\n"])[0]);
     }
 
     #[test]
@@ -251,6 +254,13 @@ mod tests {
         let after = hashes(b"", &["a = 2\n", "a\n"]);
         assert_ne!(before[0], after[0]);
         assert_ne!(before[1], after[1]);
+    }
+
+    #[test]
+    fn reformatting_a_cell_keeps_every_address() {
+        let before = hashes(b"", &["a = 1\n", "a\n"]);
+        let after = hashes(b"", &["a=1  # one\n\n", "a\n"]);
+        assert_eq!(before, after);
     }
 
     #[test]

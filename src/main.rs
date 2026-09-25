@@ -2,6 +2,7 @@ mod execute;
 mod kernel;
 mod math;
 mod output;
+mod python;
 mod svg;
 
 use std::collections::{HashMap, HashSet};
