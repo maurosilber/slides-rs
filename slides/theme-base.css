@@ -189,9 +189,3 @@ svg:not(.katex *) {
 section svg:not(.katex *) {
     filter: var(--figure-filter);
 }
-
-/* matplotlib paints the figure and each axes white; let the slide show through. */
-section svg g[id^="figure_"] > g[id^="patch_"]:first-child path,
-section svg g[id^="axes_"] > g[id^="patch_"]:first-child path {
-    fill: transparent !important;
-}

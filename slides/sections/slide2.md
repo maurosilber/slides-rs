@@ -4,6 +4,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+plt.rcParams['figure.facecolor'] = 'none'
+plt.rcParams['axes.facecolor'] = 'none'
+
 x = np.linspace(-10, 10, 100)
 ~~~
 
