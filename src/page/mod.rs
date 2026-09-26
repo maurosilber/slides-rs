@@ -1,8 +1,6 @@
 //! The html page of the deck: its slides inside the template, and the saved
 //! outputs of its cells as html.
 
-mod svg;
-
 use std::fs;
 use std::path::Path;
 
@@ -78,11 +76,8 @@ pub fn cell_html(root: &Path, hash: &str) -> String {
             text.push('\n');
         }
         match extension {
-            Some("html") => html.push_str(&text),
-            Some("svg") => match svg::inline(&text) {
-                Ok(svg) => html.push_str(&svg),
-                Err(error) => eprintln!("{}: {error:#}", file.display()),
-            },
+            // SVGs were prepared for inlining when they were saved.
+            Some("html" | "svg") => html.push_str(&text),
             Some("md") => html::push_html(&mut html, Parser::new(&text)),
             // Plain text keeps its layout, and is escaped on the way in.
             _ => html::push_html(

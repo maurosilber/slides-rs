@@ -5,6 +5,7 @@ mod audit;
 mod execute;
 mod kernel;
 mod outputs;
+mod svg;
 
 use std::fs;
 use std::path::{Path, PathBuf};
