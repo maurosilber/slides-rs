@@ -93,23 +93,34 @@ function stepsOf(slide) {
     return { count, elements };
 }
 
+// Puts each run of h3 columns in a box of its own, as many columns wide as it
+// has h3s, from its first h3 up to the next h1 or h2, which stay outside, as
+// slides.css lays out.
+function wrapColumns(slide) {
+    let columns = null;
+    for (const child of [...slide.children]) {
+        if (child.tagName == "H1" || child.tagName == "H2") {
+            columns = null;
+        } else if (child.tagName == "H3" && !columns) {
+            columns = document.createElement("div");
+            columns.className = "columns";
+            child.before(columns);
+        }
+        if (!columns) continue;
+        columns.append(child);
+        columns.style.setProperty("--cols", columns.querySelectorAll(":scope > h3").length);
+    }
+}
+
 // Math is typeset by a module script, which runs after this one but before
-// DOMContentLoaded, so the steps it marks are only there from then on.
+// DOMContentLoaded, so the steps it marks are only there from then on. The
+// columns are boxed after, as the steps are read off the slide's children.
 let slideSteps = [];
 addEventListener("DOMContentLoaded", () => {
     slideSteps = [...slides].map(stepsOf);
+    for (const slide of slides) wrapColumns(slide);
     updateSlide(...positionFromHash());
 });
-
-// column-count has to fit the widest h2 group, not the whole slide.
-for (const slide of slides) {
-    let widest = 0, run = 0;
-    for (const child of slide.children) {
-        if (child.tagName == "H2") run = 0;
-        else if (child.tagName == "H3") widest = Math.max(widest, ++run);
-    }
-    slide.style.setProperty("--cols", widest || 1);
-}
 
 // The current slide and step are kept in the URL, as `#slide.step`,
 // so that the reload after a rebuild comes back to them instead of to the

@@ -61,8 +61,6 @@ h3 {
 
 h1 {
     font-size: 2em;
-    /* The title spans the columns, like the h2 below it. */
-    column-span: all;
     padding-bottom: 0.25em;
     border-bottom: 0.08em solid var(--accent);
 }

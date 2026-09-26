@@ -4,21 +4,15 @@ section {
     display: none;
 }
 
-/* H3 sections become columns; the H2 spans them all. */
-section {
+/* Each run of H3 sections is a row of columns, one per H3, which slides.js
+   puts in a box of its own. Headings above the H3 stay out of it: Safari
+   misplaces the columns of a box that holds an element spanning them. */
+.columns {
     column-count: var(--cols, 1);
-
-    &>h2 {
-        column-span: all;
-    }
+    /* The theme sets the gap on the slide. */
+    column-gap: inherit;
 
     &>h3:not(:first-of-type) {
         break-before: column;
-    }
-
-    /* A row with fewer H3s than --cols would otherwise be balanced
-       across every column, splitting a heading from its text. */
-    &>*:has(+ :not(h2):not(h3)) {
-        break-after: avoid;
     }
 }
