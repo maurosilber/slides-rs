@@ -11,14 +11,12 @@ use quick_xml::name::QName;
 use quick_xml::{Reader, Writer};
 use sha2::{Digest, Sha256};
 
-use crate::fragment::Range;
+use crate::step::Step;
 
-/// The id that marks an element as a fragment, followed by the steps it shows
-/// in. In matplotlib, `gid="fragment 2..4"` gives an artist's group this id.
-const FRAGMENT: &str = "fragment ";
-
-/// The SVG as markup for an html document, with every `id="fragment 2..4"`
-/// turned into `fragment="2..4"` for the slides to step through.
+/// The SVG as markup for an html document, with every id that marks a step,
+/// as matplotlib's `gid="step=2..4"`, `gid="step"` or `gid="also"` gives an
+/// artist's group, turned into `step="2..4"`, `step=""` or `also=""` for the
+/// slides to step through.
 ///
 /// The XML declaration, doctype, comments and metadata are dropped, as they
 /// have no place in the middle of an html body, and the metadata holds the
@@ -87,9 +85,9 @@ fn write(svg: &str, ids: &HashMap<String, usize>, prefix: &str) -> Result<Vec<u8
     Ok(writer.into_inner())
 }
 
-/// The element, with an `id="fragment 2..4"` replaced by `fragment="2..4"`,
-/// the other ids referred to renamed, and the rest dropped. Only the steps
-/// of a fragment are kept, as ids like this repeat across figures.
+/// The element, with an id that marks a step replaced by the attribute the
+/// slides read, the other ids referred to renamed, and the rest dropped.
+/// Only the step is kept, as ids like this repeat across figures.
 fn element<'a>(
     element: BytesStart<'a>,
     ids: &HashMap<String, usize>,
@@ -100,10 +98,15 @@ fn element<'a>(
     for attribute in element.attributes().flatten() {
         if attribute.key.as_ref() == "id" {
             let value = &attribute.value;
-            if let Some(range) = value.strip_prefix(FRAGMENT).and_then(Range::parse) {
+            if let Some(step) = Step::parse(value) {
+                let (key, value) = match step {
+                    Step::Range(range) => ("step", range.to_string()),
+                    Step::Next => ("step", String::new()),
+                    Step::Also => ("also", String::new()),
+                };
                 rewritten.push_attribute(Attribute {
-                    key: QName("fragment"),
-                    value: Cow::Owned(range.to_string()),
+                    key: QName(key),
+                    value: Cow::Owned(value),
                 });
             } else if let Some(id) = rename(value) {
                 rewritten.push_attribute(Attribute {
@@ -165,27 +168,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fragment_id_becomes_a_fragment_attribute() {
-        let svg = r#"<svg><g id="fragment 2" class="a"><path d="M 0 0"/></g></svg>"#;
+    fn a_step_id_becomes_a_step_attribute() {
+        let svg = r#"<svg><g id="step=2" class="a"><path d="M 0 0"/></g></svg>"#;
         assert_eq!(
             inline(svg).unwrap(),
-            r#"<svg><g fragment="2" class="a"><path d="M 0 0"/></g></svg>"#
+            r#"<svg><g step="2" class="a"><path d="M 0 0"/></g></svg>"#
         );
     }
 
     #[test]
-    fn a_fragment_id_can_be_a_range() {
-        let svg =
-            r#"<svg><g id="fragment 2..4"/><g id="fragment ..3"/><g id="fragment 5.."/></svg>"#;
+    fn a_step_id_can_be_the_next_step_or_along_with_the_latest() {
+        let svg = r#"<svg><g id="step"/><g id="also"/></svg>"#;
         assert_eq!(
             inline(svg).unwrap(),
-            r#"<svg><g fragment="2..4"/><g fragment="..3"/><g fragment="5"/></svg>"#
+            r#"<svg><g step=""/><g also=""/></svg>"#
+        );
+    }
+
+    #[test]
+    fn a_step_id_can_be_a_range() {
+        let svg = r#"<svg><g id="step=2..4"/><g id="step=..3"/><g id="step=5.."/></svg>"#;
+        assert_eq!(
+            inline(svg).unwrap(),
+            r#"<svg><g step="2..4"/><g step="..3"/><g step="5"/></svg>"#
         );
     }
 
     #[test]
     fn ids_nothing_refers_to_are_dropped() {
-        let svg = r#"<svg><g id="line2d_1"/><g id="fragment x"/></svg>"#;
+        let svg = r#"<svg><g id="line2d_1"/><g id="step=x"/></svg>"#;
         assert_eq!(inline(svg).unwrap(), "<svg><g/><g/></svg>");
     }
 

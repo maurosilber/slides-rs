@@ -9,7 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
 
-use crate::markdown::{NO_FRAGMENTS, SECTION};
+use crate::markdown::{NO_STEPS, SECTION};
 use crate::paths::parent;
 use crate::store;
 
@@ -97,7 +97,7 @@ pub fn page(body: &str, theme: Option<&str>, output: &Path, self_contained: bool
     // A slide break at either end of a file, or two in a row, leaves an empty slide.
     let body = body
         .replace(&format!("{SECTION}\n</section>\n"), "")
-        .replace(&format!("{NO_FRAGMENTS}\n</section>\n"), "");
+        .replace(&format!("{NO_STEPS}\n</section>\n"), "");
     let body = indent(&body);
     // The deck's own theme is linked where it is, relative to the page.
     let own = theme.map(theme_href).filter(|href| bundled(href).is_none());
@@ -338,7 +338,7 @@ fn escape(text: &str) -> String {
 
 /// The outputs a cell saved under `root`, in the order the kernel produced
 /// them. Raster images are linked, relative to the html, and the rest is
-/// inlined: an SVG too, so that the slides can reach into it for fragments.
+/// inlined: an SVG too, so that the slides can reach into it for steps.
 pub fn cell_html(root: &Path, hash: &str) -> String {
     let Ok(files) = store::saved(root, hash) else {
         // The cell has not run, or its notebook failed; its error was reported then.
@@ -386,7 +386,7 @@ fn indent(html: &str) -> String {
     for line in html.lines() {
         if !preformatted {
             indented.push_str(match line {
-                SECTION | NO_FRAGMENTS | "</section>" => "    ",
+                SECTION | NO_STEPS | "</section>" => "    ",
                 _ => "        ",
             });
         }

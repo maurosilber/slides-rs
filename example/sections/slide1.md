@@ -20,7 +20,7 @@ x^2 + 2x - 3 &= 0 \\
 $$
 
 $$
-\underbrace{x^2 + 2x + 1}_{\fragment{1}{(x + 1)^2}} - 4
+\underbrace{x^2 + 2x + 1}_{\step[1]{(x + 1)^2}} - 4
 $$
 
 ---
@@ -34,7 +34,7 @@ $$
 - First item
 - Second item
 
-### Col 2 {fragments=false}
+### Col 2 {steps=false}
 
 - First and
 - Second item together

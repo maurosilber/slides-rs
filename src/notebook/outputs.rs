@@ -148,15 +148,12 @@ mod tests {
     fn an_svg_is_saved_ready_to_be_inlined() {
         let media = Media {
             content: vec![MediaType::Svg(
-                r#"<?xml version="1.0"?><svg><g id="fragment 1"/></svg>"#.to_string(),
+                r#"<?xml version="1.0"?><svg><g id="step=1"/></svg>"#.to_string(),
             )],
         };
         let mut outputs = Outputs::default();
         outputs.push_media(&media).unwrap();
-        assert_eq!(
-            outputs.into_vec()[0].bytes,
-            br#"<svg><g fragment="1"/></svg>"#
-        );
+        assert_eq!(outputs.into_vec()[0].bytes, br#"<svg><g step="1"/></svg>"#);
     }
 
     #[test]

@@ -1,29 +1,30 @@
-//! Steps of the fragment animation, written inside math.
+//! Steps of a slide, written inside math.
 //!
-//! `\step{...}` appears one step after the ones before it, and `\also{...}`
-//! along with the last of them. Both become `\fragment{n}{...}`, which the
-//! page hands to KaTeX, numbered here in the order they are written: KaTeX
-//! lays out an aligned environment column by column, so by the time the page
-//! sees them, the left side of every row comes before any right side.
+//! `\step{...}` appears one step after the latest one, `\also{...}` along
+//! with it, and `\step[3..5]{...}` in the steps its range says. Each becomes
+//! `\htmlData{step=...}{...}` with its range, which KaTeX writes as the
+//! `data-step` the page reads. They are numbered here, in the order they are
+//! written: KaTeX lays out an aligned environment column by column, so by the
+//! time the page sees them, the left side of every row comes before any
+//! right side.
 
-use crate::fragment::Range;
+use crate::step::Range;
 
 /// Counts the steps of one column of a slide, as its numbers start over at
 /// every heading, the way the slides count them.
 #[derive(Default)]
 pub struct Steps {
-    last: u32,
+    /// The highest step a range starts at so far.
+    latest: u32,
 }
 
 impl Steps {
     /// Starts counting a new column, or a new slide.
     pub fn reset(&mut self) {
-        self.last = 0;
+        self.latest = 0;
     }
 
-    /// The TeX, with every `\step` and `\also` numbered as a `\fragment`.
-    /// An explicit `\fragment{n}` is kept, and counts as step n, as does a
-    /// `\fragment{n..m}`, which shows from step n until step m.
+    /// The TeX, with every `\step` and `\also` written with its range.
     pub fn number(&mut self, tex: &str) -> String {
         let mut numbered = String::with_capacity(tex.len());
         let mut rest = tex;
@@ -40,23 +41,32 @@ impl Steps {
                 rest = &command[symbol_len..];
                 continue;
             }
-            let (name, after) = command.split_at(name_len);
-            match name {
-                "step" => {
-                    self.last += 1;
-                    numbered.push_str(&format!("\\fragment{{{}}}", self.last));
-                }
-                "also" => {
-                    self.last = self.last.max(1);
-                    numbered.push_str(&format!("\\fragment{{{}}}", self.last));
-                }
-                "fragment" => {
-                    if let Some(n) = start_argument(after) {
-                        self.last = self.last.max(n);
+            let (name, mut after) = command.split_at(name_len);
+            let range = match name {
+                "step" => match range_argument(after) {
+                    Some((range, argument_len)) => {
+                        after = &after[argument_len..];
+                        Some(range)
                     }
-                    numbered.push_str("\\fragment");
+                    None => Some(Range {
+                        start: Some(self.latest + 1),
+                        end: None,
+                    }),
+                },
+                "also" => Some(Range {
+                    start: Some(self.latest.max(1)),
+                    end: None,
+                }),
+                _ => None,
+            };
+            match range {
+                Some(range) => {
+                    if let Some(start) = range.start {
+                        self.latest = self.latest.max(start);
+                    }
+                    numbered.push_str(&format!("\\htmlData{{step={range}}}"));
                 }
-                _ => {
+                None => {
                     numbered.push('\\');
                     numbered.push_str(name);
                 }
@@ -68,11 +78,12 @@ impl Steps {
     }
 }
 
-/// The step a fragment shows from, in the `{n..m}` that opens `tex`.
-fn start_argument(tex: &str) -> Option<u32> {
-    let argument = tex.trim_start().strip_prefix('{')?;
-    let (range, _) = argument.split_once('}')?;
-    Range::parse(range)?.start
+/// The range in a `[3..5]` that opens `tex`, and how long it is written. One
+/// that is not a range is left for KaTeX to show, which points it out.
+fn range_argument(tex: &str) -> Option<(Range, usize)> {
+    let argument = tex.strip_prefix('[')?;
+    let (range, _) = argument.split_once(']')?;
+    Some((Range::parse(range)?, range.len() + 2))
 }
 
 #[cfg(test)]
@@ -84,38 +95,44 @@ mod tests {
         let mut steps = Steps::default();
         assert_eq!(
             steps.number(r"a \step{b} \step{c}"),
-            r"a \fragment{1}{b} \fragment{2}{c}"
+            r"a \htmlData{step=1}{b} \htmlData{step=2}{c}"
         );
         // The count goes on in the next expression of the same column.
-        assert_eq!(steps.number(r"\step{d}"), r"\fragment{3}{d}");
+        assert_eq!(steps.number(r"\step{d}"), r"\htmlData{step=3}{d}");
     }
 
     #[test]
-    fn also_joins_the_last_step() {
+    fn also_joins_the_latest_step() {
         let mut steps = Steps::default();
         let tex = r"a &= b \\ \step{c} &\also{= d} \\ \step{e} &\also{= f}";
         assert_eq!(
             steps.number(tex),
-            r"a &= b \\ \fragment{1}{c} &\fragment{1}{= d} \\ \fragment{2}{e} &\fragment{2}{= f}"
+            r"a &= b \\ \htmlData{step=1}{c} &\htmlData{step=1}{= d} \\ \htmlData{step=2}{e} &\htmlData{step=2}{= f}"
         );
     }
 
     #[test]
-    fn an_explicit_fragment_counts_as_its_step() {
+    fn also_before_any_step_is_the_first() {
         let mut steps = Steps::default();
         assert_eq!(
-            steps.number(r"\fragment{3}{a} \step{b}"),
-            r"\fragment{3}{a} \fragment{4}{b}"
+            steps.number(r"\also{a} \step{b}"),
+            r"\htmlData{step=1}{a} \htmlData{step=2}{b}"
         );
     }
 
     #[test]
-    fn a_range_counts_as_the_step_it_starts_at() {
+    fn a_step_can_say_its_range() {
         let mut steps = Steps::default();
         assert_eq!(
-            steps.number(r"\fragment{2..4}{a} \step{b} \fragment{..9}{c} \step{d}"),
-            r"\fragment{2..4}{a} \fragment{3}{b} \fragment{..9}{c} \fragment{4}{d}"
+            steps.number(r"\step[2..4]{a} \step{b} \also{c} \step[..9]{d} \step{e}"),
+            r"\htmlData{step=2..4}{a} \htmlData{step=3}{b} \htmlData{step=3}{c} \htmlData{step=..9}{d} \htmlData{step=4}{e}"
         );
+    }
+
+    #[test]
+    fn a_range_that_is_not_one_is_left_to_show() {
+        let mut steps = Steps::default();
+        assert_eq!(steps.number(r"\step[x]{a}"), r"\htmlData{step=1}[x]{a}");
     }
 
     #[test]
@@ -123,7 +140,7 @@ mod tests {
         let mut steps = Steps::default();
         steps.number(r"\step{a} \step{b}");
         steps.reset();
-        assert_eq!(steps.number(r"\step{c}"), r"\fragment{1}{c}");
+        assert_eq!(steps.number(r"\step{c}"), r"\htmlData{step=1}{c}");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::markdown::{self, File, NO_FRAGMENTS, Part, SECTION};
+use crate::markdown::{self, File, NO_STEPS, Part, SECTION};
 use crate::notebook::{Notebook, Runner};
 use crate::paths::read;
 use crate::{page, store};
@@ -128,17 +128,17 @@ impl Deck {
     }
 
     /// Concatenates the cached renders, following the imports from `path`.
-    /// The slides of a file whose fragments are off, as set in its own
-    /// frontmatter or, without it, as `fragments` says, are marked so.
-    fn body(&self, path: &Path, fragments: bool, body: &mut String) {
+    /// The slides of a file whose steps are off, as set in its own
+    /// frontmatter or, without it, as `steps` says, are marked so.
+    fn body(&self, path: &Path, steps: bool, body: &mut String) {
         let file = &self.files[path];
-        let fragments = file.fragments.unwrap_or(fragments);
+        let steps = file.steps.unwrap_or(steps);
         for part in &file.parts {
             match part {
-                Part::Html(html) if fragments => body.push_str(html),
-                Part::Html(html) => body.push_str(&html.replace(SECTION, NO_FRAGMENTS)),
+                Part::Html(html) if steps => body.push_str(html),
+                Part::Html(html) => body.push_str(&html.replace(SECTION, NO_STEPS)),
                 Part::Cell(hash) => body.push_str(&page::cell_html(&self.outputs, hash)),
-                Part::Import(import) => self.body(import, fragments, body),
+                Part::Import(import) => self.body(import, steps, body),
             }
         }
     }
@@ -173,15 +173,15 @@ mod tests {
     use crate::notebook::KERNELS;
 
     #[test]
-    fn an_imported_file_steps_through_fragments_as_its_importer_unless_it_says() {
+    fn an_imported_file_steps_through_its_slides_as_its_importer_unless_it_says() {
         let mut deck = Deck::new(PathBuf::from("/deck/_outputs"), KERNELS, false);
         let files = [
             (
                 "/deck/index.md",
-                "---\nfragments: false\n---\n# Off\n\n<import-slide src=\"same.md\" />\n<import-slide src=\"on.md\" />\n",
+                "---\nsteps: false\n---\n# Off\n\n<import-slide src=\"same.md\" />\n<import-slide src=\"on.md\" />\n",
             ),
             ("/deck/same.md", "# Inherited\n"),
-            ("/deck/on.md", "---\nfragments: true\n---\n# On\n"),
+            ("/deck/on.md", "---\nsteps: true\n---\n# On\n"),
         ];
         for (path, markdown) in files {
             deck.files.insert(
@@ -196,8 +196,8 @@ mod tests {
             let section = body[..heading].rfind("<section").unwrap();
             body[section..].lines().next().unwrap().to_string()
         };
-        assert_eq!(opening("Off"), NO_FRAGMENTS);
-        assert_eq!(opening("Inherited"), NO_FRAGMENTS);
+        assert_eq!(opening("Off"), NO_STEPS);
+        assert_eq!(opening("Inherited"), NO_STEPS);
         assert_eq!(opening("On"), SECTION);
     }
 }

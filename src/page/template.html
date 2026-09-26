@@ -10,14 +10,10 @@
         import katex from "https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/katex.mjs";
         const options = {
             throwOnError: false,
-            // \htmlData carries the steps out to the page, and is the only
+            // \htmlData carries the steps out to the page, as the renderer
+            // writes every \step{...} and \also{...}, and is the only
             // command allowed to write html.
             trust: (context) => context.command == "\\htmlData",
-            // A step of the fragment animation. The renderer numbers every
-            // \step{...} and \also{...} as one of these.
-            macros: {
-                "\\fragment": "\\htmlData{fragment=#1}{#2}",
-            },
         };
         // The markdown leaves math as its TeX, in a span of its own.
         for (const math of document.querySelectorAll(".math")) {

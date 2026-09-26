@@ -13,5 +13,5 @@ x = np.pi * np.linspace(-1, 1, 1000)
 
 ~~~python
 for i in range(10):
-    plt.plot(x, np.cos(i * x), gid=f"fragment {i}..{i+2}")
+    plt.plot(x, np.cos(i * x), gid=f"step={i}..{i+2}")
 ~~~

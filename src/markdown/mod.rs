@@ -23,8 +23,8 @@ const CELL: char = '\u{1}';
 /// Opens every slide in the rendered html.
 pub const SECTION: &str = "<section>";
 
-/// Opens a slide whose fragments all show at once.
-pub const NO_FRAGMENTS: &str = "<section data-fragments=\"false\">";
+/// Opens a slide whose steps all show at once.
+pub const NO_STEPS: &str = "<section data-steps=\"false\">";
 
 /// A file's slides, in the order they are rendered: its own html, the
 /// outputs of its code cells, and the files it imports, which bring their own.
@@ -46,9 +46,9 @@ pub struct File {
     /// The theme its frontmatter asks for. Only the input's is used, so an
     /// imported file can keep the theme it was written with.
     pub theme: Option<String>,
-    /// Whether its frontmatter steps through its slides' fragments. Without
+    /// Whether its frontmatter steps through its slides' steps. Without
     /// a say, it does as the file importing it does.
-    pub fragments: Option<bool>,
+    pub steps: Option<bool>,
 }
 
 impl File {
@@ -173,7 +173,7 @@ pub fn render(markdown: &str, path: &Path) -> File {
         hashes,
         lock,
         theme: frontmatter.theme,
-        fragments: frontmatter.fragments,
+        steps: frontmatter.steps,
     }
 }
 
@@ -228,9 +228,9 @@ fn parse(markdown: &str) -> OffsetIter<'_> {
 #[serde(default)]
 struct Frontmatter {
     theme: Option<String>,
-    /// Whether to step through the fragments of the file's slides, and of
-    /// those it imports that do not say. Unset, they are stepped through.
-    fragments: Option<bool>,
+    /// Whether to step through the file's slides, and those of the files it
+    /// imports that do not say. Unset, they are stepped through.
+    steps: Option<bool>,
 }
 
 impl Frontmatter {
@@ -304,12 +304,12 @@ mod tests {
     }
 
     #[test]
-    fn fragments_are_set_in_the_frontmatter() {
-        let fragments = |yaml| Frontmatter::parse(yaml, Path::new("slides.md")).fragments;
-        assert_eq!(fragments("fragments: false"), Some(false));
-        assert_eq!(fragments("fragments: true"), Some(true));
-        assert_eq!(fragments("theme: dark"), None);
-        assert_eq!(fragments(""), None);
+    fn steps_are_set_in_the_frontmatter() {
+        let steps = |yaml| Frontmatter::parse(yaml, Path::new("slides.md")).steps;
+        assert_eq!(steps("steps: false"), Some(false));
+        assert_eq!(steps("steps: true"), Some(true));
+        assert_eq!(steps("theme: dark"), None);
+        assert_eq!(steps(""), None);
     }
 
     #[test]
@@ -325,11 +325,11 @@ mod tests {
     }
 
     #[test]
-    fn a_heading_can_turn_fragments_off_with_an_attribute() {
-        let file = render("# Title { fragments=false }\n", Path::new("slides.md"));
+    fn a_heading_can_turn_steps_off_with_an_attribute() {
+        let file = render("# Title { steps=false }\n", Path::new("slides.md"));
         let Part::Html(html) = &file.parts[0] else {
             panic!("the slide renders as html");
         };
-        assert!(html.contains("<h1 fragments=\"false\">Title</h1>"));
+        assert!(html.contains("<h1 steps=\"false\">Title</h1>"));
     }
 }
