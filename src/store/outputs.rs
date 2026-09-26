@@ -1,6 +1,7 @@
 //! Saving the outputs of the cells, and removing those no cell uses.
 
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -17,27 +18,30 @@ const OUTPUTS: &str = "outputs.txt";
 /// Keeps the outputs out of git, next to them.
 pub const GITIGNORE: &str = ".gitignore";
 
+/// The name an output is saved under: the hash of its contents, with its extension.
+pub fn name(output: &Output) -> String {
+    format!(
+        "{}.{}",
+        full_hex(Sha256::digest(&output.bytes)),
+        output.extension
+    )
+}
+
 /// Saves each of a cell's outputs under `root`, named by the hash of its
 /// contents, unless one with the same contents is there already, and lists
 /// them in `<root>/<hash>/`, which it returns.
-pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {
+pub fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {
     let mut list = String::new();
     for output in outputs {
-        let name = format!(
-            "{}.{}",
-            full_hex(Sha256::digest(&output.bytes)),
-            output.extension
-        );
+        let name = name(output);
         let path = root.join(&name);
-        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        if !path.try_exists().unwrap_or(false) {
             // Written aside and moved into place, so that a notebook that
             // saves the same output at the same time never reads it halfway.
             let partial = root.join(format!(".{name}.{}", uuid::Uuid::new_v4()));
-            tokio::fs::write(&partial, &output.bytes)
-                .await
+            fs::write(&partial, &output.bytes)
                 .with_context(|| format!("could not write {}", partial.display()))?;
-            tokio::fs::rename(&partial, &path)
-                .await
+            fs::rename(&partial, &path)
                 .with_context(|| format!("could not write {}", path.display()))?;
         }
         list.push_str(&name);
@@ -47,18 +51,14 @@ pub async fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf
     let dir = root.join(hash);
     // Replace the directory, so that the list of the files the cell read
     // from before does not outlive the outputs it was made for.
-    match tokio::fs::remove_dir_all(&dir).await {
+    match fs::remove_dir_all(&dir) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).context(format!("could not clear {}", dir.display())),
     }
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .with_context(|| format!("could not create {}", dir.display()))?;
+    fs::create_dir_all(&dir).with_context(|| format!("could not create {}", dir.display()))?;
     let path = dir.join(OUTPUTS);
-    tokio::fs::write(&path, list)
-        .await
-        .with_context(|| format!("could not write {}", path.display()))?;
+    fs::write(&path, list).with_context(|| format!("could not write {}", path.display()))?;
     Ok(dir)
 }
 
@@ -190,15 +190,15 @@ mod tests {
     use super::super::tests::{save_cell, temp_root, text};
     use super::*;
 
-    #[tokio::test]
-    async fn outputs_are_saved_by_their_contents_in_order() {
+    #[test]
+    fn outputs_are_saved_by_their_contents_in_order() {
         let root = temp_root();
         let hash = "0123456789abcdef";
         let png = Output {
             extension: "png",
             bytes: vec![0; 3],
         };
-        save_cell(&root, hash, &[text("b"), png, text("a")]).await;
+        save_cell(&root, hash, &[text("b"), png, text("a")]);
 
         let saved = saved(&root, hash).unwrap();
         let contents: Vec<Vec<u8>> = saved
@@ -217,11 +217,11 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[tokio::test]
-    async fn cells_with_the_same_output_share_its_file() {
+    #[test]
+    fn cells_with_the_same_output_share_its_file() {
         let root = temp_root();
-        save_cell(&root, "0123456789abcdef", &[text("same"), text("one")]).await;
-        save_cell(&root, "fedcba9876543210", &[text("same")]).await;
+        save_cell(&root, "0123456789abcdef", &[text("same"), text("one")]);
+        save_cell(&root, "fedcba9876543210", &[text("same")]);
 
         let first = saved(&root, "0123456789abcdef").unwrap();
         let second = saved(&root, "fedcba9876543210").unwrap();
@@ -234,25 +234,25 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[tokio::test]
-    async fn saving_again_replaces_the_list_of_outputs() {
+    #[test]
+    fn saving_again_replaces_the_list_of_outputs() {
         let root = temp_root();
         let hash = "0123456789abcdef";
-        save_cell(&root, hash, &[text("one"), text("two")]).await;
-        save(&root, hash, &[text("one")]).await.unwrap();
+        save_cell(&root, hash, &[text("one"), text("two")]);
+        save(&root, hash, &[text("one")]).unwrap();
         assert_eq!(saved(&root, hash).unwrap().len(), 1);
         // The list of the files read went with the outputs it was made for.
         assert!(!is_fresh(&root, hash));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[tokio::test]
-    async fn stale_cells_and_their_outputs_are_removed_and_measured() {
+    #[test]
+    fn stale_cells_and_their_outputs_are_removed_and_measured() {
         let root = temp_root();
         let kept = "0123456789abcdef";
         let stale = "fedcba9876543210";
-        save_cell(&root, kept, &[text("kept"), text("shared")]).await;
-        save_cell(&root, stale, &[text("shared"), text("stale")]).await;
+        save_cell(&root, kept, &[text("kept"), text("shared")]);
+        save_cell(&root, stale, &[text("shared"), text("stale")]);
         std::fs::write(root.join(GITIGNORE), "*").unwrap();
 
         let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
@@ -281,11 +281,11 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    #[tokio::test]
-    async fn anything_else_is_removed_too() {
+    #[test]
+    fn anything_else_is_removed_too() {
         let root = temp_root();
         let kept = "0123456789abcdef";
-        save_cell(&root, kept, &[text("kept")]).await;
+        save_cell(&root, kept, &[text("kept")]);
         std::fs::write(root.join(GITIGNORE), "*").unwrap();
         // An older layout: numbered outputs, next to a list of the files read.
         std::fs::write(root.join(kept).join("0.txt"), "old").unwrap();

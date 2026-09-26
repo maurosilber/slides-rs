@@ -10,7 +10,7 @@ mod python;
 
 pub use address::{LOCK_FILES, environment, hashes, lock_file};
 pub use inputs::{INPUTS, hash_files, is_fresh, read_files};
-pub use outputs::{GITIGNORE, human_size, remove_stale, save, saved};
+pub use outputs::{GITIGNORE, human_size, name, remove_stale, save, saved};
 
 /// Where the outputs of every cell are stored, next to the rendered html.
 pub const DIR: &str = "_outputs";
@@ -21,6 +21,19 @@ const HASH_LEN: usize = 16;
 
 /// Hex characters in the full SHA-256 of an output, which names its file.
 const OUTPUT_HASH_LEN: usize = 64;
+
+/// The media types an output can be saved as, most preferred first, with the
+/// extension it is saved under. The ones before are richer, so of the
+/// representations offered for the same output, the first one here is kept.
+pub const MEDIA_TYPES: &[(&str, &str)] = &[
+    ("text/html", "html"),
+    ("image/svg+xml", "svg"),
+    ("image/png", "png"),
+    ("image/jpeg", "jpeg"),
+    ("image/gif", "gif"),
+    ("text/markdown", "md"),
+    ("text/plain", "txt"),
+];
 
 /// One output of a cell: either text or an image, with the file extension it
 /// should be saved under.
@@ -68,8 +81,8 @@ mod tests {
     }
 
     /// Saves a cell's outputs, with an empty list of the files it read.
-    pub async fn save_cell(root: &std::path::Path, hash: &str, outputs: &[Output]) {
-        let dir = save(root, hash, outputs).await.unwrap();
+    pub fn save_cell(root: &std::path::Path, hash: &str, outputs: &[Output]) {
+        let dir = save(root, hash, outputs).unwrap();
         std::fs::write(dir.join(INPUTS), "").unwrap();
     }
 }

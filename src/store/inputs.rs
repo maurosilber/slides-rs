@@ -105,14 +105,14 @@ mod tests {
     use super::super::tests::{temp_root, text};
     use super::*;
 
-    #[tokio::test]
-    async fn a_cell_is_fresh_until_a_file_it_read_changes() {
+    #[test]
+    fn a_cell_is_fresh_until_a_file_it_read_changes() {
         let root = temp_root();
         let hash = "0123456789abcdef";
         let data = root.join("data.txt");
         let created = root.join("created.txt");
         std::fs::write(&data, "1").unwrap();
-        let dir = save(&root, hash, &[text("out")]).await.unwrap();
+        let dir = save(&root, hash, &[text("out")]).unwrap();
         // No list of the files read yet.
         assert!(!is_fresh(&root, hash));
 

@@ -27,11 +27,22 @@ pub fn update(hasher: &mut impl Digest, code: &str) {
 /// Lets a `Hash` implementation write into a digest. The derived
 /// implementations prefix every sequence with its length and end every
 /// string with a marker, so no two trees write the same bytes.
+///
+/// A length is written in 64 bits whatever the width of `usize`, so that the
+/// extension, whose WebAssembly has 32, gives a cell the same address.
 struct DigestHasher<'a, D>(&'a mut D);
 
 impl<D: Digest> Hasher for DigestHasher<'_, D> {
     fn write(&mut self, bytes: &[u8]) {
         self.0.update(bytes);
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.write_u64(i as u64);
+    }
+
+    fn write_isize(&mut self, i: isize) {
+        self.write_i64(i as i64);
     }
 
     fn finish(&self) -> u64 {
@@ -91,6 +102,13 @@ mod tests {
         assert_eq!(hash("%matplotlib inline\n"), hash("%matplotlib inline\n\n"));
         assert_ne!(hash("!ls -la\n"), hash("!ls - la\n"));
         assert_ne!(hash("%time f()\n"), hash("%timeit f()\n"));
+    }
+
+    #[test]
+    fn a_length_is_hashed_the_same_on_every_platform() {
+        let mut digest = Sha256::new();
+        DigestHasher(&mut digest).write_usize(3);
+        assert_eq!(digest.finalize(), Sha256::digest(3u64.to_ne_bytes()));
     }
 
     #[test]

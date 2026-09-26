@@ -1,0 +1,133 @@
+// The Rust half of the extension, the deck's own code compiled to WASI: every
+// request runs it once, reading the request from a file and answering on
+// stdout, both in JSON.
+
+import * as vscode from 'vscode';
+import { MountPointDescriptor, Wasm } from '@vscode/wasm-wasi/v1';
+
+/** The memory the module imports, as `.cargo/config.toml` sizes it, in pages of 64 KiB. */
+const MEMORY: WebAssembly.MemoryDescriptor = { initial: 256, maximum: 16384, shared: true };
+
+/** Where the request is, in a file system of its own. */
+const IO = '/io';
+const REQUEST = 'request.json';
+
+/** Where the disk holding a notebook's file is mounted. */
+const DISK = '/fs';
+
+export type Kind = 'markdown' | 'code';
+
+/** A cell, as the module reads it from markdown and writes it back. */
+export interface Cell {
+	kind: Kind;
+	source: string;
+	language: string;
+	/** How it was written, which the module needs back to write it the same. */
+	written: unknown;
+}
+
+/** One representation of an output, its bytes in base64. */
+export interface Item {
+	mime: string;
+	data: string;
+}
+
+/** An output read from the outputs directory, and the file it is saved in. */
+export interface Saved extends Item {
+	name: string;
+}
+
+/** A code cell and its outputs, to be saved. */
+export interface CodeCell {
+	source: string;
+	outputs: { name: string | null; items: Item[] }[];
+}
+
+/** Where a notebook's file is: its directory as the deck hashes it, and as the module reads it. */
+interface Place {
+	dir: string;
+	path: string;
+}
+
+export class Module {
+	private loading: Promise<{ wasm: Wasm; module: WebAssembly.Module }> | undefined;
+
+	constructor(
+		private readonly extensionUri: vscode.Uri,
+		private readonly log: vscode.LogOutputChannel,
+	) {}
+
+	/** The cells of a markdown file. */
+	cells(markdown: string): Promise<Cell[]> {
+		return this.run({ command: 'cells', markdown });
+	}
+
+	/** The markdown file the cells make. */
+	markdown(cells: Cell[]): Promise<string> {
+		return this.run({ command: 'markdown', cells });
+	}
+
+	/** The saved outputs of each code cell of the file at `uri`, given their sources in order. */
+	load(uri: vscode.Uri, sources: string[]): Promise<Saved[][]> {
+		return this.run({ command: 'load', place: place(uri), sources }, [disk(uri)]);
+	}
+
+	/** Saves the outputs of the code cells of the file at `uri`, returning how many cells it saved. */
+	save(uri: vscode.Uri, cells: CodeCell[]): Promise<number> {
+		return this.run({ command: 'save', place: place(uri), cells }, [disk(uri)]);
+	}
+
+	private async run<T>(request: object, mountPoints: MountPointDescriptor[] = []): Promise<T> {
+		const { wasm, module } = await this.module();
+		const io = await wasm.createMemoryFileSystem();
+		io.createFile(REQUEST, new TextEncoder().encode(JSON.stringify(request)));
+		const process = await wasm.createProcess('slides-notebook', module, MEMORY, {
+			args: [`${IO}/${REQUEST}`],
+			stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
+			mountPoints: [{ kind: 'memoryFileSystem', fileSystem: io, mountPoint: IO }, ...mountPoints],
+		});
+		const stdout: Uint8Array[] = [];
+		const stderr: Uint8Array[] = [];
+		process.stdout!.onData((data) => stdout.push(data));
+		process.stderr!.onData((data) => stderr.push(data));
+		const code = await process.run();
+		const errors = decode(stderr).trim();
+		if (errors) {
+			this.log.warn(errors);
+		}
+		if (code !== 0) {
+			throw new Error(errors || `slides-notebook exited with ${code}`);
+		}
+		return JSON.parse(decode(stdout)) as T;
+	}
+
+	/** The module, compiled the first time it is needed. */
+	private module(): Promise<{ wasm: Wasm; module: WebAssembly.Module }> {
+		this.loading ??= (async () => {
+			const wasm = await Wasm.load();
+			const module = await wasm.compile(vscode.Uri.joinPath(this.extensionUri, 'dist', 'slides-notebook.wasm'));
+			return { wasm, module };
+		})();
+		return this.loading;
+	}
+}
+
+/** The disk holding the file, mounted whole, so that the module looks for the lock file
+ * and the outputs directory up to its root, as the deck does. */
+function disk(uri: vscode.Uri): MountPointDescriptor {
+	return { kind: 'vscodeFileSystem', uri: uri.with({ path: '/', query: '', fragment: '' }), mountPoint: DISK };
+}
+
+function place(uri: vscode.Uri): Place {
+	const dir = vscode.Uri.joinPath(uri, '..');
+	return {
+		// The deck hashes the path on the disk; elsewhere, as in the browser, there is none.
+		dir: dir.scheme === 'file' ? dir.fsPath : dir.path,
+		path: DISK + dir.path,
+	};
+}
+
+function decode(chunks: Uint8Array[]): string {
+	const decoder = new TextDecoder();
+	return chunks.map((chunk) => decoder.decode(chunk, { stream: true })).join('') + decoder.decode();
+}

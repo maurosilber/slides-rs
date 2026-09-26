@@ -7,52 +7,45 @@ use jupyter_protocol::media::MediaType;
 use jupyter_protocol::{ErrorOutput, Media, StreamContent};
 
 use super::svg;
-use crate::store::Output;
+use crate::store::{self, Output};
 
-impl Output {
-    fn text(extension: &'static str, text: &str) -> Output {
-        Output {
-            extension,
-            bytes: text.as_bytes().to_vec(),
-        }
-    }
-
-    /// Image payloads arrive base64-encoded; store the decoded bytes so the
-    /// file on disk is a real image.
-    fn image(extension: &'static str, base64: &str) -> Result<Output> {
-        let bytes = BASE64
-            .decode(base64.trim())
-            .with_context(|| format!("{extension} output is not valid base64"))?;
-        Ok(Output { extension, bytes })
-    }
-
-    fn from_media(media: &MediaType) -> Result<Output> {
-        match media {
-            MediaType::Html(html) => Ok(Output::text("html", html)),
-            MediaType::Svg(svg) => Ok(Output::text("svg", &svg::inline(svg)?)),
-            MediaType::Markdown(markdown) => Ok(Output::text("md", markdown)),
-            MediaType::Plain(text) => Ok(Output::text("txt", text)),
-            MediaType::Png(data) => Output::image("png", data),
-            MediaType::Jpeg(data) => Output::image("jpeg", data),
-            MediaType::Gif(data) => Output::image("gif", data),
-            other => anyhow::bail!("unsupported media type {}", other.mime_type()),
-        }
+fn text(extension: &'static str, text: &str) -> Output {
+    Output {
+        extension,
+        bytes: text.as_bytes().to_vec(),
     }
 }
 
-/// How much we prefer each representation of the same output. A rank of 0
-/// means we cannot put it in an HTML document, so it is never chosen.
-fn rank(media: &MediaType) -> usize {
+/// Image payloads arrive base64-encoded; store the decoded bytes so the
+/// file on disk is a real image.
+fn image(extension: &'static str, base64: &str) -> Result<Output> {
+    let bytes = BASE64
+        .decode(base64.trim())
+        .with_context(|| format!("{extension} output is not valid base64"))?;
+    Ok(Output { extension, bytes })
+}
+
+fn from_media(media: &MediaType) -> Result<Output> {
     match media {
-        MediaType::Html(_) => 7,
-        MediaType::Svg(_) => 6,
-        MediaType::Png(_) => 5,
-        MediaType::Jpeg(_) => 4,
-        MediaType::Gif(_) => 3,
-        MediaType::Markdown(_) => 2,
-        MediaType::Plain(_) => 1,
-        _ => 0,
+        MediaType::Html(html) => Ok(text("html", html)),
+        MediaType::Svg(svg) => Ok(text("svg", &svg::inline(svg)?)),
+        MediaType::Markdown(markdown) => Ok(text("md", markdown)),
+        MediaType::Plain(plain) => Ok(text("txt", plain)),
+        MediaType::Png(data) => image("png", data),
+        MediaType::Jpeg(data) => image("jpeg", data),
+        MediaType::Gif(data) => image("gif", data),
+        other => anyhow::bail!("unsupported media type {}", other.mime_type()),
     }
+}
+
+/// How much we prefer each representation of the same output, in the order
+/// of the media types the store saves. A rank of 0 means we cannot put it in
+/// an HTML document, so it is never chosen.
+fn rank(media: &MediaType) -> usize {
+    store::MEDIA_TYPES
+        .iter()
+        .position(|&(mime, _)| mime == media.mime_type())
+        .map_or(0, |index| store::MEDIA_TYPES.len() - index)
 }
 
 /// Collects what a kernel publishes for one cell, in the order it arrives.
@@ -76,7 +69,7 @@ impl Outputs {
                 last.bytes.extend_from_slice(stream.text.as_bytes());
             }
             _ => {
-                self.outputs.push(Output::text("txt", &stream.text));
+                self.outputs.push(text("txt", &stream.text));
                 self.open_stream = Some(name);
             }
         }
@@ -89,15 +82,14 @@ impl Outputs {
         let Some(richest) = media.richest(rank) else {
             return Ok(());
         };
-        self.outputs.push(Output::from_media(richest)?);
+        self.outputs.push(from_media(richest)?);
         Ok(())
     }
 
     pub fn push_error(&mut self, error: &ErrorOutput) {
         self.open_stream = None;
         let traceback = error.traceback.join("\n");
-        self.outputs
-            .push(Output::text("txt", &strip_ansi(&traceback)));
+        self.outputs.push(text("txt", &strip_ansi(&traceback)));
     }
 
     pub fn into_vec(self) -> Vec<Output> {

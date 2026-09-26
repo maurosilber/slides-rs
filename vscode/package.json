@@ -1,0 +1,76 @@
+{
+	"name": "slides-notebook",
+	"displayName": "Slides Notebook",
+	"description": "Opens the markdown of a slides-rs deck as a notebook, with the outputs its code cells saved.",
+	"version": "0.1.0",
+	"publisher": "maurosilber",
+	"license": "MIT",
+	"private": true,
+	"engines": {
+		"vscode": "^1.88.0"
+	},
+	"categories": [
+		"Notebooks"
+	],
+	"extensionDependencies": [
+		"ms-vscode.wasm-wasi-core"
+	],
+	"main": "./dist/extension.js",
+	"browser": "./dist/extension.js",
+	"contributes": {
+		"notebooks": [
+			{
+				"type": "slides-notebook",
+				"displayName": "Slides Notebook",
+				"priority": "option",
+				"selector": [
+					{
+						"filenamePattern": "*.md"
+					}
+				]
+			}
+		],
+		"commands": [
+			{
+				"command": "slides.openNotebook",
+				"title": "Open as Slides Notebook",
+				"category": "Slides",
+				"icon": "$(notebook)"
+			}
+		],
+		"menus": {
+			"editor/title": [
+				{
+					"command": "slides.openNotebook",
+					"when": "resourceLangId == markdown && activeEditor == workbench.editors.files.textFileEditor",
+					"group": "navigation"
+				}
+			],
+			"explorer/context": [
+				{
+					"command": "slides.openNotebook",
+					"when": "resourceLangId == markdown",
+					"group": "navigation"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"build:wasm": "cargo build --package slides-notebook --release --target wasm32-wasip1-threads && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/wasm32-wasip1-threads/release/slides-notebook.wasm','dist/slides-notebook.wasm')\"",
+		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap",
+		"build": "npm run build:wasm && npm run build:ts",
+		"test": "node test/run.mjs",
+		"package": "vsce package --no-dependencies"
+	},
+	"dependencies": {
+		"@vscode/wasm-wasi": "^1.0.1"
+	},
+	"devDependencies": {
+		"@types/node": "^20.0.0",
+		"@types/vscode": "~1.88.0",
+		"@vscode/test-electron": "^2.4.1",
+		"@vscode/vsce": "^3.2.1",
+		"esbuild": "^0.25.0",
+		"typescript": "^5.6.0"
+	}
+}

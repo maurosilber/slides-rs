@@ -3,9 +3,12 @@
 
 mod math;
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{
+    CodeBlockKind, Event, HeadingLevel, OffsetIter, Options, Parser, Tag, TagEnd, html,
+};
 
 use crate::paths::{canonical, parent};
 use crate::store;
@@ -72,14 +75,7 @@ pub fn render(markdown: &str, path: &Path) -> File {
     // The events are consumed by the time the cells are needed again.
     let cell_codes = &mut cells;
     let yaml = &mut frontmatter;
-    let events = Parser::new_ext(
-        markdown,
-        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
-            | Options::ENABLE_HEADING_ATTRIBUTES
-            | Options::ENABLE_MATH,
-    )
-    .into_offset_iter()
-    .filter_map(move |(event, range)| match event {
+    let events = parse(markdown).filter_map(move |(event, range)| match event {
         // The frontmatter is metadata, not content.
         Event::Start(Tag::MetadataBlock(_)) => {
             metadata = true;
@@ -181,6 +177,51 @@ pub fn render(markdown: &str, path: &Path) -> File {
     }
 }
 
+/// A code cell as written in the markdown.
+pub struct CodeCell {
+    /// Where it is, from its opening fence to its closing one.
+    pub range: Range<usize>,
+    /// What follows the opening fence, such as the language.
+    pub info: String,
+    /// Its code, which its address is the hash of.
+    pub code: String,
+}
+
+/// The code cells of a file, in order, found as `render` finds them.
+pub fn code_cells(markdown: &str) -> Vec<CodeCell> {
+    let mut cells: Vec<CodeCell> = Vec::new();
+    let mut open = false;
+    for (event, range) in parse(markdown) {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
+                if is_tilde_fenced(markdown, range.start) =>
+            {
+                open = true;
+                cells.push(CodeCell {
+                    range,
+                    info: info.to_string(),
+                    code: String::new(),
+                });
+            }
+            Event::Text(text) if open => cells.last_mut().unwrap().code.push_str(&text),
+            Event::End(TagEnd::CodeBlock) => open = false,
+            _ => {}
+        }
+    }
+    cells
+}
+
+/// The events of a file's markdown, each with where it is in the source.
+fn parse(markdown: &str) -> OffsetIter<'_> {
+    Parser::new_ext(
+        markdown,
+        Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+            | Options::ENABLE_HEADING_ATTRIBUTES
+            | Options::ENABLE_MATH,
+    )
+    .into_offset_iter()
+}
+
 /// What a file's frontmatter sets. Keys the deck does not read are ignored,
 /// so the frontmatter can hold a title, an author, or notes of its own.
 #[derive(Default, serde::Deserialize)]
@@ -269,6 +310,18 @@ mod tests {
         assert_eq!(fragments("fragments: true"), Some(true));
         assert_eq!(fragments("theme: dark"), None);
         assert_eq!(fragments(""), None);
+    }
+
+    #[test]
+    fn the_code_cells_are_the_ones_rendered() {
+        let markdown = "---\ntitle: ~~~\n---\n~~~python\na = 1\n~~~\n\n```python\nnot a cell\n```\n\n~~~\n~~~\n";
+        let cells = code_cells(markdown);
+        let codes: Vec<&str> = cells.iter().map(|cell| cell.code.as_str()).collect();
+        assert_eq!(codes, render(markdown, Path::new("slides.md")).cells);
+        assert_eq!(codes, ["a = 1\n", ""]);
+        assert_eq!(cells[0].info, "python");
+        assert!(markdown[cells[0].range.clone()].starts_with("~~~python\n"));
+        assert!(markdown[cells[1].range.clone()].trim_end().ends_with("~~~"));
     }
 
     #[test]

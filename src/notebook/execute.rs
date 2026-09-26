@@ -44,7 +44,7 @@ pub async fn execute_cells(
         if !missing {
             continue;
         }
-        let dir = store::save(&root, hash, &outputs).await?;
+        let dir = store::save(&root, hash, &outputs)?;
         saved += 1;
         // The kernel may run in another directory, so it gets the full path.
         let files = std::path::absolute(dir.join(store::INPUTS))?;
