@@ -1,22 +1,38 @@
 const slides = document.getElementsByTagName("section");
 
 // Elements marked as a step within a column: every list item, those of an
-// SVG, by `fragment="n"`, and those of math, by `data-fragment`, which
-// \step{...}, \also{...} and \fragment{n}{...} write. Without a number, an
-// element comes one step after the last.
+// SVG, by `fragment="..."`, and those of math, by `data-fragment`, which
+// \step{...}, \also{...} and \fragment{...}{...} write.
 const MARKED = "li, [fragment], [data-fragment]";
 
-// A slide is revealed in steps, and its n-th fragment shows the first n.
+// The steps a marked element shows in, written as a range as in Rust: `3..5`
+// shows from step 3 and hides again at step 5, `..3` shows from the start and
+// hides at step 3, and `3..`, or a bare `3`, shows from step 3 to the end.
+// Anything else, or nothing, shows one step after the latest step an element
+// before it starts at. src/fragment.rs reads them the same way.
+function parseRange(value) {
+    const match = /^\s*(\d*)(\.\.(\d*))?\s*$/.exec(value ?? "");
+    if (!match || (!match[1] && !match[2])) return null;
+    const bound = (text) => (text ? Number(text) : undefined);
+    return { start: bound(match[1]), end: match[2] ? bound(match[3]) : undefined };
+}
+
+// A slide is revealed in steps, numbered from 1, the step it opens with.
 // Each h2 and h3 starts a column, a step of its own. After each column, and
-// before the first one, come the elements it marks, in order of their number,
-// those sharing a number together. The first step is what the slide opens
-// with: the first column, unless a marked element comes before it.
+// before the first one, come the steps of the elements it marks: every number
+// the column's ranges start or end at is a step, in order, and an element
+// shows from the step its range starts at, or its column's, up to the one it
+// ends at. The first step is what the slide opens with: the first column,
+// unless a marked element comes before it.
 //
 // A heading with `fragments="false"`, as `{ fragments=false }` writes, shows
 // everything under it at once, up to the next heading of its level or above:
 // the elements it marks, and the columns it holds, which join the step before
 // them. `fragments="true"` steps through them again. Outside every such
 // heading, the slide's `data-fragments` decides, from its file's frontmatter.
+//
+// Returns how many steps the slide has, and the steps each element that is
+// ever hidden shows in, from `from` up to `to`, excluded.
 function stepsOf(slide) {
     const outside = slide.dataset.fragments != "false";
     // The headings whose part of the slide the current child is in, each
@@ -36,31 +52,37 @@ function stepsOf(slide) {
         }
         groups.at(-1).children.push({ child, on: on() });
     }
-    const steps = [[]];
+    let count = 1;
+    const elements = [];
     groups.forEach(({ step, children }, i) => {
-        const group = children.map(({ child }) => child);
         // What comes before the first heading is always shown.
+        let column = 1;
         if (i > 0) {
-            if ((i == 1 && steps.length == 1) || !step) steps.at(-1).push(...group);
-            else steps.push(group);
+            column = (i == 1 && count == 1) || !step ? count : ++count;
+            for (const { child } of children) elements.push({ element: child, from: column, to: Infinity });
         }
-        const numbered = new Map();
+        const parts = [];
         let last = 0;
         for (const { child: element, on } of children) {
             // Unmarked, the element's parts show along with it.
             if (!on) continue;
             for (const part of element.querySelectorAll(MARKED)) {
-                const value = part.getAttribute("fragment") ?? part.dataset.fragment;
-                const n = /^\d+$/.test(value) ? Number(value) : last + 1;
-                last = Math.max(last, n);
-                numbered.set(n, [...(numbered.get(n) ?? []), part]);
+                const range = parseRange(part.getAttribute("fragment") ?? part.dataset.fragment) ?? { start: last + 1 };
+                if (range.start !== undefined) last = Math.max(last, range.start);
+                parts.push({ part, ...range });
             }
         }
-        for (const n of [...numbered.keys()].sort((a, b) => a - b)) {
-            steps.push(numbered.get(n));
+        const bounds = new Set(parts.flatMap(({ start, end }) => [start, end]).filter((n) => n !== undefined));
+        const steps = new Map([...bounds].sort((a, b) => a - b).map((n) => [n, ++count]));
+        for (const { part, start, end } of parts) {
+            elements.push({
+                element: part,
+                from: start === undefined ? column : steps.get(start),
+                to: end === undefined ? Infinity : steps.get(end),
+            });
         }
     });
-    return steps;
+    return { count, elements };
 }
 
 // Math is typeset by a module script, which runs after this one but before
@@ -104,23 +126,22 @@ function updateSlide(i, fragment = 1) {
     slides[currentSlide].style.display = "none";
     slides[i].style.display = "block";
     currentSlide = i;
-    currentFragment = Math.max(1, Math.min(fragment, fragments[i].length));
+    currentFragment = Math.max(1, Math.min(fragment, fragments[i].count));
     updateFragment(currentFragment);
     showPosition();
 }
 
-// Hidden rather than removed, so the columns keep their place.
+// Hidden rather than removed, so the columns keep their place. Disabled,
+// every element shows, even those whose steps are over.
 // currentFragment is tracked even while disabled, so re-enabling resumes here.
 function updateFragment(i) {
-    const steps = fragments[currentSlide];
-    if (i < 1 || i > steps.length) return false;
+    const { count, elements } = fragments[currentSlide];
+    if (i < 1 || i > count) return false;
     currentFragment = i;
-    const shown = fragmentsEnabled ? i : steps.length;
-    steps.forEach((step, j) => {
-        for (const element of step) {
-            element.style.visibility = j < shown ? "visible" : "hidden";
-        }
-    });
+    for (const { element, from, to } of elements) {
+        const shown = !fragmentsEnabled || (from <= i && i < to);
+        element.style.visibility = shown ? "visible" : "hidden";
+    }
     showPosition();
     return true;
 }
@@ -138,8 +159,8 @@ addEventListener("keydown", (event) => {
         if (!stepFragment(currentFragment - 1)) updateSlide(currentSlide - 1, Infinity);
     } else if (event.code == "ArrowDown") {
         // Alternate: finish this slide, then open the next one.
-        if (fragmentsEnabled && currentFragment < fragments[currentSlide].length) {
-            updateFragment(fragments[currentSlide].length);
+        if (fragmentsEnabled && currentFragment < fragments[currentSlide].count) {
+            updateFragment(fragments[currentSlide].count);
         } else {
             updateSlide(currentSlide + 1, 1);
         }

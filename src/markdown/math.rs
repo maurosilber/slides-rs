@@ -6,6 +6,8 @@
 //! lays out an aligned environment column by column, so by the time the page
 //! sees them, the left side of every row comes before any right side.
 
+use crate::fragment::Range;
+
 /// Counts the steps of one column of a slide, as its numbers start over at
 /// every heading, the way the slides count them.
 #[derive(Default)]
@@ -20,7 +22,8 @@ impl Steps {
     }
 
     /// The TeX, with every `\step` and `\also` numbered as a `\fragment`.
-    /// An explicit `\fragment{n}` is kept, and counts as step n.
+    /// An explicit `\fragment{n}` is kept, and counts as step n, as does a
+    /// `\fragment{n..m}`, which shows from step n until step m.
     pub fn number(&mut self, tex: &str) -> String {
         let mut numbered = String::with_capacity(tex.len());
         let mut rest = tex;
@@ -48,7 +51,7 @@ impl Steps {
                     numbered.push_str(&format!("\\fragment{{{}}}", self.last));
                 }
                 "fragment" => {
-                    if let Some(n) = number_argument(after) {
+                    if let Some(n) = start_argument(after) {
                         self.last = self.last.max(n);
                     }
                     numbered.push_str("\\fragment");
@@ -65,11 +68,11 @@ impl Steps {
     }
 }
 
-/// The number in a `{n}` that opens `tex`.
-fn number_argument(tex: &str) -> Option<u32> {
+/// The step a fragment shows from, in the `{n..m}` that opens `tex`.
+fn start_argument(tex: &str) -> Option<u32> {
     let argument = tex.trim_start().strip_prefix('{')?;
-    let (number, _) = argument.split_once('}')?;
-    number.trim().parse().ok()
+    let (range, _) = argument.split_once('}')?;
+    Range::parse(range)?.start
 }
 
 #[cfg(test)]
@@ -103,6 +106,15 @@ mod tests {
         assert_eq!(
             steps.number(r"\fragment{3}{a} \step{b}"),
             r"\fragment{3}{a} \fragment{4}{b}"
+        );
+    }
+
+    #[test]
+    fn a_range_counts_as_the_step_it_starts_at() {
+        let mut steps = Steps::default();
+        assert_eq!(
+            steps.number(r"\fragment{2..4}{a} \step{b} \fragment{..9}{c} \step{d}"),
+            r"\fragment{2..4}{a} \fragment{3}{b} \fragment{..9}{c} \fragment{4}{d}"
         );
     }
 

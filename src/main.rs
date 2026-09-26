@@ -11,7 +11,7 @@ use clap::{Parser as _, ValueEnum};
 
 use deck::Deck;
 use paths::{canonical, parent};
-use slides::{markdown, paths, store};
+use slides::{fragment, markdown, paths, store};
 
 /// Renders a markdown file into an HTML slide deck.
 #[derive(clap::Parser)]
