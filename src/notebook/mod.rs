@@ -2,12 +2,12 @@
 //! Jupyter kernel of its own.
 
 mod audit;
+mod environment;
 mod execute;
 mod kernel;
 mod outputs;
 mod svg;
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -15,6 +15,7 @@ use indicatif::MultiProgress;
 
 use crate::paths::parent;
 use crate::{progress, store};
+use environment::Environments;
 
 /// The kernels the cells can run on, most preferred first, as
 /// `jupyter kernelspec list` names them: xeus-python's `xpython`, then
@@ -26,6 +27,8 @@ pub const KERNELS: &[&str] = &["xpython", "python3"];
 /// under.
 pub struct Notebook<'a> {
     pub path: &'a Path,
+    /// The lock file of the environment its cells run in, if there is one.
+    pub lock: Option<&'a Path>,
     pub cells: &'a [String],
     pub hashes: &'a [String],
 }
@@ -65,11 +68,11 @@ impl Runner {
             return;
         }
 
-        fs::create_dir_all(root).unwrap();
-        fs::write(root.join(store::GITIGNORE), "*").unwrap();
+        store::create(root).unwrap();
         let multi = MultiProgress::new();
         // With a single notebook, its own bar already says it all.
         let total = (notebooks.len() > 1).then(|| progress::total(&multi, notebooks.len()));
+        let environments = Environments::default();
         self.runtime.block_on(async {
             let tasks: Vec<_> = notebooks
                 .into_iter()
@@ -78,6 +81,9 @@ impl Runner {
                     // A cell reads and writes files next to the markdown it is in.
                     let dir = parent(&path).to_path_buf();
                     let root = root.to_path_buf();
+                    let environment = notebook
+                        .lock
+                        .map(|lock| environments.pinned(lock.to_path_buf()));
                     let cells = notebook.cells.to_vec();
                     let hashes = notebook.hashes.to_vec();
                     let bar = progress::notebook(&multi, &path, cells.len());
@@ -86,9 +92,13 @@ impl Runner {
                     let name = progress::relative(&path).display().to_string();
                     let task = async move {
                         let start = Instant::now();
-                        let result = execute::execute_cells(
+                        let launch = execute::Launch {
                             kernels,
                             dir,
+                            environment,
+                        };
+                        let result = execute::execute_cells(
+                            launch,
                             root,
                             cells,
                             hashes,

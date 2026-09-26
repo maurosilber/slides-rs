@@ -7,17 +7,24 @@ use anyhow::Result;
 use indicatif::ProgressBar;
 
 use super::audit;
+use super::environment::Pinned;
 use super::kernel::Kernel;
 use crate::{progress, store};
 
-/// Runs the cells of one notebook, in order, on a kernel of its own (the
-/// first of `kernels` that is installed) started in `dir`, and saves under
-/// `root` the outputs of those that are `missing`, each under its hash in
+/// Which kernel runs a notebook, and where: the first of `kernels` that is
+/// installed, started in `dir`, in `environment` if the notebook has one.
+pub struct Launch {
+    pub kernels: &'static [&'static str],
+    pub dir: PathBuf,
+    pub environment: Option<Pinned>,
+}
+
+/// Runs the cells of one notebook, in order, on a kernel of its own, as
+/// `launch` says, and saves under `root` the outputs of those that are `missing`, each under its hash in
 /// `hashes`. Advances `bar` by a cell as each one runs, and returns how many
 /// outputs it saved.
 pub async fn execute_cells(
-    kernels: &[&str],
-    dir: PathBuf,
+    launch: Launch,
     root: PathBuf,
     cells: Vec<String>,
     hashes: Vec<String>,
@@ -30,11 +37,19 @@ pub async fn execute_cells(
         return Ok(0);
     };
     bar.set_length(last as u64 + 1);
+    let environment = match &launch.environment {
+        Some(environment) => {
+            let lock = progress::relative(&environment.lock);
+            bar.set_message(format!("activating {}", lock.display()));
+            Some(environment.activate().await?)
+        }
+        None => None,
+    };
     bar.set_message("starting the kernel");
     // One kernel runs every cell in order: a cell can use what an earlier one
     // defined, so none of them can be skipped just because its output is
     // already saved. Only the writing is skipped.
-    let mut kernel = Kernel::start(kernels, &dir).await?;
+    let mut kernel = Kernel::start(launch.kernels, &launch.dir, environment.as_deref()).await?;
     kernel.run_silent(&audit::install()).await?;
     bar.set_message(format!("on {}", kernel.name));
     let mut saved = 0;

@@ -14,6 +14,7 @@ use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection, Kernelspe
 use tokio::process::Child;
 use uuid::Uuid;
 
+use super::environment::{Environment, FOREIGN};
 use super::outputs::Outputs;
 use crate::store::Output;
 
@@ -37,13 +38,18 @@ pub struct Kernel {
     connection_file: PathBuf,
 }
 
-/// Where to look for kernelspecs.
+/// Where to look for kernelspecs: in the environment the cells run in, if
+/// they have one, and nowhere else, so that a kernel of another environment
+/// never runs them.
 ///
-/// The crate searches the Jupyter data directories and asks the `jupyter`
+/// Without one, the crate searches the Jupyter data directories and asks the `jupyter`
 /// command for the rest. xeus-python installs no `jupyter` command, though, so
 /// under pixi or conda that leaves the environment's own kernels invisible;
 /// look under the prefix ourselves.
-async fn kernelspec_dirs() -> Vec<PathBuf> {
+async fn kernelspec_dirs(environment: Option<&Environment>) -> Vec<PathBuf> {
+    if let Some(environment) = environment {
+        return vec![environment.prefix.join("share").join("jupyter")];
+    }
     let mut dirs = Vec::new();
     if let Some(prefix) = std::env::var_os("CONDA_PREFIX") {
         dirs.push(PathBuf::from(prefix).join("share").join("jupyter"));
@@ -54,9 +60,12 @@ async fn kernelspec_dirs() -> Vec<PathBuf> {
 
 /// The first of `names` that is installed, so a document can run on whichever
 /// kernel the environment provides.
-async fn find_kernelspec(names: &[&str]) -> Result<KernelspecDir> {
+async fn find_kernelspec(
+    names: &[&str],
+    environment: Option<&Environment>,
+) -> Result<KernelspecDir> {
     let mut installed = Vec::new();
-    for dir in kernelspec_dirs().await {
+    for dir in kernelspec_dirs(environment).await {
         installed.extend(jupyter_zmq_client::read_kernelspec_jsons(&dir).await);
     }
     names
@@ -65,7 +74,13 @@ async fn find_kernelspec(names: &[&str]) -> Result<KernelspecDir> {
         .cloned()
         .with_context(|| {
             let names: Vec<&str> = installed.iter().map(|s| s.kernel_name.as_str()).collect();
-            format!("the kernels installed here are {names:?}")
+            match environment {
+                Some(environment) => format!(
+                    "the kernels installed in {} are {names:?}",
+                    environment.prefix.display()
+                ),
+                None => format!("the kernels installed here are {names:?}"),
+            }
         })
 }
 
@@ -89,9 +104,13 @@ async fn wait_for_ports(process: &mut Child, name: &str, ip: IpAddr, ports: &[u1
 
 impl Kernel {
     /// Start the first of these kernels that is installed, most preferred
-    /// first, in the directory `dir`, and connect to it.
-    pub async fn start(kernel_names: &[&str], dir: &Path) -> Result<Kernel> {
-        let kernelspec = find_kernelspec(kernel_names)
+    /// first, in the directory `dir` and in `environment`, and connect to it.
+    pub async fn start(
+        kernel_names: &[&str],
+        dir: &Path,
+        environment: Option<&Environment>,
+    ) -> Result<Kernel> {
+        let kernelspec = find_kernelspec(kernel_names, environment)
             .await
             .with_context(|| format!("could not find any of the {kernel_names:?} kernels"))?;
         let kernel_name = kernelspec.kernel_name.clone();
@@ -121,8 +140,14 @@ impl Kernel {
             .await
             .with_context(|| format!("could not write {}", connection_file.display()))?;
 
-        let mut process = kernelspec
-            .command(&connection_file, None, None)?
+        let mut command = kernelspec.command(&connection_file, None, None)?;
+        if let Some(environment) = environment {
+            for name in FOREIGN {
+                command.env_remove(name);
+            }
+            command.envs(&environment.vars);
+        }
+        let mut process = command
             .current_dir(dir)
             .kill_on_drop(true)
             .spawn()

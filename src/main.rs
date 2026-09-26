@@ -32,6 +32,11 @@ struct Cli {
     /// by every deck rendered next to it, so their outputs are removed too.
     #[arg(long)]
     clean: bool,
+    /// Put every file the page links inside it: the stylesheets, the script,
+    /// and the images of the slides and of the outputs, so that the html is
+    /// all there is to share. KaTeX still loads from its CDN.
+    #[arg(long)]
+    self_contained: bool,
 }
 
 /// Which kernel to run the cells on.
@@ -62,6 +67,7 @@ fn main() {
         watch: watching,
         kernel,
         clean,
+        self_contained,
     } = Cli::parse();
     let output = output.unwrap_or_else(|| input.with_extension("html"));
     // The cache is keyed by canonical path, as watch events report those.
@@ -71,7 +77,7 @@ fn main() {
     let kernels = kernel.map_or(notebook::KERNELS, KernelChoice::kernelspecs);
 
     let start = Instant::now();
-    let mut deck = Deck::new(parent(&output).join(store::DIR), kernels);
+    let mut deck = Deck::new(parent(&output).join(store::DIR), kernels, self_contained);
     deck.update(std::slice::from_ref(&input));
     deck.write(&input, &output);
     eprintln!(
@@ -80,7 +86,7 @@ fn main() {
         progress::duration(start.elapsed())
     );
     if clean {
-        deck.clean();
+        deck.clean(&input);
     }
 
     if watching {

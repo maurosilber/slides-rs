@@ -10,7 +10,7 @@ mod python;
 
 pub use address::{LOCK_FILES, environment, hashes, lock_file};
 pub use inputs::{INPUTS, hash_files, is_fresh, read_files};
-pub use outputs::{GITIGNORE, human_size, name, remove_stale, save, saved};
+pub use outputs::{GITIGNORE, create, human_size, name, remove_stale, save, saved};
 
 /// Where the outputs of every cell are stored, next to the rendered html.
 pub const DIR: &str = "_outputs";

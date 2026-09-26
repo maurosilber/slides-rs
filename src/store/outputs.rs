@@ -18,6 +18,18 @@ const OUTPUTS: &str = "outputs.txt";
 /// Keeps the outputs out of git, next to them.
 pub const GITIGNORE: &str = ".gitignore";
 
+/// Creates the outputs directory `root`, if it is not there, with the
+/// `.gitignore` that keeps it out of git.
+pub fn create(root: &Path) -> Result<()> {
+    fs::create_dir_all(root).with_context(|| format!("could not create {}", root.display()))?;
+    let gitignore = root.join(GITIGNORE);
+    if !gitignore.exists() {
+        fs::write(&gitignore, "*")
+            .with_context(|| format!("could not write {}", gitignore.display()))?;
+    }
+    Ok(())
+}
+
 /// The name an output is saved under: the hash of its contents, with its extension.
 pub fn name(output: &Output) -> String {
     format!(
@@ -92,9 +104,14 @@ impl Removed {
 }
 
 /// Removes everything under `root` but its `.gitignore`, the directories of
-/// the cells whose hash is in `keep`, holding only their lists, and the
-/// outputs those cells list.
-pub fn remove_stale(root: &Path, keep: &HashSet<&str>) -> std::io::Result<Removed> {
+/// the cells whose hash is in `keep`, holding only their lists, the outputs
+/// those cells list, and the other `files` named, such as the page's
+/// stylesheets.
+pub fn remove_stale(
+    root: &Path,
+    keep: &HashSet<&str>,
+    files: &HashSet<&str>,
+) -> std::io::Result<Removed> {
     let mut removed = Removed::default();
     let entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(root) {
         Ok(entries) => entries.collect::<std::io::Result<_>>()?,
@@ -136,7 +153,9 @@ pub fn remove_stale(root: &Path, keep: &HashSet<&str>) -> std::io::Result<Remove
     for entry in &entries {
         let file_type = entry.file_type()?;
         let path = entry.path();
-        if file_type.is_dir() || entry.file_name() == GITIGNORE || listed.contains(&path) {
+        let name = entry.file_name();
+        let named = name == GITIGNORE || name.to_str().is_some_and(|name| files.contains(name));
+        if file_type.is_dir() || named || listed.contains(&path) {
             continue;
         }
         let is_output = path
@@ -255,7 +274,7 @@ mod tests {
         save_cell(&root, stale, &[text("shared"), text("stale")]);
         std::fs::write(root.join(GITIGNORE), "*").unwrap();
 
-        let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
+        let removed = remove_stale(&root, &HashSet::from([kept]), &HashSet::new()).unwrap();
         // The stale cell's list of outputs, its empty list of the files it
         // read, and the one output no kept cell lists.
         let outputs_list = 2 * (OUTPUT_HASH_LEN + ".txt\n".len());
@@ -295,10 +314,13 @@ mod tests {
         std::fs::write(root.join("0123456789abcdef.txt"), "short").unwrap();
         std::fs::write(root.join(".partial.txt.1234"), "half").unwrap();
         std::fs::write(root.join("notes.txt"), "notes").unwrap();
+        // A page's own file, which it links.
+        std::fs::write(root.join("slides.css"), "css").unwrap();
         std::fs::create_dir_all(root.join("images")).unwrap();
         std::fs::write(root.join("images").join("a.png"), "png").unwrap();
 
-        let removed = remove_stale(&root, &HashSet::from([kept])).unwrap();
+        let files = HashSet::from(["slides.css"]);
+        let removed = remove_stale(&root, &HashSet::from([kept]), &files).unwrap();
         assert_eq!((removed.cells, removed.outputs, removed.other), (0, 0, 6));
         assert_eq!(removed.bytes, 3 + 5 + 4 + 5 + 3);
         let mut left: Vec<String> = std::fs::read_dir(&root)
@@ -308,7 +330,7 @@ mod tests {
         left.sort();
         let output = saved(&root, kept).unwrap()[0].clone();
         let output = output.file_name().unwrap().to_str().unwrap();
-        assert_eq!(left, [GITIGNORE, kept, output]);
+        assert_eq!(left, [GITIGNORE, kept, output, "slides.css"]);
         let mut lists: Vec<String> = std::fs::read_dir(root.join(kept))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())

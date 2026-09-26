@@ -16,14 +16,17 @@ pub struct Deck {
     /// Where the outputs of the cells are saved.
     outputs: PathBuf,
     runner: Runner,
+    /// Whether the page holds every file it links, rather than linking them.
+    self_contained: bool,
 }
 
 impl Deck {
-    pub fn new(outputs: PathBuf, kernels: &'static [&'static str]) -> Deck {
+    pub fn new(outputs: PathBuf, kernels: &'static [&'static str], self_contained: bool) -> Deck {
         Deck {
             files: HashMap::new(),
             outputs,
             runner: Runner::new(kernels),
+            self_contained,
         }
     }
 
@@ -40,6 +43,7 @@ impl Deck {
                 let file = &self.files[path];
                 Notebook {
                     path,
+                    lock: file.lock.as_deref(),
                     cells: &file.cells,
                     hashes: &file.hashes,
                 }
@@ -64,15 +68,21 @@ impl Deck {
         }
     }
 
-    /// Removes the saved outputs that no cell of the deck uses.
-    pub fn clean(&self) {
+    /// Removes the saved outputs that no cell of the deck uses, and the files
+    /// the page of `input` does not link.
+    pub fn clean(&self, input: &Path) {
         let keep: HashSet<&str> = self
             .files
             .values()
             .flat_map(|file| &file.hashes)
             .map(String::as_str)
             .collect();
-        match store::remove_stale(&self.outputs, &keep) {
+        let files: HashSet<&str> = if self.self_contained {
+            HashSet::new()
+        } else {
+            page::bundled_files(self.theme(input)).into_iter().collect()
+        };
+        match store::remove_stale(&self.outputs, &keep, &files) {
             Ok(removed) => eprintln!(
                 "removed {} stale cell(s), {} output(s) and {} other file(s) from {}, recovering {}",
                 removed.cells,
@@ -133,13 +143,22 @@ impl Deck {
         }
     }
 
-    /// Writes the deck, unless the html on disk is already the same, so that
-    /// a save that changes nothing does not reload the slides. Returns whether
-    /// it wrote.
+    /// The theme the page of `input` is in, as its frontmatter says.
+    fn theme(&self, input: &Path) -> Option<&str> {
+        self.files[input].theme.as_deref()
+    }
+
+    /// Writes the deck, and the files it links next to it, unless the html on
+    /// disk is already the same, so that a save that changes nothing does not
+    /// reload the slides. Returns whether it wrote.
     pub fn write(&self, input: &Path, output: &Path) -> bool {
+        let theme = self.theme(input);
+        if !self.self_contained {
+            page::write_static(&self.outputs, &page::bundled_files(theme));
+        }
         let mut body = String::new();
         self.body(input, true, &mut body);
-        let html = page::page(&body, self.files[input].theme.as_deref(), output);
+        let html = page::page(&body, theme, output, self.self_contained);
         if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
             return false;
         }
@@ -155,7 +174,7 @@ mod tests {
 
     #[test]
     fn an_imported_file_steps_through_fragments_as_its_importer_unless_it_says() {
-        let mut deck = Deck::new(PathBuf::from("/deck/_outputs"), KERNELS);
+        let mut deck = Deck::new(PathBuf::from("/deck/_outputs"), KERNELS, false);
         let files = [
             (
                 "/deck/index.md",

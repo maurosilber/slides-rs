@@ -142,13 +142,7 @@ pub fn save(place: &Place, cells: &[Cell]) -> Result<usize> {
         if names == before {
             continue;
         }
-        fs::create_dir_all(&root)
-            .with_context(|| format!("could not create {}", root.display()))?;
-        let gitignore = root.join(store::GITIGNORE);
-        if !gitignore.exists() {
-            fs::write(&gitignore, "*")
-                .with_context(|| format!("could not write {}", gitignore.display()))?;
-        }
+        store::create(&root)?;
         store::save(&root, &hash, &outputs)?;
         saved += 1;
     }

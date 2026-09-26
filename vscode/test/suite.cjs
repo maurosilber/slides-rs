@@ -25,7 +25,7 @@ async function until(value, timeout = 20000) {
 
 const tests = {
 	async 'a deck opens as its cells, with the outputs the deck saved'() {
-		const file = path.join(repo, 'slides', 'sections', 'slide2.md');
+		const file = path.join(repo, 'example', 'sections', 'slide2.md');
 		const before = fs.readFileSync(file);
 		const notebook = await open(file);
 		const kinds = notebook.getCells().map((cell) => (cell.kind === vscode.NotebookCellKind.Code ? 'code' : 'markdown'));
