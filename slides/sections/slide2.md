@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 
 plt.rcParams['figure.facecolor'] = 'none'
 plt.rcParams['axes.facecolor'] = 'none'
+plt.rcParams['svg.fonttype'] = 'none'
 
 x = np.linspace(-10, 10, 100)
 ~~~
