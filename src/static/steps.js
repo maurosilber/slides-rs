@@ -121,12 +121,14 @@ const forwardOf = new WeakMap();
 // Plays each of the SVG animations in `container` that begin when asked once
 // it shows, when every step it is in does, and plays backward, from where it
 // is, each that is hidden again, so that stepping back undoes it, and stepping
-// on plays it again. Those that were playing already, when others begin, are
-// taken to their end, so that one step's animation does not run on into the
-// next one's.
+// on plays it again. Those that were playing already, when others begin or
+// play backward, are taken to where they were going, their end or, backward,
+// their start, so that one step's animation does not run on into the next one's.
 function playAnimations(container) {
     const begun = [];
     const before = [];
+    const hidden = [];
+    const back = [];
     for (const animation of container.querySelectorAll(ANIMATIONS)) {
         const shown = !animation.closest(".step-hidden");
         if (shown && !playing.has(animation)) {
@@ -134,10 +136,16 @@ function playAnimations(container) {
         } else if (shown) {
             before.push(animation);
         } else if (playing.has(animation)) {
-            reverse(animation);
+            hidden.push(animation);
+        } else if (forwardOf.has(animation)) {
+            back.push(animation);
         }
     }
-    if (begun.length) before.forEach(finish);
+    if (begun.length || hidden.length) {
+        before.forEach(finish);
+        back.forEach(restart);
+    }
+    hidden.forEach(reverse);
     for (const animation of begun) {
         if (forwardOf.has(animation)) {
             resume(animation);
