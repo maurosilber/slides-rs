@@ -12,12 +12,16 @@ plt.rcParams['svg.fonttype'] = 'none'
 x = np.pi * np.linspace(-1, 1, 1000)
 ~~~
 
+---
+
 ~~~python
 step = Step(0, 2)
 for i in range(3):
     plt.plot(x, np.cos(i * x), gid=step)
     step = step.next()
 ~~~
+
+---
 
 ~~~python
 t = np.linspace(0, 2 * np.pi, 500, endpoint=False)
@@ -34,6 +38,8 @@ Motion(
 )
 ~~~
 
+---
+
 ~~~python
 t = np.linspace(0, 2 * np.pi, 500, endpoint=False)
 
@@ -46,22 +52,25 @@ for a in np.linspace(1, 5, 10):
     Motion(
         point,
         line,
+        step=step,
         duration=a,
         repeat="indefinite",
     )
 ~~~
+
+---
 
 ~~~python
 t = np.linspace(-10, 10, 500)
 
 plt.figure(figsize=(6, 3))
 plt.xlim(-3, 3)
+plt.grid()
 point, = plt.plot(t, np.exp(-(t**2)))
-line = plt.axhline(-1, xmin=0, xmax=0.3, color="C1")
 Motion(
     point,
     line,
-    duration=a,
+    duration=1,
     easing="ease-in-out"
 )
 ~~~

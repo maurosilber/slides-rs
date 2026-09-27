@@ -18,6 +18,11 @@ use crate::step::{Mark, Step};
 /// artist's group, turned into `step="2..4"`, `step=""` or `also=""` for the
 /// slides to step through, along with `collapse=""` if it is starred.
 ///
+/// An id can also name its artist's path, after its step if it has one, as
+/// `gid="step=2.. #line"` does, for an `<mpath href="#line">` to follow it:
+/// the name is given to the first path drawn within the group, rather than to
+/// the group, which a motion cannot follow.
+///
 /// The XML declaration, doctype, comments and metadata are dropped, as they
 /// have no place in the middle of an html body, and the metadata holds the
 /// date the figure was drawn. Ids nothing refers to are dropped too, and the
@@ -67,8 +72,15 @@ fn referenced(svg: &str) -> Result<HashMap<String, usize>> {
 fn write(svg: &str, ids: &HashMap<String, usize>, prefix: &str) -> Result<Vec<u8>> {
     let mut reader = Reader::from_str(svg);
     let mut writer = Writer::new(Vec::new());
+    // How deep the element read is, and how deep the `<defs>` it is in, if any.
+    let mut depth = 0;
+    let mut defs = None;
+    // The id a group names its path by, and how deep the group is, until the path.
+    let mut named: Option<(String, usize)> = None;
     loop {
-        let event = match reader.read_event().context("the SVG is not valid XML")? {
+        let event = reader.read_event().context("the SVG is not valid XML")?;
+        let empty = matches!(event, Event::Empty(_));
+        let start = match event {
             Event::Eof => break,
             Event::Decl(_) | Event::DocType(_) | Event::Comment(_) => continue,
             Event::Start(start) if start.name().as_ref() == "metadata" => {
@@ -76,28 +88,77 @@ fn write(svg: &str, ids: &HashMap<String, usize>, prefix: &str) -> Result<Vec<u8
                 continue;
             }
             Event::Empty(start) if start.name().as_ref() == "metadata" => continue,
-            Event::Start(start) => Event::Start(element(start, ids, prefix)),
-            Event::Empty(start) => Event::Empty(element(start, ids, prefix)),
-            event => event,
+            Event::Start(start) | Event::Empty(start) => start,
+            Event::End(end) => {
+                if named.as_ref().is_some_and(|(_, at)| *at == depth) {
+                    named = None;
+                }
+                if defs == Some(depth) {
+                    defs = None;
+                }
+                depth -= 1;
+                writer.write_event(Event::End(end))?;
+                continue;
+            }
+            event => {
+                writer.write_event(event)?;
+                continue;
+            }
         };
-        writer.write_event(event)?;
+        if !empty {
+            depth += 1;
+        }
+        let tag = start.name().as_ref().to_owned();
+        if tag == "defs" && defs.is_none() && !empty {
+            defs = Some(depth);
+        }
+        let (mut rewritten, name) = element(start, ids, prefix);
+        if let Some(name) = name {
+            if tag == "path" {
+                rewritten.push_attribute(("id", name.as_str()));
+            } else if !empty {
+                named = Some((name, depth));
+            }
+        } else if tag == "path"
+            && defs.is_none()
+            && !rewritten.attributes().flatten().any(|a| a.key.as_ref() == "id")
+            && let Some((name, _)) = named.take()
+        {
+            // The path a group names is the first one it draws, not one it defines.
+            rewritten.push_attribute(("id", name.as_str()));
+        }
+        writer.write_event(if empty {
+            Event::Empty(rewritten)
+        } else {
+            Event::Start(rewritten)
+        })?;
     }
     Ok(writer.into_inner())
 }
 
 /// The element, with an id that marks a step replaced by the attribute the
 /// slides read, the other ids referred to renamed, and the rest dropped.
-/// Only the step is kept, as ids like this repeat across figures.
+/// Only the step is kept, as ids like this repeat across figures. Along with
+/// it is the name, renamed, that the id gives its path, if anything refers
+/// to it.
 fn element<'a>(
     element: BytesStart<'a>,
     ids: &HashMap<String, usize>,
     prefix: &str,
-) -> BytesStart<'a> {
+) -> (BytesStart<'a>, Option<String>) {
     let rename = |id: &str| ids.get(id).map(|n| format!("{prefix}{n}"));
     let mut rewritten = BytesStart::new(element.name().as_ref().to_owned());
+    let mut name = None;
     for attribute in element.attributes().flatten() {
         if attribute.key.as_ref() == "id" {
             let value = &attribute.value;
+            let (value, path) = match value.rsplit_once('#') {
+                Some((value, path)) if !path.is_empty() && !path.contains(char::is_whitespace) => {
+                    name = rename(path);
+                    (value, true)
+                }
+                _ => (value.as_ref(), false),
+            };
             if let Some(mark) = Mark::parse(value) {
                 let (key, value) = match mark.step {
                     Step::Range(range) => ("step", range.to_string()),
@@ -111,7 +172,7 @@ fn element<'a>(
                 if mark.collapse {
                     rewritten.push_attribute(("collapse", ""));
                 }
-            } else if let Some(id) = rename(value) {
+            } else if !path && let Some(id) = rename(value) {
                 rewritten.push_attribute(Attribute {
                     key: attribute.key,
                     value: Cow::Owned(id),
@@ -125,7 +186,7 @@ fn element<'a>(
             value: Cow::Owned(value),
         });
     }
-    rewritten
+    (rewritten, name)
 }
 
 /// The ids an attribute refers to: the `#id` of an `href`, or each
@@ -203,6 +264,50 @@ mod tests {
         assert_eq!(
             inline(svg).unwrap(),
             r#"<svg><g step="2..4"/><g step="..3"/><g step="5"/></svg>"#
+        );
+    }
+
+    #[test]
+    fn an_id_names_the_first_path_its_group_draws() {
+        let svg = concat!(
+            r##"<svg><animateMotion><mpath xlink:href="#line"/></animateMotion>"##,
+            r##"<g id="step=2.. #line"><defs><path id="m" d="M 9 9"/></defs>"##,
+            r##"<path d="M 0 0"/><path d="M 1 1"/><use xlink:href="#m"/></g>"##,
+            r#"<path d="M 2 2"/></svg>"#,
+        );
+        let inlined = inline(svg).unwrap();
+        let prefix = &inlined[inlined.find("href=\"#").unwrap() + 7..][..10];
+        assert_eq!(
+            inlined,
+            format!(
+                concat!(
+                    r##"<svg><animateMotion><mpath xlink:href="#{0}0"/></animateMotion>"##,
+                    r##"<g step="2"><defs><path id="{0}1" d="M 9 9"/></defs>"##,
+                    r##"<path d="M 0 0" id="{0}0"/><path d="M 1 1"/><use xlink:href="#{0}1"/></g>"##,
+                    r#"<path d="M 2 2"/></svg>"#,
+                ),
+                prefix
+            )
+        );
+    }
+
+    #[test]
+    fn an_id_can_name_a_path_without_a_step() {
+        let svg = r##"<svg><mpath href="#a"/><g id="#a"><path/></g><g id="line2d_1 #b"><path/></g></svg>"##;
+        let inlined = inline(svg).unwrap();
+        assert!(
+            inlined.ends_with(r#"-0"/></g><g><path/></g></svg>"#),
+            "{inlined}"
+        );
+    }
+
+    #[test]
+    fn a_group_that_draws_no_path_names_none() {
+        let svg = r##"<svg><mpath href="#a"/><g id="step #a"><use/></g><path/></svg>"##;
+        let inlined = inline(svg).unwrap();
+        assert!(
+            inlined.ends_with(r#"<g step=""><use/></g><path/></svg>"#),
+            "{inlined}"
         );
     }
 

@@ -2,8 +2,8 @@
 
 matplotlib has no animation of its own in an SVG, so a :class:`Motion` draws
 its artist inside an ``<animateMotion>`` that follows the path of another
-artist, such as a line from ``plot``. The deck plays it when its step shows,
-and starts it over when its step is hidden again::
+artist, such as a line from ``plot``, by an ``<mpath>``. The deck plays it when
+its step shows, and starts it over when its step is hidden again::
 
     from slides_rs import Motion, Step
 
@@ -20,7 +20,6 @@ from typing import Literal
 import numpy as np
 from matplotlib.artist import Artist
 from matplotlib.backends.backend_svg import RendererSVG
-from matplotlib.path import Path
 from matplotlib.transforms import Affine2D
 
 __all__ = ["Motion"]
@@ -42,7 +41,10 @@ class Motion:
 
     Draw ``artist`` where the path of ``along`` starts: it moves as the path
     does from there. ``along`` is any artist drawn as a path, such as the line
-    ``plot`` returns or a patch, and is drawn as it is, unless it is hidden.
+    ``plot`` returns or a patch, and is drawn as it is. Its ``gid``, a step or
+    none, names its path for the motion to follow, as ``step=2.. #path``,
+    which slides-rs reads: the SVG matplotlib saves has no path by that name,
+    and does not move it. Hidden, it has no path to follow either.
 
     ``step`` is when it shows and moves, as a :class:`~slides_rs.Step` or its
     string; without one, it moves when the slide opens. It takes ``duration``
@@ -53,7 +55,8 @@ class Motion:
     ``repeat`` times, or ``"indefinite"``ly, and, if ``freeze``, stays at the
     end.
 
-    Only an SVG moves it: drawn otherwise, as in a PNG, it stays where it is.
+    Only an SVG in a deck moves it: drawn otherwise, as in a PNG, it stays
+    where it is.
     Settings changed after it is made take effect the next time it is drawn.
     """
 
@@ -67,68 +70,75 @@ class Motion:
     freeze: bool = True
 
     def __post_init__(self):
-        self._attributes("M 0 0")  # Checks the settings, before a figure fails to save.
-        # The artist draws itself through the motion, where the axes draw it.
-        self._draw = self.artist.__dict__.get("draw")
+        self._attributes()  # Checks the settings, before a figure fails to save.
+        # The artist draws itself through the motion, where the axes draw it, and the
+        # path it follows with its name.
+        self._draws = {artist: artist.__dict__.get("draw") for artist in (self.artist, self.along)}
         self.artist.draw = self._draw_moving
+        self.along.draw = self._draw_named
 
     def remove(self):
         """Draws the artist where it is again."""
-        if self._draw is None:
-            del self.artist.draw
-        else:
-            self.artist.draw = self._draw
+        for artist, draw in self._draws.items():
+            if draw is None:
+                del artist.draw
+            else:
+                artist.draw = draw
 
-    def _draw_artist(self, renderer):
-        draw = self._draw or type(self.artist).draw.__get__(self.artist)
+    @property
+    def _name(self) -> str:
+        """The name of the path the artist follows, the same for every motion along it."""
+        return f"motion-path-{id(self.along):x}"
+
+    def _draw_original(self, artist: Artist, renderer):
+        draw = self._draws[artist] or type(artist).draw.__get__(artist)
         return draw(renderer)
+
+    def _draw_named(self, renderer):
+        # A step's gid, or none, followed by the name, as slides-rs reads them. Another
+        # motion along the same path may have named it already.
+        gid = self.along.get_gid()
+        if gid is not None and gid.endswith(f"#{self._name}"):
+            return self._draw_original(self.along, renderer)
+        self.along.set_gid(f"{gid} #{self._name}" if gid else f"#{self._name}")
+        try:
+            return self._draw_original(self.along, renderer)
+        finally:
+            self.along.set_gid(gid)
 
     def _draw_moving(self, renderer):
         svg = getattr(renderer, "_renderer", renderer)
-        path = self._path(svg) if isinstance(svg, RendererSVG) and self.artist.get_visible() else None
-        if path is None:
-            return self._draw_artist(renderer)
-        start, d = path
-        x, y = (_number(value) for value in start)
+        start = self._start(svg) if isinstance(svg, RendererSVG) and self.artist.get_visible() and self.along.get_visible() else None
+        if start is None:
+            return self._draw_original(self.artist, renderer)
         writer = svg.writer
-        # The artist, drawn at the start of the path, is taken to the origin, where the
-        # motion moves and turns it, and the whole back to the start. The motion is on a
-        # group of its own, as how it adds to a transform differs across browsers.
+        # The motion moves and turns the artist, drawn at the start of the path, as
+        # from the origin. It is on a group of its own, as how it adds to a transform
+        # differs across browsers.
         renderer.open_group("motion", gid=self.step and str(self.step))
-        writer.start("g", transform=f"translate({x} {y})")
         writer.start("g")
-        writer.element("animateMotion", attrib=self._attributes(d))
+        writer.start("animateMotion", attrib=self._attributes())
+        writer.element("mpath", attrib={"xlink:href": f"#{self._name}"})
+        writer.end("animateMotion")
         writer.start("g", transform=f"translate({_number(-start[0])} {_number(-start[1])})")
-        self._draw_artist(renderer)
-        writer.end("g")
+        self._draw_original(self.artist, renderer)
         writer.end("g")
         writer.end("g")
         renderer.close_group("motion")
 
-    def _path(self, svg: RendererSVG):
-        """Where the path of ``along`` starts in the SVG, and its data from there."""
-        path: Path = self.along.get_path()
+    def _start(self, svg: RendererSVG):
+        """Where the path of ``along`` starts in the SVG, if it has a start."""
+        vertices = self.along.get_path().vertices
         # As the SVG renderer draws it: in points, from the top.
         transform = self.along.get_transform() + Affine2D().scale(1, -1).translate(0, svg.height)
-        segments = list(path.iter_segments(transform, simplify=False, curves=True))
-        if not segments:
-            return None
-        start = np.asarray(segments[0][0][-2:])
-        commands = {Path.MOVETO: "M", Path.LINETO: "L", Path.CURVE3: "Q", Path.CURVE4: "C"}
-        d = []
-        for vertices, code in segments:
-            if code == Path.CLOSEPOLY:
-                d.append("Z")
-                continue
-            points = np.asarray(vertices).reshape(-1, 2) - start
-            d.append(" ".join([commands[code], *(_number(value) for value in points.ravel())]))
-        return start, " ".join(d)
+        points = transform.transform(vertices) if len(vertices) else vertices
+        finite = points[np.isfinite(points).all(axis=1)] if len(points) else points
+        return finite[0] if len(finite) else None
 
-    def _attributes(self, d: str) -> dict[str, str]:
+    def _attributes(self) -> dict[str, str]:
         if not self.duration > 0:
             raise ValueError(f"the duration must be positive, not {self.duration!r}")
         attributes = {
-            "path": d,
             # The deck begins it when its step shows.
             "begin": "indefinite",
             "dur": f"{_number(self.duration)}s",
