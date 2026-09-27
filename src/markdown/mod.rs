@@ -10,6 +10,7 @@ use pulldown_cmark::{
     CodeBlockKind, Event, HeadingLevel, OffsetIter, Options, Parser, Tag, TagEnd, html,
 };
 
+use crate::aspect::{self, AspectRatio};
 use crate::paths::{canonical, parent};
 use crate::store;
 
@@ -46,6 +47,9 @@ pub struct File {
     /// The theme its frontmatter asks for. Only the input's is used, so an
     /// imported file can keep the theme it was written with.
     pub theme: Option<String>,
+    /// The shape its frontmatter asks for the slides to keep. Only the
+    /// input's is used, as for the theme.
+    pub aspect_ratio: Option<AspectRatio>,
     /// Whether its frontmatter steps through its slides' steps. Without
     /// a say, it does as the file importing it does.
     pub steps: Option<bool>,
@@ -172,6 +176,7 @@ pub fn render(markdown: &str, path: &Path) -> File {
         cells,
         hashes,
         lock,
+        aspect_ratio: frontmatter.aspect_ratio(path),
         theme: frontmatter.theme,
         steps: frontmatter.steps,
     }
@@ -228,6 +233,9 @@ fn parse(markdown: &str) -> OffsetIter<'_> {
 #[serde(default)]
 struct Frontmatter {
     theme: Option<String>,
+    /// The shape of the slides.
+    #[serde(rename = "aspect-ratio")]
+    aspect_ratio: Option<aspect::Written>,
     /// Whether to step through the file's slides, and those of the files it
     /// imports that do not say. Unset, they are stepped through.
     steps: Option<bool>,
@@ -244,6 +252,20 @@ impl Frontmatter {
             eprintln!("{}: invalid frontmatter: {error}", path.display());
             Frontmatter::default()
         })
+    }
+
+    /// The shape the slides keep, if it says one, which is reported and left
+    /// out if it is not a ratio.
+    fn aspect_ratio(&self, path: &Path) -> Option<AspectRatio> {
+        let written = self.aspect_ratio.as_ref()?;
+        let ratio = written.aspect_ratio();
+        if ratio.is_none() {
+            eprintln!(
+                "{}: aspect-ratio {written} is not one, as 16:9, 1.6 or none",
+                path.display()
+            );
+        }
+        ratio
     }
 }
 
@@ -301,6 +323,22 @@ mod tests {
     fn invalid_frontmatter_is_left_out() {
         assert_eq!(theme("theme: [dark"), None);
         assert_eq!(theme("theme: [dark]"), None);
+    }
+
+    #[test]
+    fn the_aspect_ratio_comes_from_the_frontmatter() {
+        let ratio = |yaml| {
+            Frontmatter::parse(yaml, Path::new("slides.md")).aspect_ratio(Path::new("slides.md"))
+        };
+        let fixed = |width, height| Some(AspectRatio::Fixed { width, height });
+        assert_eq!(ratio("aspect-ratio: 16:9"), fixed(16.0, 9.0));
+        assert_eq!(ratio("aspect-ratio: \"4:3\""), fixed(4.0, 3.0));
+        assert_eq!(ratio("aspect-ratio: 16/10"), fixed(16.0, 10.0));
+        assert_eq!(ratio("aspect-ratio: 1.6"), fixed(1.6, 1.0));
+        assert_eq!(ratio("aspect-ratio: 2"), fixed(2.0, 1.0));
+        assert_eq!(ratio("aspect-ratio: none"), Some(AspectRatio::Fill));
+        assert_eq!(ratio("aspect-ratio: wide"), None);
+        assert_eq!(ratio("theme: dark"), None);
     }
 
     #[test]

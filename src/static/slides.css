@@ -1,3 +1,30 @@
+/* The page is the frame of the slides, as large as the window lets it at
+   the shape `--aspect-ratio` says, 16:9 unless a theme or the frontmatter
+   says otherwise, centred in the window. Without a shape of their own, as
+   the frontmatter's `aspect-ratio: none` writes, the slides take the size of
+   the window, from `--slide-width` and `--slide-height`. Sized in `cqmin`
+   and the like, rather than `vmin`, what is on a slide goes with its frame. */
+:root {
+    --aspect-ratio: 16 / 9;
+    --slide-width: min(100vw, calc(100vh * var(--aspect-ratio)));
+    --slide-height: min(100vh, calc(100vw / (var(--aspect-ratio))));
+}
+
+html {
+    height: 100%;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+}
+
+body {
+    width: var(--slide-width);
+    height: var(--slide-height);
+    margin: 0;
+    container-type: size;
+    overflow: hidden;
+}
+
 section {
     width: 100%;
     height: 100%;
@@ -12,8 +39,8 @@ section {
 section::after {
     content: attr(data-number) " / " attr(data-total);
     position: absolute;
-    right: 2.5vmin;
-    bottom: 2vmin;
+    right: 2.5cqmin;
+    bottom: 2cqmin;
 }
 
 /* Each run of H3 sections is a row of columns, one per H3, which slides.js

@@ -16,27 +16,27 @@
     --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --heading-weight: 700;
 
-    /* Everything is sized off the viewport, so a slide looks the same at
-       any window size. Raise it for a big room, lower it for dense slides. */
+    /* Everything is sized off the slide, so a slide looks the same at any
+       window size. Raise it for a big room, lower it for dense slides. */
     --scale: 1;
     --radius: 0.4em;
 
     /* Figures are drawn by matplotlib in black on white; a dark theme
        inverts them, turning the hues back so the colours stay recognisable. */
     --figure-filter: none;
+
+    /* Around the slides, where the window is not their shape. */
+    --letterbox: var(--bg);
 }
 
-html,
-body {
-    height: 100%;
-    margin: 0;
+html {
+    background: var(--letterbox);
 }
 
 body {
     background: var(--bg);
     color: var(--fg);
     font-family: var(--font-body);
-    font-size: calc(var(--scale) * 3.2vmin);
     line-height: 1.4;
 }
 
@@ -48,8 +48,10 @@ section::after {
 
 section {
     box-sizing: border-box;
-    padding: 6vmin 8vmin;
-    column-gap: 5vmin;
+    /* In the slide's own units, which the page, its frame, sets. */
+    font-size: calc(var(--scale) * 3.2cqmin);
+    padding: 6cqmin 8cqmin;
+    column-gap: 5cqmin;
     overflow: hidden;
 }
 
@@ -185,7 +187,7 @@ img,
 svg:not(.katex *) {
     display: block;
     max-width: 100%;
-    max-height: 70vh;
+    max-height: 70cqh;
     height: auto;
     margin: 0.4em auto;
 }

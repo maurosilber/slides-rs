@@ -9,6 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
 
+use crate::aspect::AspectRatio;
 use crate::markdown::{NO_STEPS, SECTION};
 use crate::paths::parent;
 use crate::store;
@@ -89,10 +90,16 @@ fn bundled_href(name: &str) -> String {
     format!("{}/{name}", store::DIR)
 }
 
-/// The page for the slides in `body`, in the theme the input asks for, to be
-/// written at `output`. A self-contained page holds every file it would
-/// link, so that it can be opened on its own.
-pub fn page(body: &str, theme: Option<&str>, output: &Path, self_contained: bool) -> String {
+/// The page for the slides in `body`, in the theme and the shape the input
+/// asks for, to be written at `output`. A self-contained page holds every
+/// file it would link, so that it can be opened on its own.
+pub fn page(
+    body: &str,
+    theme: Option<&str>,
+    aspect_ratio: Option<AspectRatio>,
+    output: &Path,
+    self_contained: bool,
+) -> String {
     let dir = parent(output);
     // A slide break at either end of a file, or two in a row, leaves an empty slide.
     let body = body
@@ -133,9 +140,14 @@ pub fn page(body: &str, theme: Option<&str>, output: &Path, self_contained: bool
         let script = format!("<script src=\"{}\"></script>", bundled_href("slides.js"));
         (styles, script, body)
     };
+    // On the root, the frontmatter's shape comes before the theme's.
+    let style = aspect_ratio.map_or(String::new(), |ratio| {
+        format!(" style=\"{}\"", escape(&ratio.css()))
+    });
     fill(
         TEMPLATE,
         &[
+            ("style", &style),
             ("styles", &styles.join("\n    ")),
             ("script", &script),
             ("body", &body),
@@ -432,7 +444,13 @@ mod tests {
     fn a_page_links_the_files_of_its_theme_in_the_outputs() {
         let dir = temp_dir();
         let output = dir.join("index.html");
-        let html = page("<section>\n</section>\n", Some("dark"), &output, false);
+        let html = page(
+            "<section>\n</section>\n",
+            Some("dark"),
+            None,
+            &output,
+            false,
+        );
         let links: Vec<&str> = html
             .lines()
             .map(str::trim)
@@ -479,9 +497,9 @@ mod tests {
         .unwrap();
         fs::write(dir.join("base.css"), "h2 { color: blue; }\n").unwrap();
         let output = dir.join("index.html");
-        let linked = page("", Some("talk.css"), &output, false);
+        let linked = page("", Some("talk.css"), None, &output, false);
         assert!(linked.contains("<link rel=\"stylesheet\" href=\"talk.css\">"));
-        let inlined = page("", Some("talk.css"), &output, true);
+        let inlined = page("", Some("talk.css"), None, &output, true);
         assert!(inlined.contains("h2 { color: blue; }\nh1 { color: red; }"));
         assert!(!inlined.contains("theme-base.css") && !inlined.contains("@import"));
         fs::remove_dir_all(&dir).unwrap();
@@ -497,7 +515,7 @@ mod tests {
             "<section>\n<img src=\"{}/figure.png\">\n<img src=\"my%20photo.jpg\" alt=\"\">\n<img src=\"https://example.com/a.png\">\n</section>\n",
             store::DIR
         );
-        let html = page(&body, Some("dark"), &dir.join("index.html"), true);
+        let html = page(&body, Some("dark"), None, &dir.join("index.html"), true);
         assert!(!html.contains("<link rel=\"stylesheet\" href=\"_outputs"));
         assert!(!html.contains("src=\"_outputs/slides.js\""));
         assert!(!html.contains("@import"), "the theme's import is inlined");
@@ -514,6 +532,20 @@ mod tests {
         assert!(html.contains(&format!("src=\"data:image/jpeg;base64,{jpg}\"")));
         assert!(html.contains("src=\"https://example.com/a.png\""));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_shape_of_the_slides_is_set_on_the_page() {
+        let output = Path::new("index.html");
+        let html = |ratio| page("", None, ratio, output, false);
+        assert!(html(None).starts_with("<!DOCTYPE html>\n<html>\n"));
+        let four_three = AspectRatio::Fixed {
+            width: 4.0,
+            height: 3.0,
+        };
+        assert!(html(Some(four_three)).contains("<html style=\"--aspect-ratio: 4 / 3\">"));
+        let fill = "<html style=\"--slide-width: 100vw; --slide-height: 100vh\">";
+        assert!(html(Some(AspectRatio::Fill)).contains(fill));
     }
 
     #[test]
