@@ -3,7 +3,7 @@
 // them, as it does on the page.
 
 import type { ActivationFunction } from 'vscode-notebook-renderer';
-import { stepsOf } from '../../src/static/steps.js';
+import { playAnimations, stepsOf } from '../../src/static/steps.js';
 
 /** As slides.css fades the steps in and out, within the figure alone. */
 const STYLE = `
@@ -129,6 +129,7 @@ export const activate: ActivationFunction<State> = (context) => {
 				for (const { element, from, to } of elements) {
 					element.classList.toggle('step-hidden', animate && !(from <= step && step < to));
 				}
+				playAnimations(figure);
 				checkbox.checked = animate;
 				label.textContent = `Step ${step} of ${count}`;
 				previous.disabled = !animate || step === 1;

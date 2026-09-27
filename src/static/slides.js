@@ -67,6 +67,7 @@ function updateSlide(i, step = 1) {
     const slide = slides[i];
     slide.classList.add("steps-instant");
     slides[currentSlide].style.display = "none";
+    stopAnimations(slides[currentSlide]);
     slide.style.display = "block";
     currentSlide = i;
     currentStep = Math.max(1, Math.min(step, slideSteps[i].count));
@@ -90,6 +91,7 @@ function showStep(i) {
         const shown = !stepsEnabled || (from <= i && i < to);
         element.classList.toggle("step-hidden", !shown);
     }
+    playAnimations(slides[currentSlide]);
     showPosition();
     return true;
 }

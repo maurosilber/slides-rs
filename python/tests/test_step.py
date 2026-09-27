@@ -1,11 +1,9 @@
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 
 import pytest
-
 from slides_rs import Step
 
 ROOT = pathlib.Path(__file__).parents[2]
@@ -62,16 +60,6 @@ def test_the_step_shown_throughout_does_not_move():
         Step().next()
     with pytest.raises(ValueError):
         Step().previous()
-
-
-@pytest.fixture
-def slides_rs():
-    """The slides-rs that `cargo build` builds, or else the one on the PATH."""
-    built = ROOT / "target" / "debug" / "slides-rs"
-    command = str(built) if built.exists() else shutil.which("slides-rs")
-    if command is None:
-        pytest.skip("no slides-rs to render the deck with")
-    return command
 
 
 def test_a_figure_steps_on_its_slide(slides_rs, tmp_path):

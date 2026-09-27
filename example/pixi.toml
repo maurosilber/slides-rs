@@ -6,3 +6,6 @@ platforms = ["osx-arm64"]
 python = "*"
 matplotlib = "*"
 xeus-python = "*"
+
+[pypi-dependencies]
+slides-rs = { path = "../python", editable = true }

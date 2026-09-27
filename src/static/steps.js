@@ -105,5 +105,37 @@ function stepsOf(slide) {
     return { count, elements };
 }
 
+// The SVG animations that begin when asked, as slides_rs.Motion writes them,
+// each playing, which is not in the document and so is kept aside.
+const playing = new WeakSet();
+
+// Plays each of the SVG animations in `container` that begin when asked once
+// it shows, when every step it is in does, and starts over, from before it
+// began, each that is hidden again, so that stepping back to it plays it again.
+function playAnimations(container) {
+    for (const animation of container.querySelectorAll("[begin=indefinite]")) {
+        const shown = !animation.closest(".step-hidden");
+        if (shown && !playing.has(animation)) {
+            playing.add(animation);
+            animation.beginElement();
+        } else if (!shown && playing.has(animation)) {
+            restart(animation);
+        }
+    }
+}
+
+// Starts over every animation playing in `container`, as when its slide closes.
+function stopAnimations(container) {
+    for (const animation of container.querySelectorAll("[begin=indefinite]")) {
+        if (playing.has(animation)) restart(animation);
+    }
+}
+
+// An animation, once begun, cannot be taken back to before it began, but a
+// copy of it has not.
+function restart(animation) {
+    animation.replaceWith(animation.cloneNode(true));
+}
+
 // The renderer bundles this file as a module, which a page never loads it as.
-if (typeof module == "object") module.exports = { stepsOf };
+if (typeof module == "object") module.exports = { stepsOf, playAnimations };
