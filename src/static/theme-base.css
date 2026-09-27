@@ -40,6 +40,12 @@ body {
     line-height: 1.4;
 }
 
+section::after {
+    font-size: 0.6em;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
 section {
     box-sizing: border-box;
     padding: 6vmin 8vmin;

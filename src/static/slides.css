@@ -2,6 +2,18 @@ section {
     width: 100%;
     height: 100%;
     display: none;
+    position: relative;
+}
+
+/* The slide counter, as `number / total`, in the bottom right corner, which
+   a theme styles. A stylesheet can write it otherwise with `content`, using
+   `attr(data-number)` and `attr(data-total)`, or leave it out with
+   `content: none`, on every slide or on some, as `section:first-of-type`. */
+section::after {
+    content: attr(data-number) " / " attr(data-total);
+    position: absolute;
+    right: 2.5vmin;
+    bottom: 2vmin;
 }
 
 /* Each run of H3 sections is a row of columns, one per H3, which slides.js

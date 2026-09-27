@@ -127,6 +127,12 @@ function wrapColumns(slide) {
 // columns are boxed after, as the steps are read off the slide's children.
 let slideSteps = [];
 addEventListener("DOMContentLoaded", () => {
+    // Every slide knows where it is in the deck, for slides.css to count them,
+    // which CSS counters cannot, as the slides not shown are not displayed.
+    [...slides].forEach((slide, i) => {
+        slide.dataset.number = i + 1;
+        slide.dataset.total = slides.length;
+    });
     slideSteps = [...slides].map(stepsOf);
     // slides.css shows and hides them, as `step-hidden` says.
     for (const { elements } of slideSteps) {
