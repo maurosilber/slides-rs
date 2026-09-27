@@ -3067,8 +3067,8 @@
           </clipPath>
          </defs>
         </svg>
-        <p><code>.timing(duration=...)</code>, with an <code>easing=</code>, or with the times <code>t</code> it is <code>at</code> each
-        fraction of the path: before <code>t[0]</code>, it waits.</p>
+        <p><code>.timing(duration=...)</code>, with an <code>easing=</code>, or with the times <code>t</code> it is each
+        <code>fraction=</code> of the path: before <code>t[0]</code>, it waits.</p>
     </section>
     <section>
         <h1>Timed as plotted</h1>
@@ -3939,6 +3939,126 @@
         </svg>
         <p><code>.repeat(3, accumulate=True)</code> goes on from where each lap ended, and
         <code>.hold(False)</code> goes back to the start once done.</p>
+    </section>
+    <section>
+        <h1>Leg by leg</h1>
+        
+        
+        <svg xmlns:xlink="http://www.w3.org/1999/xlink" width="349.2pt" height="153pt" viewBox="0 0 349.2 153" xmlns="http://www.w3.org/2000/svg" version="1.1">
+         
+         <defs>
+          <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+         </defs>
+         <g>
+          <g>
+           <path d="M 0 153 
+        L 349.2 153 
+        L 349.2 0 
+        L 0 0 
+        L 0 153 
+        z
+        " style="fill: none"/>
+          </g>
+          <g>
+           <g>
+            <defs>
+             <path id="f3cb743c5-1" d="M -3 3 
+        L 3 3 
+        L 3 -3 
+        L -3 -3 
+        z
+        " style="stroke: #999999; stroke-linejoin: miter"/>
+            </defs>
+            <g clip-path="url(#f3cb743c5-0)">
+             <use xlink:href="#f3cb743c5-1" x="22.418182" y="139.5" style="fill: #999999; stroke: #999999; stroke-linejoin: miter"/>
+             <use xlink:href="#f3cb743c5-1" x="123.872727" y="13.5" style="fill: #999999; stroke: #999999; stroke-linejoin: miter"/>
+             <use xlink:href="#f3cb743c5-1" x="225.327273" y="139.5" style="fill: #999999; stroke: #999999; stroke-linejoin: miter"/>
+             <use xlink:href="#f3cb743c5-1" x="326.781818" y="13.5" style="fill: #999999; stroke: #999999; stroke-linejoin: miter"/>
+            </g>
+           </g>
+           <g>
+            <path d="M 22.418182 139.5 
+        L 123.872727 13.5 
+        " clip-path="url(#f3cb743c5-0)" style="fill: none; stroke: #cccccc; stroke-width: 1.5; stroke-linecap: square" id="f3cb743c5-4"/>
+           </g>
+           <g step="1">
+            <g id="f3cb743c5-3">
+             <g id="f3cb743c5-5">
+              <g>
+               <defs>
+                <path id="f3cb743c5-2" d="M 0 3 
+        C 0.795609 3 1.55874 2.683901 2.12132 2.12132 
+        C 2.683901 1.55874 3 0.795609 3 0 
+        C 3 -0.795609 2.683901 -1.55874 2.12132 -2.12132 
+        C 1.55874 -2.683901 0.795609 -3 0 -3 
+        C -0.795609 -3 -1.55874 -2.683901 -2.12132 -2.12132 
+        C -2.683901 -1.55874 -3 -0.795609 -3 0 
+        C -3 0.795609 -2.683901 1.55874 -2.12132 2.12132 
+        C -1.55874 2.683901 -0.795609 3 0 3 
+        z
+        " style="stroke: #ff7f0e"/>
+               </defs>
+               <g clip-path="url(#f3cb743c5-0)">
+                <use xlink:href="#f3cb743c5-2" x="22.418182" y="139.5" style="fill: #ff7f0e; stroke: #ff7f0e"/>
+               </g>
+              </g>
+             </g>
+            </g>
+            <animateMotion xlink:href="#f3cb743c5-3" begin="indefinite" dur="3s" fill="freeze" keyTimes="0;1" keyPoints="0;1" calcMode="spline" keySplines="0.42 0 0.58 1">
+             <mpath xlink:href="#f3cb743c5-4"/>
+            </animateMotion>
+            <animateTransform xlink:href="#f3cb743c5-5" attributeName="transform" type="translate" from="-22.418182 -139.5" to="-22.418182 -139.5" begin="indefinite" dur="3s" fill="freeze"/>
+           </g>
+           <g>
+            <path d="M 123.872727 13.5 
+        L 225.327273 139.5 
+        " clip-path="url(#f3cb743c5-0)" style="fill: none; stroke: #cccccc; stroke-width: 1.5; stroke-linecap: square" id="f3cb743c5-7"/>
+           </g>
+           <g step="2">
+            <g id="f3cb743c5-6">
+             <g id="f3cb743c5-8">
+              <g>
+               <g clip-path="url(#f3cb743c5-0)">
+                <use xlink:href="#f3cb743c5-2" x="123.872727" y="13.5" style="fill: #ff7f0e; stroke: #ff7f0e"/>
+               </g>
+              </g>
+             </g>
+            </g>
+            <animateMotion xlink:href="#f3cb743c5-6" begin="indefinite" dur="3s" fill="freeze" keyTimes="0;1" keyPoints="0;1" calcMode="spline" keySplines="0.42 0 0.58 1">
+             <mpath xlink:href="#f3cb743c5-7"/>
+            </animateMotion>
+            <animateTransform xlink:href="#f3cb743c5-8" attributeName="transform" type="translate" from="-123.872727 -13.5" to="-123.872727 -13.5" begin="indefinite" dur="3s" fill="freeze"/>
+           </g>
+           <g>
+            <path d="M 225.327273 139.5 
+        L 326.781818 13.5 
+        " clip-path="url(#f3cb743c5-0)" style="fill: none; stroke: #cccccc; stroke-width: 1.5; stroke-linecap: square" id="f3cb743c5-10"/>
+           </g>
+           <g step="3">
+            <g id="f3cb743c5-9">
+             <g id="f3cb743c5-11">
+              <g>
+               <g clip-path="url(#f3cb743c5-0)">
+                <use xlink:href="#f3cb743c5-2" x="225.327273" y="139.5" style="fill: #ff7f0e; stroke: #ff7f0e"/>
+               </g>
+              </g>
+             </g>
+            </g>
+            <animateMotion xlink:href="#f3cb743c5-9" begin="indefinite" dur="3s" fill="freeze" keyTimes="0;1" keyPoints="0;1" calcMode="spline" keySplines="0.42 0 0.58 1">
+             <mpath xlink:href="#f3cb743c5-10"/>
+            </animateMotion>
+            <animateTransform xlink:href="#f3cb743c5-11" attributeName="transform" type="translate" from="-225.327273 -139.5" to="-225.327273 -139.5" begin="indefinite" dur="3s" fill="freeze"/>
+           </g>
+          </g>
+         </g>
+         <defs>
+          <clipPath id="f3cb743c5-0">
+           <rect x="7.2" y="7.2" width="334.8" height="138.6"/>
+          </clipPath>
+         </defs>
+        </svg>
+        <p>Each leg moves in a step of its own: stepping on before one ends takes it to
+        its end, as the next begins.</p>
     </section>
     <section>
         <h1>The deck</h1>

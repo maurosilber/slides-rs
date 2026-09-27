@@ -114,16 +114,48 @@ const playing = new WeakSet();
 // Plays each of the SVG animations in `container` that begin when asked once
 // it shows, when every step it is in does, and starts over, from before it
 // began, each that is hidden again, so that stepping back to it plays it again.
+// Those that were playing already, when others begin, are taken to their end,
+// so that one step's animation does not run on into the next one's.
 function playAnimations(container) {
+    const begun = [];
+    const before = [];
     for (const animation of container.querySelectorAll("[begin=indefinite]")) {
         const shown = !animation.closest(".step-hidden");
         if (shown && !playing.has(animation)) {
-            playing.add(animation);
-            animation.beginElement();
-        } else if (!shown && playing.has(animation)) {
+            begun.push(animation);
+        } else if (shown) {
+            before.push(animation);
+        } else if (playing.has(animation)) {
             restart(animation);
         }
     }
+    if (begun.length) before.forEach(finish);
+    for (const animation of begun) {
+        playing.add(animation);
+        animation.beginElement();
+    }
+}
+
+// Takes an animation to its end, by a copy begun as long ago as it lasts, as
+// one playing already cannot begin again before now, unless it repeats on and
+// on, which has no end.
+function finish(animation) {
+    let length;
+    try {
+        length = animation.getSimpleDuration();
+    } catch {
+        return; // Its duration is indefinite.
+    }
+    const count = animation.getAttribute("repeatCount");
+    if (count == "indefinite") length = Infinity;
+    else if (count != null) length *= Number(count);
+    const most = animation.getAttribute("repeatDur");
+    if (most != null && most != "indefinite") length = Math.min(length, parseFloat(most));
+    if (!Number.isFinite(length)) return;
+    const copy = animation.cloneNode(true);
+    animation.replaceWith(copy);
+    playing.add(copy);
+    copy.beginElementAt(-length);
 }
 
 // Starts over every animation playing in `container`, as when its slide closes.
