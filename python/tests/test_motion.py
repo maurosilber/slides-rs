@@ -125,6 +125,12 @@ def test_it_starts_in_a_step_of_its_own(figure):
     assert parent_of(root, moving).get("id") == "step=1.."
 
 
+def test_it_starts_in_a_step_not_a_string(figure):
+    figure, line, dot = figure
+    with pytest.raises(TypeError):
+        Motion(dot, along=line).starts("step=2..")
+
+
 @pytest.mark.parametrize("options", [{}, {"bbox_inches": "tight"}])
 def test_it_moves_from_where_it_is_drawn(figure, options):
     figure, line, dot = figure
@@ -196,20 +202,20 @@ def test_along_a_hidden_path_it_stays_where_it_is(figure):
         ),
         ({"duration": 1, "easing": (0.1, 0.7, 1.0, 0.1)}, {"calcMode": "spline", "keySplines": "0.1 0.7 1 0.1"}),
         (
-            {"t": [0, 1, 4], "at": [0, 0.8, 1]},
+            {"t": [0, 1, 4], "fraction": [0, 0.8, 1]},
             {"dur": "4s", "calcMode": "linear", "keyTimes": "0;0.25;1", "keyPoints": "0;0.8;1"},
         ),
         (
-            {"t": [0, 1, 4], "at": [0, 0.8, 1], "easing": ["ease-in", "linear"]},
+            {"t": [0, 1, 4], "fraction": [0, 0.8, 1], "easing": ["ease-in", "linear"]},
             {"calcMode": "spline", "keySplines": "0.42 0 1 1;0 0 1 1"},
         ),
         (
-            {"t": [0, 1, 2], "at": [0, 0.5, 1], "easing": "discrete"},
+            {"t": [0, 1, 2], "fraction": [0, 0.5, 1], "easing": "discrete"},
             {"calcMode": "discrete", "keyTimes": "0;0.5;1", "keyPoints": "0;0.5;1"},
         ),
         # Up to the first time, it waits at the start.
         (
-            {"t": [1, 2, 4], "at": [0.2, 0.5, 1], "easing": "ease"},
+            {"t": [1, 2, 4], "fraction": [0.2, 0.5, 1], "easing": "ease"},
             {
                 "dur": "4s",
                 "keyTimes": "0;0.25;0.5;1",
@@ -308,16 +314,16 @@ def test_it_does_not_rotate_as_it_accumulates(figure):
         ("timing", (), {}),
         ("timing", ([0, 1],), {"duration": 1}),
         ("timing", (), {"duration": 0}),
-        ("timing", (), {"duration": 1, "at": [0, 1]}),
-        ("timing", ([0, 2, 1],), {"at": [0, 0.5, 1]}),
-        ("timing", ([-1, 1],), {"at": [0, 1]}),
-        ("timing", ([0, 1],), {"at": [0, 0.5, 1]}),
-        ("timing", ([0, 1],), {"at": [0, 2]}),
+        ("timing", (), {"duration": 1, "fraction": [0, 1]}),
+        ("timing", ([0, 2, 1],), {"fraction": [0, 0.5, 1]}),
+        ("timing", ([-1, 1],), {"fraction": [0, 1]}),
+        ("timing", ([0, 1],), {"fraction": [0, 0.5, 1]}),
+        ("timing", ([0, 1],), {"fraction": [0, 2]}),
         ("timing", ([0, 1, 2],), {}),  # The line has 20 vertices.
         ("timing", (), {"duration": 1, "easing": "bounce"}),
         ("timing", (), {"duration": 1, "easing": (2, 0, 0, 1)}),
         ("timing", (), {"duration": 1, "easing": (0.5, 0, 0.5, 2)}),
-        ("timing", ([0, 1, 2],), {"at": [0, 0.5, 1], "easing": ["ease"]}),
+        ("timing", ([0, 1, 2],), {"fraction": [0, 0.5, 1], "easing": ["ease"]}),
         ("rotate", ("sideways",), {}),
         ("repeat", (0,), {}),
         ("repeat", (), {"seconds": -1}),

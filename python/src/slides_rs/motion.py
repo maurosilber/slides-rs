@@ -24,6 +24,8 @@ from matplotlib.backends.backend_svg import RendererSVG
 from matplotlib.path import Path
 from matplotlib.transforms import Affine2D
 
+from .step import Step
+
 __all__ = ["Motion"]
 
 #: The easings CSS names, as the cubic Bézier curves an SVG animation takes.
@@ -69,9 +71,9 @@ class Motion:
     def __init__(self, artist: Artist, along: Artist):
         self.artist = artist
         self.along = along
-        self._step: str | None = None
+        self._step: Step | None = None
         self._times = np.array([0.0, 1.0])
-        self._at: np.ndarray | Literal["vertices"] | None = None
+        self._fraction: np.ndarray | Literal["vertices"] | None = None
         self._curves: list[Curve] | Literal["discrete"] = [EASINGS["linear"]]
         self._rotate: str | None = None
         self._repeat: dict[str, str] = {}
@@ -85,11 +87,14 @@ class Motion:
     def __repr__(self):
         return f"Motion({self.artist!r}, along={self.along!r})"
 
-    def starts(self, step: str | None) -> Motion:
-        """Moves from ``step``, a :class:`~slides_rs.Step` or its string, rather than
-        once the artist shows. Hidden again, as when a range ends, it starts over.
+    def starts(self, step: Step | None) -> Motion:
+        """Moves from ``step``, a :class:`~slides_rs.Step`, rather than once the artist
+        shows, or, with ``None``, once it shows. Hidden again, as when a range ends, it
+        starts over.
         """
-        self._step = None if step is None else str(step)
+        if not (step is None or isinstance(step, Step)):
+            raise TypeError(f"starts takes a Step or None, not {step!r}")
+        self._step = step
         return self
 
     def timing(
@@ -97,17 +102,23 @@ class Motion:
         t: Sequence[float] | np.ndarray | None = None,
         *,
         duration: float | None = None,
-        at: Sequence[float] | np.ndarray | None = None,
+        fraction: Sequence[float] | np.ndarray | None = None,
         easing: Easing | Sequence[Easing] | Literal["discrete"] = "linear",
     ) -> Motion:
         """When it is where along the path.
 
         With a ``duration`` alone, it takes that many seconds from the start of
-        the path to its end. With ``t``, it is ``at`` each fraction of the way
-        along the path at each time ``t``, in seconds, or else at each vertex
-        of ``along``, drawn as a line, at each time ``t``: a line plotted from
-        ``x(t), y(t)`` is followed as it was plotted. It takes ``t[-1]``
-        seconds, and waits where it starts up to ``t[0]``.
+        the path to its end. With the times ``t``, in seconds, it is
+        ``fraction[i]`` of the way along the path, from 0 at its start to 1 at
+        its end, at time ``t[i]``::
+
+            motion.timing([0.5, 1, 1.5, 2], fraction=[0, 0.5, 0.5, 1])
+
+        waits at the start up to 0.5 s, goes halfway by 1 s, waits there up
+        to 1.5 s, and goes on to the end by 2 s. Without ``fraction``, it is
+        at the i-th vertex of ``along``, drawn as a line, at time ``t[i]``: a
+        line plotted from ``x(t), y(t)`` is followed as it was plotted. It
+        takes ``t[-1]`` seconds, and waits where it starts up to ``t[0]``.
 
         Between them, it goes at the pace ``easing`` says, for every interval
         or for each: ``"linear"``, one of the easings CSS names, or the control
@@ -117,8 +128,8 @@ class Motion:
         if (t is None) == (duration is None):
             raise ValueError("the timing takes either the times t or a duration")
         if t is None:
-            if at is not None:
-                raise ValueError("where it is at is at the times t, which a duration has none of")
+            if fraction is not None:
+                raise ValueError("the fractions of the path are at the times t, which a duration has none of")
             times = np.array([0.0, duration], dtype=float)
         else:
             times = np.asarray(t, dtype=float)
@@ -126,18 +137,18 @@ class Motion:
             raise ValueError(f"the times must be two or more numbers, not {t!r}")
         if not (times[0] >= 0 and (np.diff(times) >= 0).all() and times[-1] > 0):
             raise ValueError(f"the times must go on from 0 and end after it, not {times!r}")
-        if at is not None:
-            points = np.asarray(at, dtype=float)
+        if fraction is not None:
+            points = np.asarray(fraction, dtype=float)
             if points.shape != times.shape:
-                raise ValueError(f"it takes where it is at at each of the {len(times)} times, not {len(points)}")
+                raise ValueError(f"it takes a fraction of the path at each of the {len(times)} times, not {len(points)}")
             if not ((0 <= points) & (points <= 1)).all():
-                raise ValueError(f"where it is at is a fraction of the path, from 0 to 1, not {points!r}")
+                raise ValueError(f"the fractions of the path go from 0 to 1, not {points!r}")
         elif t is not None:
             points = "vertices"
             self._progress(times)  # Checks the line has as many vertices, before a figure fails to save.
         else:
             points = None
-        self._times, self._at = times, points
+        self._times, self._fraction = times, points
         self._curves = _curves(easing, len(times) - 1)
         return self
 
@@ -185,7 +196,8 @@ class Motion:
         return self
 
     def remove(self):
-        """Draws the artist where it is again."""
+        """Stops the artist moving: it and ``along`` are drawn as they were before
+        the motion was made, the next time the figure is drawn."""
         for artist, draw in self._draws.items():
             if draw is None:
                 del artist.draw
@@ -284,11 +296,11 @@ class Motion:
         """How far along the line each of its vertices is, from 0 to 1, if it has a length,
         as the SVG draws it: in proportion to the figure's, as any drawing of it."""
         if getattr(self.along, "get_drawstyle", lambda: "default")() != "default":
-            raise ValueError("it takes a time at each vertex of a line drawn straight, not in steps: give where it is at")
+            raise ValueError("it takes a time at each vertex of a line drawn straight, not in steps: give the fractions of the path")
         path, points = self._points(None)
         codes = path.codes
         if codes is not None and not np.isin(codes, [Path.MOVETO, Path.LINETO]).all():
-            raise ValueError("it takes a time at each vertex of a line, not of curves: give where it is at")
+            raise ValueError("it takes a time at each vertex of a line, not of curves: give the fractions of the path")
         if len(points) != len(times):
             raise ValueError(f"it takes a time at each of the {len(points)} vertices of the line, not {len(times)}")
         lengths = np.hypot(*np.diff(points, axis=0).T)
@@ -301,7 +313,7 @@ class Motion:
 
     def _attributes(self, svg: RendererSVG) -> dict[str, str] | None:
         """The animation's attributes, or none if it has nowhere to move."""
-        times, points, curves = self._times, self._at, self._curves
+        times, points, curves = self._times, self._fraction, self._curves
         attributes = {
             # The deck begins it when its step shows.
             "begin": "indefinite",

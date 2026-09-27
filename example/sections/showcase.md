@@ -286,11 +286,11 @@ for y, label in [(2, "linear"), (1, "ease-in-out"), (0, "waits halfway")]:
         motion.timing(duration=2, easing="ease-in-out")
     else:
         # Waits half a second, goes halfway, waits again, and goes on.
-        motion.timing([0.5, 1, 1.5, 2], at=[0, 0.5, 0.5, 1], easing="ease-out")
+        motion.timing([0.5, 1, 1.5, 2], fraction=[0, 0.5, 0.5, 1], easing="ease-out")
 ~~~
 
-`.timing(duration=...)`, with an `easing=`, or with the times `t` it is `at` each
-fraction of the path: before `t[0]`, it waits.
+`.timing(duration=...)`, with an `easing=`, or with the times `t` it is each
+`fraction=` of the path: before `t[0]`, it waits.
 
 ---
 
