@@ -15,14 +15,14 @@ async function open(file) {
 	return until(() => vscode.workspace.notebookDocuments.find((notebook) => notebook.uri.fsPath === uri.fsPath));
 }
 
-/** The example's slide of figures, copied and rendered with the extension's slides-rs, so
- * that its outputs are saved as the deck saves them. */
-function renderedSlide() {
+/** One of the example's slides of figures, copied and rendered with the extension's
+ * slides-rs, so that its outputs are saved as the deck saves them. */
+function renderedSlide(name = 'slide2.md') {
 	const deck = path.join(process.env.SLIDES_DECK, 'rendered');
-	const file = path.join(deck, 'slide2.md');
+	const file = path.join(deck, name);
 	if (!fs.existsSync(file)) {
 		fs.mkdirSync(deck, { recursive: true });
-		fs.copyFileSync(path.join(repo, 'example', 'sections', 'slide2.md'), file);
+		fs.copyFileSync(path.join(repo, 'example', 'sections', name), file);
 		const slidesRs = path.join(repo, 'vscode', 'dist', 'slides-rs');
 		const render = spawnSync(slidesRs, [file], { encoding: 'utf8' });
 		assert.strictEqual(render.status, 0, render.stderr);
@@ -56,6 +56,51 @@ const tests = {
 		assert.ok(new TextDecoder().decode(code[1].outputs[0].items[0].data).startsWith('\n\n<svg'));
 		await until(() => !notebook.isDirty);
 		assert.ok(fs.readFileSync(file).equals(before), 'the file is written back as it was');
+		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+	},
+
+	async 'a deck opens with outputs larger than the module answers at once'() {
+		const deck = path.join(process.env.SLIDES_DECK, 'large');
+		fs.mkdirSync(deck, { recursive: true });
+		const file = path.join(deck, 'slide.md');
+		fs.writeFileSync(file, '~~~python\nprint("x" * 3_000_000)\n~~~\n');
+		const render = spawnSync(path.join(repo, 'vscode', 'dist', 'slides-rs'), [file], { encoding: 'utf8' });
+		assert.strictEqual(render.status, 0, render.stderr);
+		const notebook = await open(file);
+		await until(() => notebook.cellAt(0).outputs.length > 0);
+		assert.strictEqual(notebook.cellAt(0).outputs[0].items[0].data.length, 3_000_001);
+		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+	},
+
+	async 'outputs are read while the extension host is busy, as when a window opens'() {
+		const deck = path.join(process.env.SLIDES_DECK, 'busy');
+		fs.mkdirSync(deck, { recursive: true });
+		const files = [0, 1, 2, 3, 4, 5].map((n) => path.join(deck, `slide${n}.md`));
+		for (const [n, file] of files.entries()) {
+			fs.writeFileSync(file, `~~~python\nprint("${n}" * 40_000)\n~~~\n`);
+		}
+		for (const file of files) {
+			const render = spawnSync(path.join(repo, 'vscode', 'dist', 'slides-rs'), [file], { encoding: 'utf8' });
+			assert.strictEqual(render.status, 0, render.stderr);
+		}
+		// Other extensions starting up keep the host from handling the module's messages as
+		// they come, which is when it dropped the end of an answer.
+		let busy = true;
+		const block = () => {
+			const end = Date.now() + 30;
+			while (Date.now() < end) {}
+			if (busy) setTimeout(block, 1);
+		};
+		block();
+		try {
+			const notebooks = await Promise.all(files.map(open));
+			for (const notebook of notebooks) {
+				await until(() => notebook.cellAt(0).outputs.length > 0, 30000);
+				assert.strictEqual(notebook.cellAt(0).outputs[0].items[0].data.length, 40_001);
+			}
+		} finally {
+			busy = false;
+		}
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
 

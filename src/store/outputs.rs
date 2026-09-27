@@ -53,8 +53,16 @@ pub fn save(root: &Path, hash: &str, outputs: &[Output]) -> Result<PathBuf> {
             let partial = root.join(format!(".{name}.{}", uuid::Uuid::new_v4()));
             fs::write(&partial, &output.bytes)
                 .with_context(|| format!("could not write {}", partial.display()))?;
-            fs::rename(&partial, &path)
-                .with_context(|| format!("could not write {}", path.display()))?;
+            match fs::rename(&partial, &path) {
+                Ok(()) => {}
+                // Another save put it in place first, as VS Code's WASI, which
+                // does not replace a file when renaming, says: named by the
+                // hash of its contents, it holds the same bytes.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    fs::remove_file(&partial).ok();
+                }
+                Err(e) => return Err(e).context(format!("could not write {}", path.display())),
+            }
         }
         list.push_str(&name);
         list.push('\n');

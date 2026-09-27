@@ -10,7 +10,7 @@ const NOTEBOOK = 'slides-notebook';
 
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('Slides Notebook', { log: true });
-	const module = new Module(context.extensionUri, log);
+	const module = new Module(context.extensionUri, context.globalStorageUri, log);
 	const outputs = new Outputs(module, log);
 	context.subscriptions.push(
 		log,

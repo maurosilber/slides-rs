@@ -1,6 +1,8 @@
 // The Rust half of the extension, the deck's own code compiled to WASI: every
-// request runs it once, reading the request from a file and answering on
-// stdout, both in JSON.
+// request runs it once, reading the request from a file and writing the answer
+// to another, both in JSON. Not on stdout, as vscode-wasm drops what is still
+// queued there when the process exits, which a busy extension host can leave
+// the whole answer.
 
 import * as vscode from 'vscode';
 import { MountPointDescriptor, Wasm } from '@vscode/wasm-wasi/v1';
@@ -13,6 +15,9 @@ const MEMORY: WebAssembly.MemoryDescriptor = { initial: 256, maximum: 16384, sha
 /** Where the request is, in a file system of its own. */
 const IO = '/io';
 const REQUEST = 'request.json';
+
+/** Where the answers are written, in the extension's storage. */
+const ANSWERS = '/answers';
 
 /** Where the disk holding a notebook's file is mounted. */
 const DISK = '/fs';
@@ -48,11 +53,16 @@ interface Place {
 
 export class Module {
 	private loading: Promise<{ wasm: Wasm; module: WebAssembly.Module }> | undefined;
+	/** The directory the answers are written in, and read from once the module exits. */
+	private readonly answers: vscode.Uri;
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
+		storageUri: vscode.Uri,
 		private readonly log: vscode.LogOutputChannel,
-	) {}
+	) {
+		this.answers = vscode.Uri.joinPath(storageUri, 'answers');
+	}
 
 	/** The cells of a markdown file. */
 	cells(markdown: string): Promise<Cell[]> {
@@ -78,29 +88,39 @@ export class Module {
 		const { wasm, module } = await this.module();
 		const io = await wasm.createMemoryFileSystem();
 		io.createFile(REQUEST, new TextEncoder().encode(JSON.stringify(request)));
+		const name = `${crypto.randomUUID()}.json`;
 		const process = await wasm.createProcess('slides-notebook', module, MEMORY, {
-			args: [`${IO}/${REQUEST}`],
+			args: [`${IO}/${REQUEST}`, `${ANSWERS}/${name}`],
+			// What it warns of may lose its end, as stdout would.
 			stdio: { out: { kind: 'pipeOut' }, err: { kind: 'pipeOut' } },
-			mountPoints: [{ kind: 'memoryFileSystem', fileSystem: io, mountPoint: IO }, ...mountPoints],
+			mountPoints: [
+				{ kind: 'memoryFileSystem', fileSystem: io, mountPoint: IO },
+				{ kind: 'vscodeFileSystem', uri: this.answers, mountPoint: ANSWERS },
+				...mountPoints,
+			],
 		});
-		const stdout: Uint8Array[] = [];
 		const stderr: Uint8Array[] = [];
-		process.stdout!.onData((data) => stdout.push(data));
 		process.stderr!.onData((data) => stderr.push(data));
-		const code = await process.run();
-		const errors = decode(stderr).trim();
-		if (errors) {
-			this.log.warn(errors);
+		const answer = vscode.Uri.joinPath(this.answers, name);
+		try {
+			const code = await process.run();
+			const errors = decode(stderr).trim();
+			if (errors) {
+				this.log.warn(errors);
+			}
+			if (code !== 0) {
+				throw new Error(errors || `slides-notebook exited with ${code}`);
+			}
+			return JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(answer))) as T;
+		} finally {
+			void Promise.resolve(vscode.workspace.fs.delete(answer)).catch(() => {});
 		}
-		if (code !== 0) {
-			throw new Error(errors || `slides-notebook exited with ${code}`);
-		}
-		return JSON.parse(decode(stdout)) as T;
 	}
 
 	/** The module, compiled the first time it is needed. */
 	private module(): Promise<{ wasm: Wasm; module: WebAssembly.Module }> {
 		this.loading ??= (async () => {
+			await vscode.workspace.fs.createDirectory(this.answers);
 			const wasm = await Wasm.load();
 			const module = await wasm.compile(vscode.Uri.joinPath(this.extensionUri, 'dist', 'slides-notebook.wasm'));
 			return { wasm, module };

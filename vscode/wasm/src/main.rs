@@ -1,11 +1,10 @@
 //! The part of the VS Code extension that is shared with the deck, run as a
-//! WASI command: it reads a request from the file named by its argument and
-//! writes the response to stdout, both in JSON.
+//! WASI command: it reads a request from the file named by its first argument
+//! and writes the answer to the file named by its second, both in JSON. Not
+//! to stdout, whose last chunk VS Code's WASI can drop when the process exits.
 
 mod notebook;
 mod outputs;
-
-use std::io::Write;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -39,12 +38,13 @@ fn respond(request: Request) -> Result<serde_json::Value> {
 }
 
 fn main() -> Result<()> {
-    let path = std::env::args().nth(1).context("no request given")?;
+    let mut args = std::env::args().skip(1);
+    let path = args.next().context("no request given")?;
+    let answer = args.next().context("no file given for the answer")?;
     let request = std::fs::read(&path).with_context(|| format!("could not read {path}"))?;
     let request: Request = serde_json::from_slice(&request).context("invalid request")?;
-    let response = respond(request)?;
-    let mut stdout = std::io::stdout().lock();
-    serde_json::to_writer(&mut stdout, &response)?;
-    stdout.flush()?;
+    let response = serde_json::to_vec(&respond(request)?)?;
+    // In one write, as VS Code's WASI writes the whole file on each.
+    std::fs::write(&answer, response).with_context(|| format!("could not write {answer}"))?;
     Ok(())
 }
