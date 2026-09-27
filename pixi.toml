@@ -5,6 +5,7 @@ platforms = ["osx-arm64"]
 [environments]
 default = ["rust", "python"]
 python = ["python"]
+vscode = ["rust", "vscode"]
 
 [feature.rust.dependencies]
 rust = "*"
@@ -16,3 +17,16 @@ python = "*"
 matplotlib = "*"
 ipykernel = "*"
 xeus-python = "*"
+
+[feature.vscode.dependencies]
+nodejs = "*"
+rust-std-wasm32-wasip1-threads = "*"
+
+[feature.vscode.tasks]
+vscode-deps = { cmd = "npm install", cwd = "vscode" }
+vscode-build = { cmd = "npm run build", cwd = "vscode", depends-on = ["vscode-deps"] }
+vscode-dev = { cmd = "\"$VSCODE\" --extensionDevelopmentPath=\"$PIXI_PROJECT_ROOT/vscode\" \"$PIXI_PROJECT_ROOT/example\"", depends-on = ["vscode-build"], description = "Open the example deck in a VS Code window running the extension" }
+vscode-install = { cmd = "npm run package -- --out slides-notebook.vsix && \"$VSCODE\" --install-extension slides-notebook.vsix --force", cwd = "vscode", depends-on = ["vscode-build"], description = "Package the extension and install it in VS Code" }
+
+[feature.vscode.activation.env]
+VSCODE = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"

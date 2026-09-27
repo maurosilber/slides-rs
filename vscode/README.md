@@ -32,15 +32,16 @@ so the next `slides-rs` render runs the cell again.
 ## Build
 
 The Rust half builds for `wasm32-wasip1-threads`, which vscode-wasm runs and
-conda-forge packages. From this directory:
+conda-forge packages. The `vscode` pixi environment has both halves' tools:
 
 ```sh
-pixi exec -s nodejs -s rust -s rust-std-wasm32-wasip1-threads -s sccache -- npm install
-pixi exec -s nodejs -s rust -s rust-std-wasm32-wasip1-threads -s sccache -- npm run build
+pixi run vscode-build    # npm install, then build into dist
+pixi run vscode-dev      # open the example deck in a window running the extension
+pixi run vscode-install  # package a .vsix and install it in VS Code
 ```
 
-Then press F5 in VS Code with this folder open, or run `npm run package` for
-a `.vsix`. The extension depends on
+The tasks call the `code` CLI in `/Applications/Visual Studio Code.app`. The
+extension depends on
 [WASM WASI Core](https://marketplace.visualstudio.com/items?itemName=ms-vscode.wasm-wasi-core),
 which VS Code installs along with it.
 

@@ -60,7 +60,7 @@
 		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap",
 		"build": "npm run build:wasm && npm run build:ts",
 		"test": "node test/run.mjs",
-		"package": "vsce package --no-dependencies"
+		"package": "vsce package --no-dependencies --no-rewrite-relative-links"
 	},
 	"dependencies": {
 		"@vscode/wasm-wasi": "^1.0.1"
