@@ -112,8 +112,10 @@ function stepsOf(slide) {
 const ANIMATIONS = "[begin=indefinite], [data-begin=indefinite]";
 
 // How many seconds an animation still playing takes, sped up, to get where it
-// is going, when another begins.
-const RUSH = 0.2;
+// is going, when another begins: as the frontmatter's `figures.rush` says, which
+// the page's root has, or else 0.2. Taking none, it takes a moment still, as an
+// animation cannot last none.
+const RUSH = Math.max(Number(globalThis.document?.documentElement.dataset.rush ?? 0.2), 0.001);
 
 // How each animation the deck plays, a copy of one as written, plays: the one
 // as written, to begin when asked, how long it lasts and how long each time it

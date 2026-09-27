@@ -165,17 +165,22 @@ fn is_imported(name: &str, theme: Option<&str>) -> bool {
 
 /// The attributes of the page's root, which slides.css reads, so that the
 /// frontmatter comes before the theme: the shape of the slides, and whether
-/// figures are shown as drawn or step without fading.
+/// figures are shown as drawn or step without fading, and, for steps.js, how
+/// long an animation takes to rush where it is going.
 fn root_attributes(settings: &PageSettings) -> String {
     let mut attributes = String::new();
     if let Some(ratio) = settings.aspect_ratio {
         attributes.push_str(&format!(" style=\"{}\"", escape(&ratio.css())));
     }
-    if settings.invert_figures == Some(false) {
+    let figures = &settings.figures;
+    if figures.invert == Some(false) {
         attributes.push_str(" data-invert-figures=\"false\"");
     }
-    if settings.fade_figures == Some(false) {
+    if figures.fade == Some(false) {
         attributes.push_str(" data-fade-figures=\"false\"");
+    }
+    if let Some(rush) = figures.rush {
+        attributes.push_str(&format!(" data-rush=\"{rush}\""));
     }
     attributes
 }
@@ -578,19 +583,20 @@ mod tests {
     }
 
     #[test]
-    fn figures_can_be_shown_as_drawn_and_without_fading() {
+    fn figures_can_be_shown_as_drawn_without_fading_and_rush_as_long_as_said() {
+        use crate::markdown::FigureSettings;
         let output = Path::new("index.html");
-        let html = |invert_figures, fade_figures| {
+        let html = |invert, fade, rush| {
             let settings = PageSettings {
-                invert_figures,
-                fade_figures,
+                figures: FigureSettings { invert, fade, rush },
                 ..PageSettings::default()
             };
             page("", &settings, output, false)
         };
-        assert!(html(None, Some(true)).starts_with("<!DOCTYPE html>\n<html>\n"));
-        let both = "<html data-invert-figures=\"false\" data-fade-figures=\"false\">";
-        assert!(html(Some(false), Some(false)).contains(both));
+        assert!(html(None, Some(true), None).starts_with("<!DOCTYPE html>\n<html>\n"));
+        let all =
+            "<html data-invert-figures=\"false\" data-fade-figures=\"false\" data-rush=\"0.5\">";
+        assert!(html(Some(false), Some(false), Some(0.5)).contains(all));
     }
 
     #[test]

@@ -175,9 +175,8 @@ pub fn render(markdown: &str, path: &Path) -> File {
         lock,
         page: PageSettings {
             aspect_ratio: frontmatter.aspect_ratio(path),
+            figures: frontmatter.figures(path),
             theme: frontmatter.theme,
-            invert_figures: frontmatter.invert_figures,
-            fade_figures: frontmatter.fade_figures,
         },
         steps: frontmatter.steps,
     }
@@ -252,12 +251,23 @@ pub struct PageSettings {
     pub theme: Option<String>,
     /// The shape the slides keep.
     pub aspect_ratio: Option<AspectRatio>,
+    /// How figures are shown, and step.
+    pub figures: FigureSettings,
+}
+
+/// What the frontmatter's `figures` sets.
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+#[serde(default)]
+pub struct FigureSettings {
     /// Whether figures are shown as the theme filters them, as a dark theme
     /// inverts them, rather than as they were drawn. Unset, they are.
-    pub invert_figures: Option<bool>,
+    pub invert: Option<bool>,
     /// Whether the steps inside figures fade, as the others do, rather than
     /// show at once. Unset, they do.
-    pub fade_figures: Option<bool>,
+    pub fade: Option<bool>,
+    /// How many seconds an animation still playing takes, sped up, to get
+    /// where it is going when the next one begins. Unset, the deck's own.
+    pub rush: Option<f64>,
 }
 
 /// What a file's frontmatter sets. Keys the deck does not read are ignored,
@@ -269,10 +279,7 @@ struct Frontmatter {
     /// The shape of the slides.
     #[serde(rename = "aspect-ratio")]
     aspect_ratio: Option<aspect::Written>,
-    #[serde(rename = "invert-figures")]
-    invert_figures: Option<bool>,
-    #[serde(rename = "fade-figures")]
-    fade_figures: Option<bool>,
+    figures: FigureSettings,
     /// Whether to step through the file's slides, and those of the files it
     /// imports that do not say. Unset, they are stepped through.
     steps: Option<bool>,
@@ -303,6 +310,22 @@ impl Frontmatter {
             );
         }
         ratio
+    }
+
+    /// How figures are shown and step, with a time to rush in that is not
+    /// one, as a negative number of seconds, reported and left out.
+    fn figures(&self, path: &Path) -> FigureSettings {
+        let mut figures = self.figures.clone();
+        if let Some(rush) = figures.rush
+            && !(rush.is_finite() && rush >= 0.0)
+        {
+            eprintln!(
+                "{}: figures.rush {rush} is not a number of seconds",
+                path.display()
+            );
+            figures.rush = None;
+        }
+        figures
     }
 }
 
@@ -379,15 +402,21 @@ mod tests {
     }
 
     #[test]
-    fn figures_can_be_shown_as_drawn_and_without_fading() {
-        let file = |markdown| render(markdown, Path::new("slides.md")).page;
-        let set = file("---\ninvert-figures: false\nfade-figures: false\n---\n# Slide\n");
+    fn figures_can_be_shown_as_drawn_without_fading_and_rush_as_long_as_said() {
+        let figures = |markdown| render(markdown, Path::new("slides.md")).page.figures;
+        let set =
+            figures("---\nfigures:\n  invert: false\n  fade: false\n  rush: 0.5\n---\n# Slide\n");
         assert_eq!(
-            (set.invert_figures, set.fade_figures),
-            (Some(false), Some(false))
+            set,
+            FigureSettings {
+                invert: Some(false),
+                fade: Some(false),
+                rush: Some(0.5),
+            }
         );
-        let unset = file("# Slide\n");
-        assert_eq!((unset.invert_figures, unset.fade_figures), (None, None));
+        assert_eq!(figures("# Slide\n"), FigureSettings::default());
+        assert_eq!(figures("---\nfigures:\n  rush: 1\n---\n").rush, Some(1.0));
+        assert_eq!(figures("---\nfigures:\n  rush: -1\n---\n").rush, None);
     }
 
     #[test]

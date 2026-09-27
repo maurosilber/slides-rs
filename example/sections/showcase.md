@@ -358,8 +358,10 @@ its end, as the next begins, and stepping back plays it backward.
 theme: dark           # light, paper, projector
 aspect-ratio: 16:9    # 4:3, 1.6, none to fill
 steps: false          # this file all at once
-invert-figures: false # figures as drawn
-fade-figures: false   # figures step at once
+figures:
+  invert: false       # as drawn
+  fade: false         # steps at once
+  rush: 0.5           # seconds to finish an animation cut short
 ---
 ```
 

@@ -114,8 +114,8 @@ section::after {
 /* Figures, as a theme filters them, are redrawn through its filter while a
    step inside them fades, which shifts their thin lines, as the spines of
    matplotlib's axes, until it is done. The frontmatter can show figures as
-   they were drawn, with `invert-figures: false`, which suits figures drawn
-   for the theme, or step inside them at once, with `fade-figures: false`. */
+   they were drawn, with `figures: { invert: false }`, which suits figures
+   drawn for the theme, or step inside them at once, with `fade: false`. */
 :root[data-invert-figures="false"] {
     --figure-filter: none;
 }
