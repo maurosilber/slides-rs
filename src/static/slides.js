@@ -128,6 +128,13 @@ function wrapColumns(slide) {
 let slideSteps = [];
 addEventListener("DOMContentLoaded", () => {
     slideSteps = [...slides].map(stepsOf);
+    // slides.css shows and hides them, as `step-hidden` says.
+    for (const { elements } of slideSteps) {
+        for (const { element, collapse } of elements) {
+            element.classList.add("step");
+            if (collapse) element.classList.add("step-collapse");
+        }
+    }
     for (const slide of slides) wrapColumns(slide);
     updateSlide(...positionFromHash());
 });
@@ -150,31 +157,25 @@ function showPosition() {
     history.replaceState(null, "", "#" + (currentSlide + 1) + "." + currentStep);
 }
 
+// A slide opens as its step is, without the transitions of stepping to it,
+// which would bring in at once all it shows.
 function updateSlide(i, step = 1) {
     if (i < 0 || i >= slides.length) return;
+    const slide = slides[i];
+    slide.classList.add("steps-instant");
     slides[currentSlide].style.display = "none";
-    slides[i].style.display = "block";
+    slide.style.display = "block";
     currentSlide = i;
     currentStep = Math.max(1, Math.min(step, slideSteps[i].count));
     showStep(currentStep);
+    // Laid out before the transitions come back, so that none of them runs.
+    slide.getBoundingClientRect();
+    slide.classList.remove("steps-instant");
     showPosition();
 }
 
-// Takes the element out of the layout, or puts it back. Math keeps the space
-// between its last atom and the next one inside it, as KaTeX places it, which
-// belongs between whatever shows before and that next one, so it stays.
-function setCollapsed(element, hidden) {
-    const space = element.lastElementChild;
-    if (element.dataset.step === undefined || !space?.classList.contains("mspace")) {
-        element.style.display = hidden ? "none" : "";
-        return;
-    }
-    for (const child of element.children) {
-        if (child != space) child.style.display = hidden ? "none" : "";
-    }
-}
-
-// Hidden, an element keeps its space, so the columns keep their place, unless
+// Marks each element hidden or shown for the step, which slides.css lays out:
+// hidden, an element keeps its space, so the columns keep their place, unless
 // it collapses, when it takes none, so another can show in its place.
 // Disabled, every element shows, even those whose steps are over.
 // currentStep is tracked even while disabled, so re-enabling resumes here.
@@ -182,10 +183,9 @@ function showStep(i) {
     const { count, elements } = slideSteps[currentSlide];
     if (i < 1 || i > count) return false;
     currentStep = i;
-    for (const { element, from, to, collapse } of elements) {
+    for (const { element, from, to } of elements) {
         const shown = !stepsEnabled || (from <= i && i < to);
-        if (collapse) setCollapsed(element, !shown);
-        else element.style.visibility = shown ? "visible" : "hidden";
+        element.classList.toggle("step-hidden", !shown);
     }
     showPosition();
     return true;

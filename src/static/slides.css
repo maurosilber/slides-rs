@@ -16,3 +16,58 @@ section {
         break-before: column;
     }
 }
+
+/* Steps. slides.js marks each element that steps with `step`, those that
+   take no space while hidden with `step-collapse`, and those hidden at the
+   current step with `step-hidden`.
+
+   Stepping fades them, as long as `--step-duration` says, easing as
+   `--step-easing` says, which a theme or a stylesheet of its own can set,
+   on the whole deck or on any element: `--step-duration: 0s` steps without
+   a transition. A stylesheet can also restyle `.step-hidden` and `.step`
+   for an effect of its own. Opening a slide, or jumping to a step, is
+   instant. */
+:root {
+    --step-duration: 0.25s;
+    --step-easing: ease-out;
+}
+
+/* A step fades out and in, and is hidden once it has faded out, keeping
+   its space. */
+.step {
+    transition:
+        opacity var(--step-duration) var(--step-easing),
+        visibility var(--step-duration) var(--step-easing);
+}
+
+.step-hidden {
+    opacity: 0;
+    visibility: hidden;
+}
+
+/* One that collapses goes at once, so that the one that takes its place does
+   not have to wait for it, and fades in. */
+.step-collapse.step-hidden:not([data-step]) {
+    display: none;
+}
+
+/* Math keeps the space between the step's last atom and the next one inside
+   the step, where KaTeX places it, but it belongs between whatever shows
+   before the step and that next one, so it stays. */
+.step-collapse.step-hidden[data-step] > :not(.mspace:last-child) {
+    display: none;
+}
+
+@starting-style {
+    .step-collapse:not(.step-hidden) {
+        opacity: 0;
+    }
+}
+
+.step-collapse.step-hidden[data-step] {
+    transition: none;
+}
+
+.steps-instant .step {
+    transition: none;
+}
