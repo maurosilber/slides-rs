@@ -1,43 +1,46 @@
-"""Artists that move along the path of another, as a step of a slides-rs deck.
+"""Artists that move along the path of another, in the steps of a slides-rs deck.
 
 matplotlib has no animation of its own in an SVG, so a :class:`Motion` draws
-its artist inside an ``<animateMotion>`` that follows the path of another
-artist, such as a line from ``plot``, by an ``<mpath>``. The deck plays it when
-its step shows, and starts it over when its step is hidden again::
+its artist with an ``<animateMotion>`` that follows the path of another artist,
+such as a line from ``plot``, by an ``<mpath>``. The deck plays it when its
+step shows, and starts it over when its step is hidden again::
 
     from slides_rs import Motion, Step
 
     (line,) = plt.plot(x, y)
-    (dot,) = plt.plot(x[0], y[0], "o")
-    Motion(dot, along=line, step=Step(2), duration=2)
+    (dot,) = plt.plot(x[0], y[0], "o", gid=Step(1))
+    Motion(dot, along=line).starts(Step(2)).timing(duration=2).repeat()
 """
 
 from __future__ import annotations
 
-import dataclasses
+import numbers
+from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
 from matplotlib.artist import Artist
 from matplotlib.backends.backend_svg import RendererSVG
+from matplotlib.path import Path
 from matplotlib.transforms import Affine2D
 
 __all__ = ["Motion"]
 
 #: The easings CSS names, as the cubic Bézier curves an SVG animation takes.
 EASINGS = {
+    "linear": (0.0, 0.0, 1.0, 1.0),
     "ease": (0.25, 0.1, 0.25, 1.0),
     "ease-in": (0.42, 0.0, 1.0, 1.0),
     "ease-out": (0.0, 0.0, 0.58, 1.0),
     "ease-in-out": (0.42, 0.0, 0.58, 1.0),
 }
 
-Easing = Literal["linear", "ease", "ease-in", "ease-out", "ease-in-out"] | tuple[float, float, float, float]
+Curve = tuple[float, float, float, float]
+Easing = Literal["linear", "ease", "ease-in", "ease-out", "ease-in-out"] | Curve
 
 
-@dataclasses.dataclass(eq=False)
 class Motion:
-    """Moves ``artist`` along the path of ``along`` when ``step`` shows.
+    """Moves ``artist`` along the path of ``along``, as its methods set.
 
     Draw ``artist`` where the path of ``along`` starts: it moves as the path
     does from there. ``along`` is any artist drawn as a path, such as the line
@@ -46,36 +49,131 @@ class Motion:
     which slides-rs reads: the SVG matplotlib saves has no path by that name,
     and does not move it. Hidden, it has no path to follow either.
 
-    ``step`` is when it shows and moves, as a :class:`~slides_rs.Step` or its
-    string; without one, it moves when the slide opens. It takes ``duration``
-    seconds, at the pace ``easing`` says, which is ``"linear"``, one of the
-    easings CSS names, or the control points of a cubic Bézier curve, as
-    ``cubic-bezier()`` takes them. ``rotate`` turns it along the path, as
-    ``"auto"``, or ``"auto-reverse"``, or by a fixed angle in degrees. It moves
-    ``repeat`` times, or ``"indefinite"``ly, and, if ``freeze``, stays at the
-    end.
+    The artist shows in the step its own ``gid`` says, as any artist does, and
+    moves once it shows, or from the step :meth:`starts` says. It takes a
+    second, at an even pace, as :meth:`timing` changes, and moves once, as
+    :meth:`repeat` changes, staying at the end, as :meth:`hold` changes. Each
+    method returns the motion, for the next one::
+
+        Motion(dot, along=line).starts(Step(2)).timing(t).rotate("auto")
 
     Only an SVG in a deck moves it: drawn otherwise, as in a PNG, it stays
-    where it is.
-    Settings changed after it is made take effect the next time it is drawn.
+    where it is. What changes after it is made takes effect the next time it
+    is drawn.
     """
 
-    artist: Artist = dataclasses.field(repr=False)
-    along: Artist = dataclasses.field(repr=False)
-    step: str | None = None
-    duration: float = 1.0
-    easing: Easing = "linear"
-    rotate: Literal["auto", "auto-reverse"] | float | None = None
-    repeat: int | float | Literal["indefinite"] = 1
-    freeze: bool = True
-
-    def __post_init__(self):
-        self._attributes()  # Checks the settings, before a figure fails to save.
+    def __init__(self, artist: Artist, along: Artist):
+        self.artist = artist
+        self.along = along
+        self._step: str | None = None
+        self._times = np.array([0.0, 1.0])
+        self._at: np.ndarray | Literal["vertices"] | None = None
+        self._curves: list[Curve] | Literal["discrete"] = [EASINGS["linear"]]
+        self._rotate: str | None = None
+        self._repeat: dict[str, str] = {}
+        self._fill = "freeze"
         # The artist draws itself through the motion, where the axes draw it, and the
         # path it follows with its name.
-        self._draws = {artist: artist.__dict__.get("draw") for artist in (self.artist, self.along)}
-        self.artist.draw = self._draw_moving
-        self.along.draw = self._draw_named
+        self._draws = {artist: artist.__dict__.get("draw") for artist in (artist, along)}
+        artist.draw = self._draw_moving
+        along.draw = self._draw_named
+
+    def __repr__(self):
+        return f"Motion({self.artist!r}, along={self.along!r})"
+
+    def starts(self, step: str | None) -> Motion:
+        """Moves from ``step``, a :class:`~slides_rs.Step` or its string, rather than
+        once the artist shows. Hidden again, as when a range ends, it starts over.
+        """
+        self._step = None if step is None else str(step)
+        return self
+
+    def timing(
+        self,
+        t: Sequence[float] | np.ndarray | None = None,
+        *,
+        duration: float | None = None,
+        at: Sequence[float] | np.ndarray | None = None,
+        easing: Easing | Sequence[Easing] | Literal["discrete"] = "linear",
+    ) -> Motion:
+        """When it is where along the path.
+
+        With a ``duration`` alone, it takes that many seconds from the start of
+        the path to its end. With ``t``, it is ``at`` each fraction of the way
+        along the path at each time ``t``, in seconds, or else at each vertex
+        of ``along``, drawn as a line, at each time ``t``: a line plotted from
+        ``x(t), y(t)`` is followed as it was plotted. It takes ``t[-1]``
+        seconds, and waits where it starts up to ``t[0]``.
+
+        Between them, it goes at the pace ``easing`` says, for every interval
+        or for each: ``"linear"``, one of the easings CSS names, or the control
+        points of a cubic Bézier curve, as ``cubic-bezier()`` takes them. Or,
+        ``"discrete"``, it jumps from each to the next.
+        """
+        if (t is None) == (duration is None):
+            raise ValueError("the timing takes either the times t or a duration")
+        if t is None:
+            if at is not None:
+                raise ValueError("where it is at is at the times t, which a duration has none of")
+            times = np.array([0.0, duration], dtype=float)
+        else:
+            times = np.asarray(t, dtype=float)
+        if times.ndim != 1 or len(times) < 2 or not np.isfinite(times).all():
+            raise ValueError(f"the times must be two or more numbers, not {t!r}")
+        if not (times[0] >= 0 and (np.diff(times) >= 0).all() and times[-1] > 0):
+            raise ValueError(f"the times must go on from 0 and end after it, not {times!r}")
+        if at is not None:
+            points = np.asarray(at, dtype=float)
+            if points.shape != times.shape:
+                raise ValueError(f"it takes where it is at at each of the {len(times)} times, not {len(points)}")
+            if not ((0 <= points) & (points <= 1)).all():
+                raise ValueError(f"where it is at is a fraction of the path, from 0 to 1, not {points!r}")
+        elif t is not None:
+            points = "vertices"
+            self._progress(times)  # Checks the line has as many vertices, before a figure fails to save.
+        else:
+            points = None
+        self._times, self._at = times, points
+        self._curves = _curves(easing, len(times) - 1)
+        return self
+
+    def rotate(self, angle: Literal["auto", "auto-reverse"] | float | None) -> Motion:
+        """Turns it along the path, as ``"auto"`` or ``"auto-reverse"``, or by a fixed
+        ``angle`` in degrees, or, with ``None``, not."""
+        if not (angle is None or angle in ("auto", "auto-reverse") or _real(angle)):
+            raise ValueError(f"rotate takes auto, auto-reverse or an angle, not {angle!r}")
+        self._rotate = angle if angle is None or isinstance(angle, str) else _number(angle)
+        return self
+
+    def repeat(
+        self,
+        count: float | Literal["indefinite"] = "indefinite",
+        *,
+        seconds: float | None = None,
+        accumulate: bool = False,
+    ) -> Motion:
+        """Moves ``count`` times, or on and on, for ``seconds`` at most if given.
+
+        With ``accumulate``, each time moves on from where the last one ended,
+        rather than from the start, as along a path that is one of many alike.
+        """
+        if not (count == "indefinite" or (_real(count) and count > 0)):
+            raise ValueError(f"repeat takes a positive number of times or indefinite, not {count!r}")
+        if not (seconds is None or (_real(seconds) and seconds > 0)):
+            raise ValueError(f"repeat takes a positive number of seconds, not {seconds!r}")
+        self._repeat = {}
+        if count != 1:
+            self._repeat["repeatCount"] = count if isinstance(count, str) else _number(count)
+        if seconds is not None:
+            self._repeat["repeatDur"] = f"{_number(seconds)}s"
+        if accumulate:
+            self._repeat["accumulate"] = "sum"
+        return self
+
+    def hold(self, hold: bool = True) -> Motion:
+        """Stays at the end, once it has moved, or, if not ``hold``, goes back to the start."""
+        self._fill = "freeze" if hold else "remove"
+        return self
 
     def remove(self):
         """Draws the artist where it is again."""
@@ -108,61 +206,142 @@ class Motion:
 
     def _draw_moving(self, renderer):
         svg = getattr(renderer, "_renderer", renderer)
-        start = self._start(svg) if isinstance(svg, RendererSVG) and self.artist.get_visible() and self.along.get_visible() else None
-        if start is None:
+        moves = isinstance(svg, RendererSVG) and self.artist.get_visible() and self.along.get_visible()
+        start = self._start(svg) if moves else None
+        attributes = self._attributes(svg) if start is not None else None
+        if attributes is None:
             return self._draw_original(self.artist, renderer)
         writer = svg.writer
+        moving = f"motion-{id(self):x}"
+        # The artist's step is the whole motion's, that it moves in once it shows.
+        gid = self.artist.get_gid()
+        renderer.open_group("motion", gid=gid)
         # The motion moves and turns the artist, drawn at the start of the path, as
         # from the origin. It is on a group of its own, as how it adds to a transform
         # differs across browsers.
-        renderer.open_group("motion", gid=self.step and str(self.step))
-        writer.start("g")
-        writer.start("animateMotion", attrib=self._attributes())
+        writer.start("g", id=moving)
+        writer.start("g", transform=f"translate({_number(-start[0])} {_number(-start[1])})")
+        self.artist.set_gid(None)
+        try:
+            self._draw_original(self.artist, renderer)
+        finally:
+            self.artist.set_gid(gid)
+        writer.end("g")
+        writer.end("g")
+        # The animation is apart from what it moves, in a group of the step it starts
+        # in: the deck starts it over by replacing it, and steps through the group.
+        if self._step is not None:
+            writer.start("g", id=self._step)
+        writer.start("animateMotion", attrib={"xlink:href": f"#{moving}", **attributes})
         writer.element("mpath", attrib={"xlink:href": f"#{self._name}"})
         writer.end("animateMotion")
-        writer.start("g", transform=f"translate({_number(-start[0])} {_number(-start[1])})")
-        self._draw_original(self.artist, renderer)
-        writer.end("g")
-        writer.end("g")
+        if self._step is not None:
+            writer.end("g")
         renderer.close_group("motion")
+
+    def _points(self, svg: RendererSVG | None) -> tuple[Path, np.ndarray]:
+        """The path of ``along``, and its vertices as the SVG renderer draws them: in
+        points, from the top."""
+        path = self.along.get_path()
+        transform = self.along.get_transform()
+        if svg is not None:
+            transform = transform + Affine2D().scale(1, -1).translate(0, svg.height)
+        return path, transform.transform(path.vertices) if len(path.vertices) else path.vertices
 
     def _start(self, svg: RendererSVG):
         """Where the path of ``along`` starts in the SVG, if it has a start."""
-        vertices = self.along.get_path().vertices
-        # As the SVG renderer draws it: in points, from the top.
-        transform = self.along.get_transform() + Affine2D().scale(1, -1).translate(0, svg.height)
-        points = transform.transform(vertices) if len(vertices) else vertices
+        _, points = self._points(svg)
         finite = points[np.isfinite(points).all(axis=1)] if len(points) else points
         return finite[0] if len(finite) else None
 
-    def _attributes(self) -> dict[str, str]:
-        if not self.duration > 0:
-            raise ValueError(f"the duration must be positive, not {self.duration!r}")
+    def _progress(self, times: np.ndarray) -> np.ndarray | None:
+        """How far along the line each of its vertices is, from 0 to 1, if it has a length,
+        as the SVG draws it: in proportion to the figure's, as any drawing of it."""
+        if getattr(self.along, "get_drawstyle", lambda: "default")() != "default":
+            raise ValueError("it takes a time at each vertex of a line drawn straight, not in steps: give where it is at")
+        path, points = self._points(None)
+        codes = path.codes
+        if codes is not None and not np.isin(codes, [Path.MOVETO, Path.LINETO]).all():
+            raise ValueError("it takes a time at each vertex of a line, not of curves: give where it is at")
+        if len(points) != len(times):
+            raise ValueError(f"it takes a time at each of the {len(points)} vertices of the line, not {len(times)}")
+        lengths = np.hypot(*np.diff(points, axis=0).T)
+        # A gap in the line, where it moves or is not a number, takes it no further.
+        lengths[~np.isfinite(lengths)] = 0
+        if codes is not None:
+            lengths[codes[1:] == Path.MOVETO] = 0
+        distance = np.concatenate([[0], np.cumsum(lengths)])
+        return distance / distance[-1] if distance[-1] > 0 else None
+
+    def _attributes(self, svg: RendererSVG) -> dict[str, str] | None:
+        """The animation's attributes, or none if it has nowhere to move."""
+        times, points, curves = self._times, self._at, self._curves
         attributes = {
             # The deck begins it when its step shows.
             "begin": "indefinite",
-            "dur": f"{_number(self.duration)}s",
-            "fill": "freeze" if self.freeze else "remove",
+            "dur": f"{_number(times[-1])}s",
+            "fill": self._fill,
         }
-        if self.easing != "linear":
-            curve = EASINGS.get(self.easing, self.easing) if isinstance(self.easing, str) else self.easing
-            if isinstance(curve, str) or len(curve) != 4 or not all(0 <= curve[i] <= 1 for i in (0, 2)):
-                raise ValueError(f"the easing must be linear, one of {list(EASINGS)}, or a cubic Bézier curve, not {self.easing!r}")
+        if points is None and curves == [EASINGS["linear"]]:
+            pass  # At an even pace along the path, as it moves by default.
+        else:
+            if points is None:
+                points = np.array([0.0, 1.0])
+            elif isinstance(points, str):
+                points = self._progress(times)
+                if points is None:
+                    return None
+            if times[0] > 0:
+                # It waits at the start, up to the first time.
+                times, points = np.concatenate([[0], times]), np.concatenate([points[:1], points])
+                if curves != "discrete":
+                    curves = [EASINGS["linear"], *curves]
             attributes |= {
-                "calcMode": "spline",
-                "keyPoints": "0;1",
-                "keyTimes": "0;1",
-                "keySplines": " ".join(_number(value) for value in curve),
+                "keyTimes": ";".join(_number(time) for time in times / times[-1]),
+                "keyPoints": ";".join(_number(point) for point in points),
             }
-        if self.rotate is not None:
-            if not (self.rotate in ("auto", "auto-reverse") or isinstance(self.rotate, (int, float))):
-                raise ValueError(f"rotate must be auto, auto-reverse or an angle, not {self.rotate!r}")
-            attributes["rotate"] = self.rotate if isinstance(self.rotate, str) else _number(self.rotate)
-        if self.repeat != 1:
-            if not (self.repeat == "indefinite" or (isinstance(self.repeat, (int, float)) and self.repeat > 0)):
-                raise ValueError(f"repeat must be a positive number of times or indefinite, not {self.repeat!r}")
-            attributes["repeatCount"] = self.repeat if isinstance(self.repeat, str) else _number(self.repeat)
-        return attributes
+            if curves == "discrete":
+                attributes["calcMode"] = "discrete"
+            elif all(curve == EASINGS["linear"] for curve in curves):
+                attributes["calcMode"] = "linear"
+            else:
+                attributes["calcMode"] = "spline"
+                attributes["keySplines"] = ";".join(" ".join(_number(value) for value in curve) for curve in curves)
+        if self._rotate is not None:
+            attributes["rotate"] = self._rotate
+        return attributes | self._repeat
+
+
+def _real(value) -> bool:
+    return isinstance(value, numbers.Real) and not isinstance(value, bool) and np.isfinite(value)
+
+
+def _curve(easing) -> Curve | None:
+    """The cubic Bézier curve an easing is, if it is one."""
+    if isinstance(easing, str):
+        return EASINGS.get(easing)
+    if isinstance(easing, (tuple, list, np.ndarray)) and len(easing) == 4 and all(_real(value) for value in easing):
+        # As keySplines takes them, every control point is within the unit square.
+        return tuple(float(value) for value in easing) if all(0 <= value <= 1 for value in easing) else None
+    return None
+
+
+def _curves(easing, intervals: int) -> list[Curve] | Literal["discrete"]:
+    """The curve of each interval, as an easing for them all or for each says."""
+    if isinstance(easing, str) and easing == "discrete":
+        return "discrete"
+    curve = _curve(easing)
+    if curve is not None:
+        return [curve] * intervals
+    if isinstance(easing, str) or not isinstance(easing, Sequence) or len(easing) != intervals:
+        raise ValueError(
+            f"the easing must be discrete, linear, one of {list(EASINGS)[1:]} or a cubic Bézier curve within the "
+            f"unit square, or one for each of the {intervals} intervals, not {easing!r}"
+        )
+    curves = [_curve(each) for each in easing]
+    if None in curves:
+        raise ValueError(f"each easing must be linear, one of {list(EASINGS)[1:]} or a cubic Bézier curve, not {easing!r}")
+    return curves
 
 
 def _number(value: float) -> str:
