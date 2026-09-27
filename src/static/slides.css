@@ -110,3 +110,16 @@ section::after {
 .steps-instant .step {
     transition: none;
 }
+
+/* Figures, as a theme filters them, are redrawn through its filter while a
+   step inside them fades, which shifts their thin lines, as the spines of
+   matplotlib's axes, until it is done. The frontmatter can show figures as
+   they were drawn, with `invert-figures: false`, which suits figures drawn
+   for the theme, or step inside them at once, with `fade-figures: false`. */
+:root[data-invert-figures="false"] {
+    --figure-filter: none;
+}
+
+:root[data-fade-figures="false"] section svg:not(.katex *) .step {
+    transition: none;
+}

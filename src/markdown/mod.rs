@@ -44,12 +44,9 @@ pub struct File {
     pub hashes: Vec<String>,
     /// The lock file of the environment its cells run in, which their hashes cover.
     pub lock: Option<PathBuf>,
-    /// The theme its frontmatter asks for. Only the input's is used, so an
-    /// imported file can keep the theme it was written with.
-    pub theme: Option<String>,
-    /// The shape its frontmatter asks for the slides to keep. Only the
-    /// input's is used, as for the theme.
-    pub aspect_ratio: Option<AspectRatio>,
+    /// What its frontmatter asks of the page. Only the input's is used, so
+    /// an imported file can keep the theme it was written with.
+    pub page: PageSettings,
     /// Whether its frontmatter steps through its slides' steps. Without
     /// a say, it does as the file importing it does.
     pub steps: Option<bool>,
@@ -176,8 +173,12 @@ pub fn render(markdown: &str, path: &Path) -> File {
         cells,
         hashes,
         lock,
-        aspect_ratio: frontmatter.aspect_ratio(path),
-        theme: frontmatter.theme,
+        page: PageSettings {
+            aspect_ratio: frontmatter.aspect_ratio(path),
+            theme: frontmatter.theme,
+            invert_figures: frontmatter.invert_figures,
+            fade_figures: frontmatter.fade_figures,
+        },
         steps: frontmatter.steps,
     }
 }
@@ -227,6 +228,21 @@ fn parse(markdown: &str) -> OffsetIter<'_> {
     .into_offset_iter()
 }
 
+/// What a file's frontmatter sets for the whole page, rather than for its own
+/// slides.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageSettings {
+    pub theme: Option<String>,
+    /// The shape the slides keep.
+    pub aspect_ratio: Option<AspectRatio>,
+    /// Whether figures are shown as the theme filters them, as a dark theme
+    /// inverts them, rather than as they were drawn. Unset, they are.
+    pub invert_figures: Option<bool>,
+    /// Whether the steps inside figures fade, as the others do, rather than
+    /// show at once. Unset, they do.
+    pub fade_figures: Option<bool>,
+}
+
 /// What a file's frontmatter sets. Keys the deck does not read are ignored,
 /// so the frontmatter can hold a title, an author, or notes of its own.
 #[derive(Default, serde::Deserialize)]
@@ -236,6 +252,10 @@ struct Frontmatter {
     /// The shape of the slides.
     #[serde(rename = "aspect-ratio")]
     aspect_ratio: Option<aspect::Written>,
+    #[serde(rename = "invert-figures")]
+    invert_figures: Option<bool>,
+    #[serde(rename = "fade-figures")]
+    fade_figures: Option<bool>,
     /// Whether to step through the file's slides, and those of the files it
     /// imports that do not say. Unset, they are stepped through.
     steps: Option<bool>,
@@ -294,7 +314,7 @@ mod tests {
     fn the_theme_comes_from_the_frontmatter() {
         let markdown = "---\ntitle: Talk\ntheme: dark\n---\n# Slide\n";
         let file = render(markdown, Path::new("slides.md"));
-        assert_eq!(file.theme.as_deref(), Some("dark"));
+        assert_eq!(file.page.theme.as_deref(), Some("dark"));
     }
 
     #[test]
@@ -339,6 +359,18 @@ mod tests {
         assert_eq!(ratio("aspect-ratio: none"), Some(AspectRatio::Fill));
         assert_eq!(ratio("aspect-ratio: wide"), None);
         assert_eq!(ratio("theme: dark"), None);
+    }
+
+    #[test]
+    fn figures_can_be_shown_as_drawn_and_without_fading() {
+        let file = |markdown| render(markdown, Path::new("slides.md")).page;
+        let set = file("---\ninvert-figures: false\nfade-figures: false\n---\n# Slide\n");
+        assert_eq!(
+            (set.invert_figures, set.fade_figures),
+            (Some(false), Some(false))
+        );
+        let unset = file("# Slide\n");
+        assert_eq!((unset.invert_figures, unset.fade_figures), (None, None));
     }
 
     #[test]

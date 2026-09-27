@@ -145,7 +145,7 @@ impl Deck {
 
     /// The theme the page of `input` is in, as its frontmatter says.
     fn theme(&self, input: &Path) -> Option<&str> {
-        self.files[input].theme.as_deref()
+        self.files[input].page.theme.as_deref()
     }
 
     /// Writes the deck, and the files it links next to it, unless the html on
@@ -158,8 +158,8 @@ impl Deck {
         }
         let mut body = String::new();
         self.body(input, true, &mut body);
-        let aspect_ratio = self.files[input].aspect_ratio;
-        let html = page::page(&body, theme, aspect_ratio, output, self.self_contained);
+        let settings = &self.files[input].page;
+        let html = page::page(&body, settings, output, self.self_contained);
         if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
             return false;
         }

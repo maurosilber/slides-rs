@@ -9,8 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
 
-use crate::aspect::AspectRatio;
-use crate::markdown::{NO_STEPS, SECTION};
+use crate::markdown::{NO_STEPS, PageSettings, SECTION};
 use crate::paths::parent;
 use crate::store;
 
@@ -90,16 +89,11 @@ fn bundled_href(name: &str) -> String {
     format!("{}/{name}", store::DIR)
 }
 
-/// The page for the slides in `body`, in the theme and the shape the input
-/// asks for, to be written at `output`. A self-contained page holds every
-/// file it would link, so that it can be opened on its own.
-pub fn page(
-    body: &str,
-    theme: Option<&str>,
-    aspect_ratio: Option<AspectRatio>,
-    output: &Path,
-    self_contained: bool,
-) -> String {
+/// The page for the slides in `body`, as the input's frontmatter asks for,
+/// to be written at `output`. A self-contained page holds every file it
+/// would link, so that it can be opened on its own.
+pub fn page(body: &str, settings: &PageSettings, output: &Path, self_contained: bool) -> String {
+    let theme = settings.theme.as_deref();
     let dir = parent(output);
     // A slide break at either end of a file, or two in a row, leaves an empty slide.
     let body = body
@@ -140,14 +134,10 @@ pub fn page(
         let script = format!("<script src=\"{}\"></script>", bundled_href("slides.js"));
         (styles, script, body)
     };
-    // On the root, the frontmatter's shape comes before the theme's.
-    let style = aspect_ratio.map_or(String::new(), |ratio| {
-        format!(" style=\"{}\"", escape(&ratio.css()))
-    });
     fill(
         TEMPLATE,
         &[
-            ("style", &style),
+            ("root", &root_attributes(settings)),
             ("styles", &styles.join("\n    ")),
             ("script", &script),
             ("body", &body),
@@ -162,6 +152,23 @@ fn is_imported(name: &str, theme: Option<&str>) -> bool {
         return false;
     };
     name != theme && name != "slides.css"
+}
+
+/// The attributes of the page's root, which slides.css reads, so that the
+/// frontmatter comes before the theme: the shape of the slides, and whether
+/// figures are shown as drawn or step without fading.
+fn root_attributes(settings: &PageSettings) -> String {
+    let mut attributes = String::new();
+    if let Some(ratio) = settings.aspect_ratio {
+        attributes.push_str(&format!(" style=\"{}\"", escape(&ratio.css())));
+    }
+    if settings.invert_figures == Some(false) {
+        attributes.push_str(" data-invert-figures=\"false\"");
+    }
+    if settings.fade_figures == Some(false) {
+        attributes.push_str(" data-fade-figures=\"false\"");
+    }
+    attributes
 }
 
 /// The template with each `{name}` in place of its value, all at once, so
@@ -412,11 +419,20 @@ fn indent(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slides::aspect::AspectRatio;
 
     #[test]
     fn a_theme_names_a_bundled_stylesheet_or_its_own() {
         assert_eq!(theme_href("dark"), "theme-dark.css");
         assert_eq!(theme_href("custom/talk.css"), "custom/talk.css");
+    }
+
+    fn settings(theme: Option<&str>, aspect_ratio: Option<AspectRatio>) -> PageSettings {
+        PageSettings {
+            theme: theme.map(str::to_string),
+            aspect_ratio,
+            ..PageSettings::default()
+        }
     }
 
     fn temp_dir() -> PathBuf {
@@ -446,8 +462,7 @@ mod tests {
         let output = dir.join("index.html");
         let html = page(
             "<section>\n</section>\n",
-            Some("dark"),
-            None,
+            &settings(Some("dark"), None),
             &output,
             false,
         );
@@ -497,9 +512,9 @@ mod tests {
         .unwrap();
         fs::write(dir.join("base.css"), "h2 { color: blue; }\n").unwrap();
         let output = dir.join("index.html");
-        let linked = page("", Some("talk.css"), None, &output, false);
+        let linked = page("", &settings(Some("talk.css"), None), &output, false);
         assert!(linked.contains("<link rel=\"stylesheet\" href=\"talk.css\">"));
-        let inlined = page("", Some("talk.css"), None, &output, true);
+        let inlined = page("", &settings(Some("talk.css"), None), &output, true);
         assert!(inlined.contains("h2 { color: blue; }\nh1 { color: red; }"));
         assert!(!inlined.contains("theme-base.css") && !inlined.contains("@import"));
         fs::remove_dir_all(&dir).unwrap();
@@ -515,7 +530,12 @@ mod tests {
             "<section>\n<img src=\"{}/figure.png\">\n<img src=\"my%20photo.jpg\" alt=\"\">\n<img src=\"https://example.com/a.png\">\n</section>\n",
             store::DIR
         );
-        let html = page(&body, Some("dark"), None, &dir.join("index.html"), true);
+        let html = page(
+            &body,
+            &settings(Some("dark"), None),
+            &dir.join("index.html"),
+            true,
+        );
         assert!(!html.contains("<link rel=\"stylesheet\" href=\"_outputs"));
         assert!(!html.contains("src=\"_outputs/slides.js\""));
         assert!(!html.contains("@import"), "the theme's import is inlined");
@@ -537,7 +557,7 @@ mod tests {
     #[test]
     fn the_shape_of_the_slides_is_set_on_the_page() {
         let output = Path::new("index.html");
-        let html = |ratio| page("", None, ratio, output, false);
+        let html = |ratio| page("", &settings(None, ratio), output, false);
         assert!(html(None).starts_with("<!DOCTYPE html>\n<html>\n"));
         let four_three = AspectRatio::Fixed {
             width: 4.0,
@@ -546,6 +566,22 @@ mod tests {
         assert!(html(Some(four_three)).contains("<html style=\"--aspect-ratio: 4 / 3\">"));
         let fill = "<html style=\"--slide-width: 100vw; --slide-height: 100vh\">";
         assert!(html(Some(AspectRatio::Fill)).contains(fill));
+    }
+
+    #[test]
+    fn figures_can_be_shown_as_drawn_and_without_fading() {
+        let output = Path::new("index.html");
+        let html = |invert_figures, fade_figures| {
+            let settings = PageSettings {
+                invert_figures,
+                fade_figures,
+                ..PageSettings::default()
+            };
+            page("", &settings, output, false)
+        };
+        assert!(html(None, Some(true)).starts_with("<!DOCTYPE html>\n<html>\n"));
+        let both = "<html data-invert-figures=\"false\" data-fade-figures=\"false\">";
+        assert!(html(Some(false), Some(false)).contains(both));
     }
 
     #[test]
