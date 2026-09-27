@@ -40,6 +40,13 @@ const STYLE = `
 	font-size: var(--vscode-font-size);
 	color: var(--vscode-foreground);
 	user-select: none;
+	margin-bottom: 0.5em;
+}
+.slides-steps label {
+	display: flex;
+	gap: 0.3em;
+	align-items: center;
+	margin-left: 0.5em;
 }
 .slides-steps button {
 	background: var(--vscode-button-secondaryBackground);
@@ -55,12 +62,32 @@ const STYLE = `
 }
 `;
 
+/** What the renderer remembers, for every figure. */
+interface State {
+	/** Whether the figures step, or show whole. */
+	animate: boolean;
+}
+
 interface Steps {
 	count: number;
 	elements: { element: Element; from: number; to: number; collapse: boolean }[];
 }
 
-export const activate: ActivationFunction = (context) => {
+export const activate: ActivationFunction<State> = (context) => {
+	let animate = context.getState()?.animate ?? true;
+	/** How each figure shown updates, when the checkbox of any of them changes. */
+	const figures = new Set<{ element: HTMLElement; update: () => void }>();
+	const setAnimate = (value: boolean) => {
+		animate = value;
+		context.setState({ animate });
+		for (const figure of figures) {
+			if (figure.element.isConnected) {
+				figure.update();
+			} else {
+				figures.delete(figure);
+			}
+		}
+	};
 	const style = document.createElement('style');
 	style.textContent = STYLE;
 	document.head.append(style);
@@ -85,32 +112,43 @@ export const activate: ActivationFunction = (context) => {
 			const previous = button('‹', 'Previous step', () => show(current - 1));
 			const next = button('›', 'Next step', () => show(current + 1));
 			const label = document.createElement('span');
-			controls.append(previous, label, next);
+			const toggle = document.createElement('label');
+			const checkbox = document.createElement('input');
+			checkbox.type = 'checkbox';
+			checkbox.addEventListener('change', () => setAnimate(checkbox.checked));
+			toggle.append(checkbox, 'Animate');
+			toggle.title = 'Step through the figures, or show them whole';
+			controls.append(previous, label, next, toggle);
+			// Not animated, every step shows, even those that are over, as when the deck's
+			// steps are off; the step is kept, for animating to resume there.
 			const show = (step: number) => {
 				if (step < 1 || step > count) {
 					return;
 				}
 				current = step;
 				for (const { element, from, to } of elements) {
-					element.classList.toggle('step-hidden', !(from <= step && step < to));
+					element.classList.toggle('step-hidden', animate && !(from <= step && step < to));
 				}
+				checkbox.checked = animate;
 				label.textContent = `Step ${step} of ${count}`;
-				previous.disabled = step === 1;
-				next.disabled = step === count;
+				previous.disabled = !animate || step === 1;
+				next.disabled = !animate || step === count;
 			};
+			const move = (step: number) => animate && show(step);
 			// A figure opens at its first step, as on its slide.
 			show(1);
 			figure.getBoundingClientRect();
 			figure.classList.remove('steps-instant');
 			if (count > 1) {
-				slide.append(controls);
+				slide.prepend(controls);
+				figures.add({ element: slide, update: () => show(current) });
 				figure.tabIndex = 0;
-				figure.addEventListener('click', () => show(current < count ? current + 1 : 1));
+				figure.addEventListener('click', () => move(current < count ? current + 1 : 1));
 				figure.addEventListener('keydown', (event) => {
 					const step = { ArrowRight: current + 1, ArrowLeft: current - 1, ArrowDown: count, ArrowUp: 1 }[event.key];
 					if (step !== undefined) {
 						event.preventDefault();
-						show(step);
+						move(step);
 					}
 				});
 			}

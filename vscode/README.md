@@ -46,8 +46,9 @@ as after running a cell again or interrupting one, they are saved without, and
 the render runs the cell again. An interrupted cell's outputs are not saved.
 
 A figure whose parts matplotlib's `gid` marks as steps opens at its first step.
-Clicking it, or the arrow keys once it is focused, steps through it, as the
-deck's own `steps.js` numbers the steps. In a dark theme, figures are inverted,
+Clicking it, the arrow keys once it is focused, or the buttons above it step
+through it, as the deck's own `steps.js` numbers the steps. Clearing
+**Animate** shows every figure whole, and is remembered. In a dark theme, figures are inverted,
 as the deck's dark theme inverts them.
 
 **Slides: Restart Kernel**, in the notebook's toolbar, starts a new kernel for

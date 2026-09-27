@@ -160,14 +160,12 @@ const tests = {
 	async 'a figure steps as on its slide'() {
 		const messaging = vscode.notebooks.createRendererMessaging('slides-figure');
 		const rendered = [];
-		const listener = messaging.onDidReceiveMessage(({ message }) => rendered.push(message));
+		const listener = messaging.onDidReceiveMessage(({ message }) => rendered.push(message.steps));
 		const notebook = await open(renderedSlide());
 		await vscode.window.showNotebookDocument(notebook);
-		// The figure of lines drawn one step after another, and the two drawn at once.
-		await until(() => rendered.length >= 3, 30000);
-		const steps = rendered.map((message) => message.steps).sort((a, b) => a - b);
-		assert.deepStrictEqual(steps.slice(0, 2), [1, 1]);
-		assert.ok(steps[2] > 2, `the figure of steps has ${steps[2]}`);
+		// The figure of lines drawn one step after another, and one drawn at once. The
+		// notebook renders only the outputs in view, which the last may not be.
+		await until(() => rendered.includes(1) && rendered.some((steps) => steps > 2), 30000);
 		listener.dispose();
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
