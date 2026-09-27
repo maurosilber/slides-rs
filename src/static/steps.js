@@ -108,67 +108,185 @@ function stepsOf(slide) {
 }
 
 // The SVG animations that begin when asked, as slides_rs.Motion writes them,
-// each playing, which is not in the document and so is kept aside.
+// or copies of them, which begin as the deck says, at a time of their own.
+const ANIMATIONS = "[begin=indefinite], [data-begin=indefinite]";
+
+// Each animation playing forward, which is not in the document and so is kept
+// aside, with when each began, on its SVG's clock, and, for each played
+// backward, the animation it is played backward from.
 const playing = new WeakSet();
+const began = new WeakMap();
+const forwardOf = new WeakMap();
 
 // Plays each of the SVG animations in `container` that begin when asked once
-// it shows, when every step it is in does, and starts over, from before it
-// began, each that is hidden again, so that stepping back to it plays it again.
-// Those that were playing already, when others begin, are taken to their end,
-// so that one step's animation does not run on into the next one's.
+// it shows, when every step it is in does, and plays backward, from where it
+// is, each that is hidden again, so that stepping back undoes it, and stepping
+// on plays it again. Those that were playing already, when others begin, are
+// taken to their end, so that one step's animation does not run on into the
+// next one's.
 function playAnimations(container) {
     const begun = [];
     const before = [];
-    for (const animation of container.querySelectorAll("[begin=indefinite]")) {
+    for (const animation of container.querySelectorAll(ANIMATIONS)) {
         const shown = !animation.closest(".step-hidden");
         if (shown && !playing.has(animation)) {
             begun.push(animation);
         } else if (shown) {
             before.push(animation);
         } else if (playing.has(animation)) {
-            restart(animation);
+            reverse(animation);
         }
     }
     if (begun.length) before.forEach(finish);
     for (const animation of begun) {
-        playing.add(animation);
-        animation.beginElement();
+        if (forwardOf.has(animation)) {
+            resume(animation);
+        } else {
+            playing.add(animation);
+            animation.beginElement();
+            began.set(animation, animation.ownerSVGElement.getCurrentTime());
+        }
     }
 }
 
-// Takes an animation to its end, by a copy begun as long ago as it lasts, as
-// one playing already cannot begin again before now, unless it repeats on and
-// on, which has no end.
-function finish(animation) {
+// Starts over every animation played in `container`, as when its slide closes.
+function stopAnimations(container) {
+    for (const animation of container.querySelectorAll(ANIMATIONS)) {
+        if (playing.has(animation) || forwardOf.has(animation)) restart(animation);
+    }
+}
+
+// Puts `copy` in place of `animation`, begun `offset` seconds from now, before
+// it if negative. An animation playing already cannot begin again before now,
+// but a copy can, as its `begin` says: begun so by beginElementAt, Chrome may
+// not play others begun at other times before now in the same moment.
+function replace(animation, copy, offset) {
+    const start = animation.ownerSVGElement.getCurrentTime() + offset;
+    copy.setAttribute("begin", `${start}s`);
+    copy.dataset.begin = "indefinite";
+    animation.replaceWith(copy);
+    began.set(copy, start);
+}
+
+// How long an animation lasts, repeated, or Infinity if it repeats on and on.
+function lengthOf(animation) {
     let length;
     try {
         length = animation.getSimpleDuration();
     } catch {
-        return; // Its duration is indefinite.
+        return Infinity; // Its duration is indefinite.
     }
     const count = animation.getAttribute("repeatCount");
     if (count == "indefinite") length = Infinity;
     else if (count != null) length *= Number(count);
     const most = animation.getAttribute("repeatDur");
     if (most != null && most != "indefinite") length = Math.min(length, parseFloat(most));
-    if (!Number.isFinite(length)) return;
-    const copy = animation.cloneNode(true);
-    animation.replaceWith(copy);
-    playing.add(copy);
-    copy.beginElementAt(-length);
+    return length;
 }
 
-// Starts over every animation playing in `container`, as when its slide closes.
-function stopAnimations(container) {
-    for (const animation of container.querySelectorAll("[begin=indefinite]")) {
-        if (playing.has(animation)) restart(animation);
+// How far into its length an animation is, if it began.
+function elapsedOf(animation, length) {
+    const start = began.get(animation);
+    if (start === undefined) return undefined;
+    return Math.min(animation.ownerSVGElement.getCurrentTime() - start, length);
+}
+
+// Takes an animation to its end, by a copy begun as long ago as it lasts,
+// unless it repeats on and on, which has no end.
+function finish(animation) {
+    const length = lengthOf(animation);
+    if (!Number.isFinite(length)) return;
+    const copy = animation.cloneNode(true);
+    playing.add(copy);
+    replace(animation, copy, -length);
+}
+
+// Plays an animation backward from where it is, by a copy of it played
+// backward, begun as long ago as the animation has left to play. One that
+// repeats on and on, or builds on itself each time, which has no way back, or
+// that is back at its start already, starts over instead.
+function reverse(animation) {
+    const length = lengthOf(animation);
+    const elapsed = elapsedOf(animation, length);
+    const frozen = animation.getAttribute("fill") == "freeze";
+    if (!reversible(animation, length) || !(elapsed > 0) || (elapsed >= length && !frozen)) {
+        return restart(animation);
     }
+    const copy = backward(animation);
+    forwardOf.set(copy, animation);
+    replace(animation, copy, elapsed - length);
+}
+
+// Plays forward again, from where it is, an animation played backward.
+function resume(copy) {
+    const length = lengthOf(copy);
+    const elapsed = elapsedOf(copy, length) ?? length;
+    const animation = forwardOf.get(copy).cloneNode(true);
+    playing.add(animation);
+    replace(copy, animation, elapsed - length);
 }
 
 // An animation, once begun, cannot be taken back to before it began, but a
-// copy of it has not.
+// copy of it, forward, and to begin when asked, has not.
 function restart(animation) {
-    animation.replaceWith(animation.cloneNode(true));
+    const copy = (forwardOf.get(animation) ?? animation).cloneNode(true);
+    copy.setAttribute("begin", "indefinite");
+    delete copy.dataset.begin;
+    animation.replaceWith(copy);
+}
+
+// Whether an animation, played backward, is the same as played forward, in
+// reverse: every time it repeats is whole, and the same.
+function reversible(animation, length) {
+    const count = animation.getAttribute("repeatCount");
+    return (
+        Number.isFinite(length) &&
+        (count == null || Number.isInteger(Number(count))) &&
+        animation.getAttribute("repeatDur") == null &&
+        animation.getAttribute("accumulate") != "sum"
+    );
+}
+
+// A copy of an animation that plays it backward: what it goes through, in
+// reverse, at the times mirrored, eased as mirrored, and turned the other way
+// along a path.
+function backward(animation) {
+    const copy = animation.cloneNode(true);
+    const list = (name) => copy.getAttribute(name)?.split(";").map((item) => item.trim());
+    if (copy.localName == "animateMotion" && !copy.hasAttribute("keyPoints")) {
+        // Along its path at an even pace, as it is by default.
+        copy.setAttribute("keyPoints", "0;1");
+        copy.setAttribute("keyTimes", "0;1");
+        copy.setAttribute("calcMode", "linear");
+    }
+    for (const name of ["keyPoints", "values"]) {
+        if (copy.hasAttribute(name)) copy.setAttribute(name, list(name).reverse().join(";"));
+    }
+    const [from, to] = [copy.getAttribute("from"), copy.getAttribute("to")];
+    if (from != null && to != null) {
+        copy.setAttribute("from", to);
+        copy.setAttribute("to", from);
+    }
+    const times = list("keyTimes")?.map(Number);
+    if (times) {
+        // Discrete, each value holds from its time up to the next one's, which
+        // mirrored is where it begins to hold: the first, at 0, holds last.
+        const mirror = (list) => list.reverse().map((time) => 1 - time);
+        const discrete = copy.getAttribute("calcMode") == "discrete";
+        const mirrored = discrete ? [0, ...mirror(times.slice(1))] : mirror(times);
+        copy.setAttribute("keyTimes", mirrored.join(";"));
+    }
+    const splines = list("keySplines");
+    if (splines) {
+        const mirror = (spline) => {
+            const [x1, y1, x2, y2] = spline.split(/[\s,]+/).map(Number);
+            return [1 - x2, 1 - y2, 1 - x1, 1 - y1].join(" ");
+        };
+        copy.setAttribute("keySplines", splines.reverse().map(mirror).join(";"));
+    }
+    const rotate = { auto: "auto-reverse", "auto-reverse": "auto" }[copy.getAttribute("rotate")];
+    if (rotate) copy.setAttribute("rotate", rotate);
+    return copy;
 }
 
 // The renderer bundles this file as a module, which a page never loads it as.
