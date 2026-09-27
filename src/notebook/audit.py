@@ -1,6 +1,8 @@
 import os
 import sys
 
+import matplotlib.axes
+
 
 class Audit:
     """Record opened files."""

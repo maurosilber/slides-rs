@@ -2,6 +2,9 @@
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
 
+[tasks]
+python-test = { cmd = "cargo build --quiet && pytest python", description = "Test the Python package, drawing a figure with slides-rs" }
+
 [environments]
 default = ["rust", "python"]
 python = ["python"]
@@ -18,6 +21,10 @@ python = "*"
 matplotlib = "*"
 ipykernel = "*"
 xeus-python = "*"
+pytest = "*"
+
+[feature.python.pypi-dependencies]
+slides-rs = { path = "python", editable = true }
 
 [feature.vscode.dependencies]
 nodejs = "*"
