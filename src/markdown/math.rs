@@ -3,7 +3,9 @@
 //! `\step{...}` appears one step after the latest one, `\also{...}` along
 //! with it, and `\step[3..5]{...}` in the steps its range says. Each becomes
 //! `\htmlData{step=...}{...}` with its range, which KaTeX writes as the
-//! `data-step` the page reads. They are numbered here, in the order they are
+//! `data-step` the page reads. Starred, as `\step*` or `\also*`, they take no
+//! space while hidden, and are written with a `collapse` too, which KaTeX
+//! writes as `data-collapse`. They are numbered here, in the order they are
 //! written: KaTeX lays out an aligned environment column by column, so by the
 //! time the page sees them, the left side of every row comes before any
 //! right side.
@@ -42,6 +44,10 @@ impl Steps {
                 continue;
             }
             let (name, mut after) = command.split_at(name_len);
+            let starred = matches!(name, "step" | "also") && after.starts_with('*');
+            if starred {
+                after = &after[1..];
+            }
             let range = match name {
                 "step" => match range_argument(after) {
                     Some((range, argument_len)) => {
@@ -64,7 +70,8 @@ impl Steps {
                     if let Some(start) = range.start {
                         self.latest = self.latest.max(start);
                     }
-                    numbered.push_str(&format!("\\htmlData{{step={range}}}"));
+                    let collapse = if starred { ",collapse=true" } else { "" };
+                    numbered.push_str(&format!("\\htmlData{{step={range}{collapse}}}"));
                 }
                 None => {
                     numbered.push('\\');
@@ -126,6 +133,19 @@ mod tests {
         assert_eq!(
             steps.number(r"\step[2..4]{a} \step{b} \also{c} \step[..9]{d} \step{e}"),
             r"\htmlData{step=2..4}{a} \htmlData{step=3}{b} \htmlData{step=3}{c} \htmlData{step=..9}{d} \htmlData{step=4}{e}"
+        );
+    }
+
+    #[test]
+    fn a_starred_step_collapses() {
+        let mut steps = Steps::default();
+        assert_eq!(
+            steps.number(r"\step*[..2]{a}\step*[2..]{b} \also*{c} \step*{d} \step{e}"),
+            concat!(
+                r"\htmlData{step=..2,collapse=true}{a}\htmlData{step=2,collapse=true}{b} ",
+                r"\htmlData{step=2,collapse=true}{c} \htmlData{step=3,collapse=true}{d} ",
+                r"\htmlData{step=4}{e}",
+            )
         );
     }
 

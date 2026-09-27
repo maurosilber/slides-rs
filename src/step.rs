@@ -7,6 +7,10 @@
 //! `also` along with it: `latest + 1..` and `latest..`, where the latest is
 //! the highest step any range so far starts at. An `also` before any step is
 //! the first step.
+//!
+//! Hidden, a step keeps its space, so that what is around it stays in place.
+//! Starred, as `step*` or `also*`, it takes none, so that another can show in
+//! its place.
 
 use std::fmt;
 
@@ -19,18 +23,35 @@ pub enum Step {
     Also,
 }
 
-impl Step {
-    /// The step marked as `step=3..5`, `step` or `also`, if it is one, as
-    /// matplotlib's `gid` marks it.
-    pub fn parse(text: &str) -> Option<Step> {
-        match text.trim() {
-            "step" => Some(Step::Next),
-            "also" => Some(Step::Also),
-            text => {
-                let range = text.strip_prefix("step")?.trim_start().strip_prefix('=')?;
-                Range::parse(range).map(Step::Range)
-            }
-        }
+/// A step as an element is marked with, and whether, hidden, it takes no
+/// space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mark {
+    pub step: Step,
+    pub collapse: bool,
+}
+
+impl Mark {
+    /// The step marked as `step=3..5`, `step` or `also`, or starred, as
+    /// `step*=3..5`, `step*` or `also*`, if it is one, as matplotlib's `gid`
+    /// marks it.
+    pub fn parse(text: &str) -> Option<Mark> {
+        let text = text.trim();
+        let (name, range) = match text.split_once('=') {
+            Some((name, range)) => (name.trim_end(), Some(range)),
+            None => (text, None),
+        };
+        let (name, collapse) = match name.strip_suffix('*') {
+            Some(name) => (name, true),
+            None => (name, false),
+        };
+        let step = match (name, range) {
+            ("step", None) => Step::Next,
+            ("also", None) => Step::Also,
+            ("step", Some(range)) => Step::Range(Range::parse(range)?),
+            _ => return None,
+        };
+        Some(Mark { step, collapse })
     }
 }
 
@@ -112,12 +133,18 @@ mod tests {
 
     #[test]
     fn a_step_is_a_range_the_next_step_or_along_with_the_latest() {
-        let range = |text| Some(Step::Range(Range::parse(text).unwrap()));
-        assert_eq!(Step::parse("step=0..3"), range("0..3"));
-        assert_eq!(Step::parse("step = ..3"), range("..3"));
-        assert_eq!(Step::parse("step"), Some(Step::Next));
-        assert_eq!(Step::parse("also"), Some(Step::Also));
-        for text in [
+        let mark = |step| {
+            Some(Mark {
+                step,
+                collapse: false,
+            })
+        };
+        let range = |text| Step::Range(Range::parse(text).unwrap());
+        assert_eq!(Mark::parse("step=0..3"), mark(range("0..3")));
+        assert_eq!(Mark::parse("step = ..3"), mark(range("..3")));
+        assert_eq!(Mark::parse("step"), mark(Step::Next));
+        assert_eq!(Mark::parse("also"), mark(Step::Also));
+        let invalid = [
             "",
             "step=",
             "step=x",
@@ -125,9 +152,27 @@ mod tests {
             "also=1",
             "step 1",
             "fragment 1",
-        ] {
-            assert_eq!(Step::parse(text), None, "{text}");
+            "*step",
+            "step**",
+        ];
+        for text in invalid {
+            assert_eq!(Mark::parse(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn a_starred_step_takes_no_space() {
+        let mark = |step| {
+            Some(Mark {
+                step,
+                collapse: true,
+            })
+        };
+        let range = Step::Range(Range::parse("1..3").unwrap());
+        assert_eq!(Mark::parse("step*=1..3"), mark(range));
+        assert_eq!(Mark::parse("step* = 1..3"), mark(range));
+        assert_eq!(Mark::parse("step*"), mark(Step::Next));
+        assert_eq!(Mark::parse("also*"), mark(Step::Also));
     }
 
     #[test]

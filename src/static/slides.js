@@ -5,6 +5,12 @@ const slides = document.getElementsByTagName("section");
 // which math's \step{...}, \step[...]{...} and \also{...} write.
 const MARKED = "li, [step], [also], [data-step]";
 
+// Whether an element takes no space while hidden, rather than keeping it, as
+// a starred \step*{...} or \also*{...} writes, or `collapse` marks.
+function collapses(element) {
+    return element.hasAttribute("collapse") || element.dataset.collapse !== undefined;
+}
+
 // A range of steps, written as in Rust: `3..5` shows from step 3 and hides
 // again at step 5, `..3` shows from the start and hides at step 3, and `3..`,
 // or a bare `3`, shows from step 3 to the end. src/step.rs reads them the
@@ -40,7 +46,8 @@ function rangeOf(element, latest) {
 // the slide's `data-steps` decides, from its file's frontmatter.
 //
 // Returns how many steps the slide has, and the steps each element that is
-// ever hidden shows in, from `from` up to `to`, excluded.
+// ever hidden shows in, from `from` up to `to`, excluded, and whether it
+// collapses while hidden.
 function stepsOf(slide) {
     const outside = slide.dataset.steps != "false";
     // The headings whose part of the slide the current child is in, each
@@ -67,7 +74,9 @@ function stepsOf(slide) {
         let column = 1;
         if (i > 0) {
             column = (i == 1 && count == 1) || !step ? count : ++count;
-            for (const { child } of children) elements.push({ element: child, from: column, to: Infinity });
+            for (const { child } of children) {
+                elements.push({ element: child, from: column, to: Infinity, collapse: false });
+            }
         }
         const parts = [];
         let latest = 0;
@@ -87,6 +96,7 @@ function stepsOf(slide) {
                 element: part,
                 from: start === undefined ? column : steps.get(start),
                 to: end === undefined ? Infinity : steps.get(end),
+                collapse: collapses(part),
             });
         }
     });
@@ -150,16 +160,32 @@ function updateSlide(i, step = 1) {
     showPosition();
 }
 
-// Hidden rather than removed, so the columns keep their place. Disabled,
-// every element shows, even those whose steps are over.
+// Takes the element out of the layout, or puts it back. Math keeps the space
+// between its last atom and the next one inside it, as KaTeX places it, which
+// belongs between whatever shows before and that next one, so it stays.
+function setCollapsed(element, hidden) {
+    const space = element.lastElementChild;
+    if (element.dataset.step === undefined || !space?.classList.contains("mspace")) {
+        element.style.display = hidden ? "none" : "";
+        return;
+    }
+    for (const child of element.children) {
+        if (child != space) child.style.display = hidden ? "none" : "";
+    }
+}
+
+// Hidden, an element keeps its space, so the columns keep their place, unless
+// it collapses, when it takes none, so another can show in its place.
+// Disabled, every element shows, even those whose steps are over.
 // currentStep is tracked even while disabled, so re-enabling resumes here.
 function showStep(i) {
     const { count, elements } = slideSteps[currentSlide];
     if (i < 1 || i > count) return false;
     currentStep = i;
-    for (const { element, from, to } of elements) {
+    for (const { element, from, to, collapse } of elements) {
         const shown = !stepsEnabled || (from <= i && i < to);
-        element.style.visibility = shown ? "visible" : "hidden";
+        if (collapse) setCollapsed(element, !shown);
+        else element.style.visibility = shown ? "visible" : "hidden";
     }
     showPosition();
     return true;

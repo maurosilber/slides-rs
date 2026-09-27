@@ -11,12 +11,12 @@ use quick_xml::name::QName;
 use quick_xml::{Reader, Writer};
 use sha2::{Digest, Sha256};
 
-use crate::step::Step;
+use crate::step::{Mark, Step};
 
 /// The SVG as markup for an html document, with every id that marks a step,
 /// as matplotlib's `gid="step=2..4"`, `gid="step"` or `gid="also"` gives an
 /// artist's group, turned into `step="2..4"`, `step=""` or `also=""` for the
-/// slides to step through.
+/// slides to step through, along with `collapse=""` if it is starred.
 ///
 /// The XML declaration, doctype, comments and metadata are dropped, as they
 /// have no place in the middle of an html body, and the metadata holds the
@@ -98,8 +98,8 @@ fn element<'a>(
     for attribute in element.attributes().flatten() {
         if attribute.key.as_ref() == "id" {
             let value = &attribute.value;
-            if let Some(step) = Step::parse(value) {
-                let (key, value) = match step {
+            if let Some(mark) = Mark::parse(value) {
+                let (key, value) = match mark.step {
                     Step::Range(range) => ("step", range.to_string()),
                     Step::Next => ("step", String::new()),
                     Step::Also => ("also", String::new()),
@@ -108,6 +108,9 @@ fn element<'a>(
                     key: QName(key),
                     value: Cow::Owned(value),
                 });
+                if mark.collapse {
+                    rewritten.push_attribute(("collapse", ""));
+                }
             } else if let Some(id) = rename(value) {
                 rewritten.push_attribute(Attribute {
                     key: attribute.key,
@@ -182,6 +185,15 @@ mod tests {
         assert_eq!(
             inline(svg).unwrap(),
             r#"<svg><g step=""/><g also=""/></svg>"#
+        );
+    }
+
+    #[test]
+    fn a_starred_step_id_collapses() {
+        let svg = r#"<svg><g id="step*=1..3"/><g id="also*"/></svg>"#;
+        assert_eq!(
+            inline(svg).unwrap(),
+            r#"<svg><g step="1..3" collapse=""/><g also="" collapse=""/></svg>"#
         );
     }
 
