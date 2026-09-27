@@ -162,6 +162,19 @@ function playAnimations(container) {
     }
 }
 
+// Speeds up every animation still playing in `container` to get where it is
+// going, as when stepping on from its last step, or back from its first, before
+// leaving it. Returns whether any was playing.
+function rushAnimations(container) {
+    waited(container)?.();
+    let rushed = false;
+    for (const animation of container.querySelectorAll(ANIMATIONS)) {
+        const state = played.get(animation);
+        if (state && rush(animation, state.forward) > 0) rushed = true;
+    }
+    return rushed;
+}
+
 // What `container` waits to play, if anything, no longer waiting.
 function waited(container) {
     const { start, timer } = waiting.get(container) ?? {};

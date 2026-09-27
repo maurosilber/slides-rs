@@ -104,21 +104,25 @@ function moveToStep(i) {
 
 addEventListener("keydown", (event) => {
     if (event.code == "ArrowRight") {
-        if (!moveToStep(currentStep + 1)) updateSlide(currentSlide + 1);
+        if (!moveToStep(currentStep + 1) && !rushAnimations(slides[currentSlide])) {
+            updateSlide(currentSlide + 1);
+        }
     } else if (event.code == "ArrowLeft") {
-        if (!moveToStep(currentStep - 1)) updateSlide(currentSlide - 1, Infinity);
+        if (!moveToStep(currentStep - 1) && !rushAnimations(slides[currentSlide])) {
+            updateSlide(currentSlide - 1, Infinity);
+        }
     } else if (event.code == "ArrowDown") {
         // Alternate: finish this slide, then open the next one.
         if (stepsEnabled && currentStep < slideSteps[currentSlide].count) {
             showStep(slideSteps[currentSlide].count);
-        } else {
+        } else if (!rushAnimations(slides[currentSlide])) {
             updateSlide(currentSlide + 1, 1);
         }
     } else if (event.code == "ArrowUp") {
         // Alternate: go back to the start of this slide, then to the previous one.
         if (stepsEnabled && currentStep > 1) {
             showStep(1);
-        } else {
+        } else if (!rushAnimations(slides[currentSlide])) {
             updateSlide(currentSlide - 1, Infinity);
         }
     } else if (event.code == "KeyA") {
