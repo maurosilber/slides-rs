@@ -239,7 +239,8 @@ fn parse(markdown: &str) -> OffsetIter<'_> {
         markdown,
         Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
             | Options::ENABLE_HEADING_ATTRIBUTES
-            | Options::ENABLE_MATH,
+            | Options::ENABLE_MATH
+            | Options::ENABLE_TABLES,
     )
     .into_offset_iter()
 }
