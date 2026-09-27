@@ -48,8 +48,9 @@ enum Command {
     /// Runs the cells of a markdown file as they are sent, for the VS Code
     /// extension.
     ///
-    /// Each line of stdin is a cell's code, as the JSON `{"code": ...}`,
-    /// answered by a line of JSON on stdout with its outputs.
+    /// Each line of stdin names the code cells up to the one to run, as the
+    /// JSON `{"cells": [...]}`, answered by a line of JSON on stdout with its
+    /// outputs, which are saved where the deck reads them.
     Kernel {
         /// The markdown file the cells are in. They run next to it, in the
         /// environment its lock file pins, as when the deck renders it.

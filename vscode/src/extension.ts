@@ -2,17 +2,11 @@
 // the outputs the deck saved for them in the outputs directory.
 
 import * as vscode from 'vscode';
-import { fromBase64, toBase64 } from './base64';
+import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
 import { canRunCells, Kernels } from './kernel';
-import { Cell, CodeCell, Module, Saved } from './wasm';
+import { Cell, CodeCell, Module } from './wasm';
 
 const NOTEBOOK = 'slides-notebook';
-
-/** The language of a code cell whose fence names none, as the deck runs every cell as Python. */
-const PYTHON = 'python';
-
-/** The output metadata naming the file an output was read from. */
-const SAVED_AS = 'slides.savedAs';
 
 export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('Slides Notebook', { log: true });
@@ -59,12 +53,8 @@ class Serializer implements vscode.NotebookSerializer {
 
 	async serializeNotebook(data: vscode.NotebookData): Promise<Uint8Array> {
 		const cells = data.cells.map((cell): Cell => {
-			const written = cell.metadata?.written;
 			const code = cell.kind === vscode.NotebookCellKind.Code;
-			// A fence that named no language is shown as Python, and written back as it was.
-			const original: string | undefined = code ? written?.language : undefined;
-			const language = !code ? '' : cell.languageId === (original || PYTHON) ? (original ?? cell.languageId) : cell.languageId;
-			return { kind: code ? 'code' : 'markdown', source: cell.value, language, written: written ?? null };
+			return { kind: code ? 'code' : 'markdown', source: cell.value, language: code ? cell.languageId : '', written: cell.metadata?.written ?? null };
 		});
 		return new TextEncoder().encode(await this.module.markdown(cells));
 	}
@@ -73,7 +63,7 @@ class Serializer implements vscode.NotebookSerializer {
 function cellData(cell: Cell): vscode.NotebookCellData {
 	const data =
 		cell.kind === 'code'
-			? new vscode.NotebookCellData(vscode.NotebookCellKind.Code, cell.source, cell.language || PYTHON)
+			? new vscode.NotebookCellData(vscode.NotebookCellKind.Code, cell.source, cell.language)
 			: new vscode.NotebookCellData(vscode.NotebookCellKind.Markup, cell.source, 'markdown');
 	data.metadata = { written: cell.written };
 	return data;
@@ -170,8 +160,6 @@ function withOutputs(cell: vscode.NotebookCell, saved: Saved[]): vscode.Notebook
 	const data = new vscode.NotebookCellData(cell.kind, cell.document.getText(), cell.document.languageId);
 	data.metadata = cell.metadata;
 	data.executionSummary = cell.executionSummary;
-	data.outputs = saved.map(
-		(output) => new vscode.NotebookCellOutput([new vscode.NotebookCellOutputItem(fromBase64(output.data), output.mime)], { [SAVED_AS]: output.name }),
-	);
+	data.outputs = saved.map(cellOutput);
 	return data;
 }

@@ -2,7 +2,16 @@
 //! the ones the deck runs, and the markdown between them is a cell of its own.
 
 use serde::{Deserialize, Serialize};
-use slides::markdown::code_cells;
+use slides::markdown::{code, code_cells, source};
+
+/// The language of a code cell whose fence names none, as the deck runs every
+/// cell as Python.
+const PYTHON: &str = "python";
+
+/// The language a notebook shows a code cell in, given the one its fence names.
+fn shown(language: &str) -> &str {
+    if language.is_empty() { PYTHON } else { language }
+}
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -12,11 +21,11 @@ pub enum Kind {
 }
 
 /// A cell of the notebook.
-#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Cell {
     pub kind: Kind,
     pub source: String,
-    /// The language a code cell's fence names.
+    /// The language a code cell is in: the one its fence names, or Python.
     #[serde(default)]
     pub language: String,
     /// How the cell was written in the file it was read from, if it was.
@@ -26,7 +35,7 @@ pub struct Cell {
 
 /// How a cell was written, so that a file is written back as it was but for
 /// the cells that changed.
-#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Written {
     pub kind: Kind,
     pub source: String,
@@ -36,22 +45,6 @@ pub struct Written {
     /// The blank lines before it and after it.
     pub leading: String,
     pub trailing: String,
-}
-
-/// The source of a code cell, which is its code but for the newline that
-/// ends the last line.
-pub fn source(code: &str) -> &str {
-    code.strip_suffix('\n').unwrap_or(code)
-}
-
-/// The code of a code cell, as the deck reads it from the file, so that it
-/// has the same address.
-pub fn code(source: &str) -> String {
-    if source.is_empty() {
-        String::new()
-    } else {
-        format!("{source}\n")
-    }
 }
 
 /// The cells of a file.
@@ -74,7 +67,7 @@ pub fn cells(markdown: &str) -> Vec<Cell> {
         cells.push(Cell {
             kind: Kind::Code,
             source: source.clone(),
-            language: language.clone(),
+            language: shown(&language).to_string(),
             written: Some(Written {
                 kind: Kind::Code,
                 source,
@@ -143,10 +136,11 @@ fn push_markdown(markdown: &str, cells: &mut Vec<Cell>, leading: &mut String) {
 /// The file the cells make. A cell that has not changed since it was read is
 /// written as it was, and one that has keeps the blank lines around it.
 pub fn markdown(cells: &[Cell]) -> String {
+    let cells: Vec<Cell> = cells.iter().map(as_written).collect();
     let mut markdown = String::new();
     // Whether the cell before was new, and so has no blank line after it.
     let mut after_new = false;
-    for cell in cells {
+    for cell in &cells {
         match &cell.written {
             Some(written) => {
                 if after_new {
@@ -173,6 +167,19 @@ pub fn markdown(cells: &[Cell]) -> String {
         }
     }
     markdown
+}
+
+/// The cell in the language its fence names: none, if it names none and the
+/// cell is still shown in Python.
+fn as_written(cell: &Cell) -> Cell {
+    let mut cell = cell.clone();
+    if let Some(written) = &cell.written
+        && cell.kind == Kind::Code
+        && cell.language == shown(&written.language)
+    {
+        cell.language = written.language.clone();
+    }
+    cell
 }
 
 /// Ends the file so far with a blank line, so that the next cell is apart.
@@ -226,6 +233,7 @@ fn longest_tildes(code: &str) -> usize {
 mod tests {
     use super::*;
 
+
     const SLIDES: &str = "---\ntheme: dark\n---\n\n# Title\n\n~~~python\nx = 1\n~~~\n\n~~~python {.hidden}\n\nx\n~~~\n\n---\n\n    indented\n\n~~~\n~~~\n";
 
     #[test]
@@ -254,6 +262,25 @@ mod tests {
         assert_eq!(cells[2].source, "\nx");
         assert_eq!(cells[3].source, "---\n\n    indented");
         assert_eq!(cells[4].source, "");
+    }
+
+    #[test]
+    fn a_fence_that_names_no_language_is_shown_in_python() {
+        let mut cells = cells("~~~
+a
+~~~
+");
+        assert_eq!(cells[0].language, "python");
+        cells[0].source = "b".to_string();
+        assert_eq!(markdown(&cells), "~~~
+b
+~~~
+");
+        cells[0].language = "bash".to_string();
+        assert_eq!(markdown(&cells), "~~~bash
+b
+~~~
+");
     }
 
     #[test]

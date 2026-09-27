@@ -35,6 +35,32 @@ pub const MEDIA_TYPES: &[(&str, &str)] = &[
     ("text/plain", "txt"),
 ];
 
+/// The media type a figure is shown as in a notebook, rather than as
+/// `image/svg+xml`, so that the extension's renderer, which steps through it
+/// as a slide does, shows it, and no other notebook's SVGs.
+pub const FIGURE: &str = "application/vnd.slides-rs.svg+xml";
+
+/// The media type a notebook shows an output saved as `extension` as.
+pub fn notebook_mime(extension: &str) -> &'static str {
+    match extension {
+        "svg" => FIGURE,
+        _ => MEDIA_TYPES
+            .iter()
+            .find(|&&(_, known)| known == extension)
+            .map_or("text/plain", |&(mime, _)| mime),
+    }
+}
+
+/// Where the outputs of the cells of a file in `dir` are saved: in the
+/// closest outputs directory above it, as the deck that imports it saves them
+/// next to itself, or else next to it, as when it is rendered on its own.
+pub fn root(dir: &std::path::Path) -> std::path::PathBuf {
+    dir.ancestors()
+        .map(|dir| dir.join(DIR))
+        .find(|root| root.is_dir())
+        .unwrap_or_else(|| dir.join(DIR))
+}
+
 /// One output of a cell: either text or an image, with the file extension it
 /// should be saved under.
 pub struct Output {

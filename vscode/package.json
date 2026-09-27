@@ -45,6 +45,17 @@
 				"enablement": "!isWeb"
 			}
 		],
+		"notebookRenderer": [
+			{
+				"id": "slides-figure",
+				"displayName": "Slides Figure",
+				"entrypoint": "./dist/renderer.js",
+				"mimeTypes": [
+					"application/vnd.slides-rs.svg+xml"
+				],
+				"requiresMessaging": "optional"
+			}
+		],
 		"configuration": {
 			"title": "Slides Notebook",
 			"properties": {
@@ -87,7 +98,7 @@
 	},
 	"scripts": {
 		"build:wasm": "cargo build --package slides-notebook --release --target wasm32-wasip1-threads && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/wasm32-wasip1-threads/release/slides-notebook.wasm','dist/slides-notebook.wasm')\"",
-		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:node:* --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap",
+		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:node:* --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap && esbuild src/renderer.ts --bundle --outfile=dist/renderer.js --format=esm --target=es2022 --sourcemap",
 		"build:cli": "cargo build --bin slides-rs --release && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/release/slides-rs','dist/slides-rs');require('fs').chmodSync('dist/slides-rs',0o755)\"",
 		"build": "npm run build:wasm && npm run build:cli && npm run build:ts",
 		"test": "node test/run.mjs",
@@ -99,6 +110,7 @@
 	"devDependencies": {
 		"@types/node": "^20.0.0",
 		"@types/vscode": "~1.88.0",
+		"@types/vscode-notebook-renderer": "^1.72.4",
 		"@vscode/test-electron": "^2.4.1",
 		"@vscode/vsce": "^3.2.1",
 		"esbuild": "^0.25.0",

@@ -8,9 +8,8 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
-use slides::store::{self, MEDIA_TYPES, Output};
-
-use crate::notebook::code;
+use slides::markdown::code;
+use slides::store::{self, FIGURE, MEDIA_TYPES, Output};
 
 /// Where a notebook's file is.
 #[derive(Deserialize)]
@@ -33,15 +32,8 @@ impl Place {
         )
     }
 
-    /// Where the outputs are saved: in the closest outputs directory above
-    /// the file, as the deck that imports it saves them next to itself, or
-    /// else next to it, as when it is rendered on its own.
     fn root(&self) -> PathBuf {
-        self.path
-            .ancestors()
-            .map(|dir| dir.join(store::DIR))
-            .find(|root| root.is_dir())
-            .unwrap_or_else(|| self.path.join(store::DIR))
+        store::root(&self.path)
     }
 }
 
@@ -82,10 +74,7 @@ fn read(file: &Path) -> Option<Saved> {
         .inspect_err(|error| eprintln!("{}: {error}", file.display()))
         .ok()?;
     let extension = file.extension().and_then(|extension| extension.to_str());
-    let mime = MEDIA_TYPES
-        .iter()
-        .find(|&&(_, known)| Some(known) == extension)
-        .map_or("text/plain", |&(mime, _)| mime);
+    let mime = store::notebook_mime(extension.unwrap_or_default());
     Some(Saved {
         name: file.file_name()?.to_str()?.to_string(),
         item: Item {
@@ -162,6 +151,7 @@ fn richest(output: &CellOutput) -> Result<Option<Output>> {
     for item in &output.items {
         let mime = match item.mime.as_str() {
             STDOUT | STDERR | ERROR => "text/plain",
+            FIGURE => "image/svg+xml",
             mime => mime,
         };
         let Some(rank) = MEDIA_TYPES.iter().position(|&(known, _)| known == mime) else {

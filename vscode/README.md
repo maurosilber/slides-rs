@@ -4,7 +4,8 @@ Opens the markdown of a [slides-rs](../) deck as a notebook in VS Code. Each
 `~~~` code cell the deck runs is a code cell, the markdown between them is a
 markdown cell, and each code cell shows the outputs the deck saved for it in
 `_outputs`. The cells run as in any Python notebook, on the kernel the deck
-runs them on, and their outputs are saved where the deck reads them.
+runs them on, their outputs are saved where the deck reads them as they run,
+and a figure steps through its steps as on its slide.
 
 The markdown is read and written, and the outputs found and saved, by the
 deck's own Rust code compiled to WASI and run with
@@ -24,18 +25,30 @@ a deck that imports it saves them there, or else from the one next to it.
 Showing them is an edit, so a notebook that was saved is saved again when it
 opens. That writes the file exactly as it was.
 
-On save, the outputs of a code cell are written under its address unless they
-are the ones already saved there. Outputs read from `_outputs` are never
-written again, since after an edit they belong to the code before the edit.
-Outputs saved this way have no list of the files the cell read, so the next
-`slides-rs` render runs the cell again.
+The outputs of another extension's kernel are saved with the notebook: those
+of a code cell are written under its address unless they are the ones already
+saved there. Outputs read from `_outputs` are never written again, since after
+an edit they belong to the code before the edit. Saved this way, they have no
+list of the files the cell read, so the next `slides-rs` render runs the cell
+again.
 
 ## Run
 
 The **slides-rs** kernel runs the cells, one kernel per notebook, as the deck
 does: next to the file, in the environment its `pixi.lock` or `uv.lock` pins,
-on `xpython` or else `python3`, with figures as the SVG a slide shows. Running
-a cell is an edit, and saving the notebook saves its outputs in `_outputs`.
+on `xpython` or else `python3`, with figures as the SVG a slide shows.
+
+A cell's outputs are saved in `_outputs` as soon as it runs, under its address.
+If the kernel ran the cells before it, in order, and nothing else, since it
+started, they are saved with the files the cell read, as the deck saves them,
+and the next render shows them rather than running the cell again. Otherwise,
+as after running a cell again or interrupting one, they are saved without, and
+the render runs the cell again. An interrupted cell's outputs are not saved.
+
+A figure whose parts matplotlib's `gid` marks as steps opens at its first step.
+Clicking it, or the arrow keys once it is focused, steps through it, as the
+deck's own `steps.js` numbers the steps. In a dark theme, figures are inverted,
+as the deck's dark theme inverts them.
 
 **Slides: Restart Kernel**, in the notebook's toolbar, starts a new kernel for
 the next cell. xeus-python's `xpython` cannot stop a cell, so interrupting one

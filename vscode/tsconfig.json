@@ -3,10 +3,16 @@
 		"module": "node16",
 		"moduleResolution": "node16",
 		"target": "es2022",
-		"lib": ["es2022", "dom"],
+		"lib": [
+			"es2022",
+			"dom"
+		],
 		"strict": true,
 		"skipLibCheck": true,
-		"noEmit": true
+		"noEmit": true,
+		"allowJs": true
 	},
-	"include": ["src"]
+	"include": [
+		"src"
+	]
 }

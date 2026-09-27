@@ -193,6 +193,22 @@ pub struct CodeCell {
     pub code: String,
 }
 
+/// The source of a code cell in a notebook, which is its code but for the
+/// newline that ends the last line.
+pub fn source(code: &str) -> &str {
+    code.strip_suffix('\n').unwrap_or(code)
+}
+
+/// The code of a notebook's code cell, as the deck reads it from the file,
+/// so that it has the same address.
+pub fn code(source: &str) -> String {
+    if source.is_empty() {
+        String::new()
+    } else {
+        format!("{source}\n")
+    }
+}
+
 /// The code cells of a file, in order, found as `render` finds them.
 pub fn code_cells(markdown: &str) -> Vec<CodeCell> {
     let mut cells: Vec<CodeCell> = Vec::new();

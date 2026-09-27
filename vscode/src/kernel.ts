@@ -5,15 +5,18 @@
 
 import * as vscode from 'vscode';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { fromBase64 } from './base64';
+import { cellOutput, Saved } from './output';
 
-/** One output, as `slides-rs kernel` answers it, its bytes in base64. */
-interface Item {
-	mime: string;
-	data: string;
+/** A cell that ran: its outputs, which are saved in the outputs directory, whether it raised,
+ * its count, and whether its outputs were saved with the files it read, which the deck trusts. */
+interface Ran {
+	outputs: Saved[];
+	ok: boolean;
+	count: number;
+	trusted: boolean;
 }
 
-type Answer = { kernel: string } | { outputs: Item[]; ok: boolean; count: number } | { error: string };
+type Answer = { kernel: string } | Ran | { error: string };
 
 /** Whether this extension host can start a process. */
 export function canRunCells(): boolean {
@@ -79,8 +82,17 @@ export class Kernels implements vscode.Disposable {
 		execution.start(Date.now());
 		await execution.clearOutput();
 		try {
-			const answer = await session.run(execution.cell.document.getText());
-			await execution.replaceOutput(answer.outputs.map((item) => new vscode.NotebookCellOutput([new vscode.NotebookCellOutputItem(fromBase64(item.data), item.mime)])));
+			// Its address is the hash of every code cell up to it, as the notebook has them now.
+			const cells = notebook
+				.getCells()
+				.slice(0, execution.cell.index + 1)
+				.filter((cell) => cell.kind === vscode.NotebookCellKind.Code)
+				.map((cell) => cell.document.getText());
+			const answer = await session.run(cells);
+			if (!answer.trusted) {
+				this.log.info(`${vscode.workspace.asRelativePath(notebook.uri)}: cell ${execution.cell.index + 1} did not run after just the cells before it, in order, so the deck runs it again`);
+			}
+			await execution.replaceOutput(answer.outputs.map(cellOutput));
 			execution.executionOrder = answer.count;
 			execution.end(answer.ok, Date.now());
 			return answer.ok;
@@ -139,9 +151,10 @@ class Session {
 		return result;
 	}
 
-	async run(code: string): Promise<{ outputs: Item[]; ok: boolean; count: number }> {
+	/** Runs the last of the code cells, and saves its outputs. */
+	async run(cells: string[]): Promise<Ran> {
 		const process = await this.started;
-		process.stdin.write(JSON.stringify({ code }) + '\n');
+		process.stdin.write(JSON.stringify({ cells }) + '\n');
 		const answer = await this.answer();
 		if (!('outputs' in answer)) {
 			throw new Error('error' in answer ? answer.error : `unexpected answer ${JSON.stringify(answer)}`);

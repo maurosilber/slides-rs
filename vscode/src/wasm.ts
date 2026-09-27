@@ -4,6 +4,8 @@
 
 import * as vscode from 'vscode';
 import { MountPointDescriptor, Wasm } from '@vscode/wasm-wasi/v1';
+import { canRunCells } from './kernel';
+import type { Saved } from './output';
 
 /** The memory the module imports, as `.cargo/config.toml` sizes it, in pages of 64 KiB. */
 const MEMORY: WebAssembly.MemoryDescriptor = { initial: 256, maximum: 16384, shared: true };
@@ -30,11 +32,6 @@ export interface Cell {
 export interface Item {
 	mime: string;
 	data: string;
-}
-
-/** An output read from the outputs directory, and the file it is saved in. */
-export interface Saved extends Item {
-	name: string;
 }
 
 /** A code cell and its outputs, to be saved. */
@@ -68,13 +65,13 @@ export class Module {
 	}
 
 	/** The saved outputs of each code cell of the file at `uri`, given their sources in order. */
-	load(uri: vscode.Uri, sources: string[]): Promise<Saved[][]> {
-		return this.run({ command: 'load', place: place(uri), sources }, [disk(uri)]);
+	async load(uri: vscode.Uri, sources: string[]): Promise<Saved[][]> {
+		return this.run({ command: 'load', place: await place(uri), sources }, [disk(uri)]);
 	}
 
 	/** Saves the outputs of the code cells of the file at `uri`, returning how many cells it saved. */
-	save(uri: vscode.Uri, cells: CodeCell[]): Promise<number> {
-		return this.run({ command: 'save', place: place(uri), cells }, [disk(uri)]);
+	async save(uri: vscode.Uri, cells: CodeCell[]): Promise<number> {
+		return this.run({ command: 'save', place: await place(uri), cells }, [disk(uri)]);
 	}
 
 	private async run<T>(request: object, mountPoints: MountPointDescriptor[] = []): Promise<T> {
@@ -118,13 +115,27 @@ function disk(uri: vscode.Uri): MountPointDescriptor {
 	return { kind: 'vscodeFileSystem', uri: uri.with({ path: '/', query: '', fragment: '' }), mountPoint: DISK };
 }
 
-function place(uri: vscode.Uri): Place {
+async function place(uri: vscode.Uri): Promise<Place> {
 	const dir = vscode.Uri.joinPath(uri, '..');
 	return {
 		// The deck hashes the path on the disk; elsewhere, as in the browser, there is none.
-		dir: dir.scheme === 'file' ? dir.fsPath : dir.path,
+		dir: dir.scheme === 'file' ? await realpath(dir.fsPath) : dir.path,
 		path: DISK + dir.path,
 	};
+}
+
+/** The path with its links resolved, as the deck and `slides-rs kernel` hash it. Only on
+ * the desktop can they be. */
+async function realpath(path: string): Promise<string> {
+	if (!canRunCells()) {
+		return path;
+	}
+	try {
+		const fs = await import('node:fs/promises');
+		return await fs.realpath(path);
+	} catch {
+		return path;
+	}
 }
 
 function decode(chunks: Uint8Array[]): string {

@@ -1,9 +1,9 @@
 //! Run the code cells of one notebook through a Jupyter kernel and save
 //! their outputs, ready to be inserted into HTML.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use indicatif::ProgressBar;
 
 use super::audit;
@@ -61,17 +61,25 @@ pub async fn execute_cells(
         }
         let dir = store::save(&root, hash, &outputs)?;
         saved += 1;
-        // The kernel may run in another directory, so it gets the full path.
-        let files = std::path::absolute(dir.join(store::INPUTS))?;
-        let listed = async {
-            kernel.run_silent(&audit::save(&files)).await?;
-            store::hash_files(&files)?;
-            anyhow::Ok(())
-        };
-        if let Err(error) = listed.await {
-            progress::log(&bar, format!("{}: {error:#}", files.display()));
+        if let Err(error) = list_inputs(&mut kernel, &dir).await {
+            progress::log(&bar, format!("{error:#}"));
         }
     }
     kernel.shutdown().await?;
     Ok(saved)
+}
+
+/// Lists in the directory `dir` of the cell that just ran the files it read,
+/// and so everything before it, which the deck trusts its outputs by.
+pub async fn list_inputs(kernel: &mut Kernel, dir: &Path) -> Result<()> {
+    // The kernel may run in another directory, so it gets the full path.
+    let files = std::path::absolute(dir.join(store::INPUTS))?;
+    let listed = async {
+        kernel.run_silent(&audit::save(&files)).await?;
+        store::hash_files(&files)?;
+        anyhow::Ok(())
+    };
+    listed
+        .await
+        .with_context(|| format!("could not list {}", files.display()))
 }

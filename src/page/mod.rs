@@ -20,7 +20,16 @@ const TEMPLATE: &str = include_str!("template.html");
 /// deck can name.
 const STATIC: &[(&str, &str)] = &[
     ("slides.css", include_str!("../static/slides.css")),
-    ("slides.js", include_str!("../static/slides.js")),
+    // The steps are a file of their own, which the extension's notebook
+    // renderer shares.
+    (
+        "slides.js",
+        concat!(
+            include_str!("../static/steps.js"),
+            "\n",
+            include_str!("../static/slides.js")
+        ),
+    ),
     ("theme-base.css", include_str!("../static/theme-base.css")),
     ("theme-dark.css", include_str!("../static/theme-dark.css")),
     ("theme-light.css", include_str!("../static/theme-light.css")),
