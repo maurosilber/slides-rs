@@ -15,9 +15,13 @@ use slides::{markdown, paths, step, store};
 
 /// Renders a markdown file into an HTML slide deck.
 #[derive(clap::Parser)]
+#[command(subcommand_negates_reqs = true, args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// The markdown file to render.
-    input: PathBuf,
+    #[arg(required = true)]
+    input: Option<PathBuf>,
     /// Where to write the HTML. Defaults to the input with an `.html` extension.
     output: Option<PathBuf>,
     /// Re-render on every change to the input or to a file it imports.
@@ -37,6 +41,24 @@ struct Cli {
     /// all there is to share. KaTeX still loads from its CDN.
     #[arg(long)]
     self_contained: bool,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Runs the cells of a markdown file as they are sent, for the VS Code
+    /// extension.
+    ///
+    /// Each line of stdin is a cell's code, as the JSON `{"code": ...}`,
+    /// answered by a line of JSON on stdout with its outputs.
+    Kernel {
+        /// The markdown file the cells are in. They run next to it, in the
+        /// environment its lock file pins, as when the deck renders it.
+        file: PathBuf,
+        /// Kernel to run the cells on. Without this, the first of xpython and
+        /// python3 that is installed is used.
+        #[arg(short, long, value_enum)]
+        kernel: Option<KernelChoice>,
+    },
 }
 
 /// Which kernel to run the cells on.
@@ -62,6 +84,7 @@ impl KernelChoice {
 
 fn main() {
     let Cli {
+        command,
         input,
         output,
         watch: watching,
@@ -69,6 +92,16 @@ fn main() {
         clean,
         self_contained,
     } = Cli::parse();
+    if let Some(Command::Kernel { file, kernel }) = command {
+        let kernels = kernel.map_or(notebook::KERNELS, KernelChoice::kernelspecs);
+        if let Err(error) = notebook::serve(&canonical(&file), kernels) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    // Required unless there is a command, which returned above.
+    let input = input.unwrap();
     let output = output.unwrap_or_else(|| input.with_extension("html"));
     // The cache is keyed by canonical path, as watch events report those.
     let input = canonical(&input);

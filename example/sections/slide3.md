@@ -12,6 +12,6 @@ x = np.pi * np.linspace(-1, 1, 1000)
 ~~~
 
 ~~~python
-for i in range(10):
+for i in range(3):
     plt.plot(x, np.cos(i * x), gid=f"step={i}..{i+2}")
 ~~~

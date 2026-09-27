@@ -1,5 +1,6 @@
 **
 !dist/extension.js
 !dist/slides-notebook.wasm
+!dist/slides-rs
 !package.json
 !README.md

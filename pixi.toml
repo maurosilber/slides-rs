@@ -5,7 +5,8 @@ platforms = ["osx-arm64"]
 [environments]
 default = ["rust", "python"]
 python = ["python"]
-vscode = ["rust", "vscode"]
+# The python feature holds the kernels the extension's tests run cells on.
+vscode = ["rust", "python", "vscode"]
 
 [feature.rust.dependencies]
 rust = "*"
@@ -26,6 +27,7 @@ rust-std-wasm32-wasip1-threads = "*"
 vscode-deps = { cmd = "npm install", cwd = "vscode" }
 vscode-build = { cmd = "npm run build", cwd = "vscode", depends-on = ["vscode-deps"] }
 vscode-dev = { cmd = "\"$VSCODE\" --extensionDevelopmentPath=\"$PIXI_PROJECT_ROOT/vscode\" \"$PIXI_PROJECT_ROOT/example\"", depends-on = ["vscode-build"], description = "Open the example deck in a VS Code window running the extension" }
+vscode-test = { cmd = "npm test", cwd = "vscode", depends-on = ["vscode-build"], description = "Test the extension in a VS Code of its own" }
 vscode-install = { cmd = "npm run package -- --out slides-notebook.vsix && \"$VSCODE\" --install-extension slides-notebook.vsix --force", cwd = "vscode", depends-on = ["vscode-build"], description = "Package the extension and install it in VS Code" }
 
 [feature.vscode.activation.env]

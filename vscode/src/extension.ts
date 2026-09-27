@@ -2,6 +2,8 @@
 // the outputs the deck saved for them in the outputs directory.
 
 import * as vscode from 'vscode';
+import { fromBase64, toBase64 } from './base64';
+import { canRunCells, Kernels } from './kernel';
 import { Cell, CodeCell, Module, Saved } from './wasm';
 
 const NOTEBOOK = 'slides-notebook';
@@ -29,6 +31,18 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 		}),
 	);
+	if (canRunCells()) {
+		const kernels = new Kernels(NOTEBOOK, context.extensionUri, log);
+		context.subscriptions.push(
+			kernels,
+			vscode.commands.registerCommand('slides.restartKernel', () => {
+				const notebook = vscode.window.activeNotebookEditor?.notebook;
+				if (notebook?.notebookType === NOTEBOOK) {
+					kernels.restart(notebook);
+				}
+			}),
+		);
+	}
 	for (const notebook of vscode.workspace.notebookDocuments) {
 		void outputs.load(notebook);
 	}
@@ -160,22 +174,4 @@ function withOutputs(cell: vscode.NotebookCell, saved: Saved[]): vscode.Notebook
 		(output) => new vscode.NotebookCellOutput([new vscode.NotebookCellOutputItem(fromBase64(output.data), output.mime)], { [SAVED_AS]: output.name }),
 	);
 	return data;
-}
-
-function toBase64(bytes: Uint8Array): string {
-	let binary = '';
-	// In chunks, as spreading a large array overflows the stack.
-	for (let start = 0; start < bytes.length; start += 0x8000) {
-		binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
-	}
-	return btoa(binary);
-}
-
-function fromBase64(base64: string): Uint8Array {
-	const binary = atob(base64);
-	const bytes = new Uint8Array(binary.length);
-	for (let index = 0; index < binary.length; index++) {
-		bytes[index] = binary.charCodeAt(index);
-	}
-	return bytes;
 }

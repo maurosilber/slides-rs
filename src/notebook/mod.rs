@@ -6,6 +6,7 @@ mod environment;
 mod execute;
 mod kernel;
 mod outputs;
+mod serve;
 mod svg;
 
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use indicatif::MultiProgress;
 use crate::paths::parent;
 use crate::{progress, store};
 use environment::Environments;
+pub use serve::serve;
 
 /// The kernels the cells can run on, most preferred first, as
 /// `jupyter kernelspec list` names them: xeus-python's `xpython`, then

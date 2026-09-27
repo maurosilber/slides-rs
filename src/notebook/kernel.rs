@@ -2,15 +2,18 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use jupyter_protocol::connection_info::Transport;
 use jupyter_protocol::{
-    ConnectionInfo, ExecuteReply, ExecuteRequest, ExecutionState, JupyterMessage,
-    JupyterMessageContent, ReplyStatus,
+    ConnectionInfo, ExecuteReply, ExecuteRequest, ExecutionState, InterruptRequest,
+    JupyterMessage, JupyterMessageContent, ReplyStatus,
 };
-use jupyter_zmq_client::{ClientIoPubConnection, ClientShellConnection, KernelspecDir};
+use jupyter_zmq_client::{
+    ClientControlConnection, ClientIoPubConnection, ClientShellConnection, KernelspecDir,
+};
 use tokio::process::Child;
 use uuid::Uuid;
 
@@ -35,7 +38,44 @@ pub struct Kernel {
     process: Child,
     shell: ClientShellConnection,
     iopub: ClientIoPubConnection,
+    connection_info: ConnectionInfo,
+    session_id: String,
+    /// Whether it is interrupted by a message, rather than by a signal.
+    interrupted_by_message: bool,
     connection_file: PathBuf,
+}
+
+/// A cell that ran, as a notebook shows it.
+pub struct Ran {
+    pub outputs: Vec<Output>,
+    /// Whether it ran without raising.
+    pub ok: bool,
+    /// The count the kernel gave it, which a notebook shows beside it.
+    pub count: usize,
+}
+
+/// Interrupts the cell a kernel runs, the way its kernelspec asks to be.
+pub struct Interrupter {
+    control: ClientControlConnection,
+    pid: Option<u32>,
+    by_message: bool,
+}
+
+impl Interrupter {
+    pub async fn interrupt(&mut self) -> Result<()> {
+        if self.by_message {
+            self.control
+                .send(InterruptRequest::default().into())
+                .await?;
+            self.control.read().await?;
+        } else if let Some(pid) = self.pid {
+            tokio::process::Command::new("kill")
+                .args(["-INT", &pid.to_string()])
+                .status()
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 /// Where to look for kernelspecs: in the environment the cells run in, if
@@ -114,6 +154,8 @@ impl Kernel {
             .await
             .with_context(|| format!("could not find any of the {kernel_names:?} kernels"))?;
         let kernel_name = kernelspec.kernel_name.clone();
+        let interrupted_by_message =
+            kernelspec.kernelspec.interrupt_mode.as_deref() == Some("message");
 
         // The kernel binds these ports; we only pick ones that are free now.
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -147,8 +189,12 @@ impl Kernel {
             }
             command.envs(&environment.vars);
         }
+        // What the kernel prints of its own goes to stderr, leaving stdout to
+        // whoever runs us: the extension reads its answers there.
         let mut process = command
             .current_dir(dir)
+            .stdin(Stdio::null())
+            .stdout(std::io::stderr())
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("could not start the `{kernel_name}` kernel"))?;
@@ -178,10 +224,14 @@ impl Kernel {
             process,
             shell,
             iopub,
+            connection_info,
+            session_id,
+            interrupted_by_message,
             connection_file,
         };
-        // The setup belongs to no cell, so what it prints is not kept.
-        kernel.run(SETUP).await?;
+        // The setup belongs to no cell, so it is left out of the count, and
+        // what it prints is not kept.
+        kernel.run_silent(SETUP).await?;
         Ok(kernel)
     }
 
@@ -189,6 +239,35 @@ impl Kernel {
     pub async fn run(&mut self, code: &str) -> Result<Vec<Output>> {
         let (outputs, _) = self.execute(ExecuteRequest::new(code.to_string())).await?;
         Ok(outputs)
+    }
+
+    /// Run one cell as a notebook shows it: its outputs, along with whether it
+    /// raised and the count the kernel gave it.
+    pub async fn run_cell(&mut self, code: &str) -> Result<Ran> {
+        let (outputs, reply) = self.execute(ExecuteRequest::new(code.to_string())).await?;
+        let JupyterMessageContent::ExecuteReply(reply) = reply.content else {
+            anyhow::bail!("unexpected reply {:?}", reply.content);
+        };
+        Ok(Ran {
+            outputs,
+            ok: reply.status == ReplyStatus::Ok,
+            count: reply.execution_count.0,
+        })
+    }
+
+    /// What interrupts the cell the kernel runs, from beside whatever waits for
+    /// its outputs.
+    pub async fn interrupter(&self) -> Result<Interrupter> {
+        let control = jupyter_zmq_client::create_client_control_connection(
+            &self.connection_info,
+            &self.session_id,
+        )
+        .await?;
+        Ok(Interrupter {
+            control,
+            pid: self.process.id(),
+            by_message: self.interrupted_by_message,
+        })
     }
 
     /// Run code that belongs to no cell: it is left out of the history and
@@ -219,7 +298,14 @@ impl Kernel {
 
         let mut outputs = Outputs::default();
         loop {
-            let message = self.iopub.read().await?;
+            // A kernel that exits, as xeus-python does when interrupted, would
+            // leave us waiting for the rest of the cell's outputs forever.
+            let message = tokio::select! {
+                message = self.iopub.read() => message?,
+                status = self.process.wait() => {
+                    anyhow::bail!("the `{}` kernel exited with {}", self.name, status?)
+                }
+            };
             // The kernel also publishes messages of its own, and replies to
             // whatever else is on the wire; take only this cell's.
             let parent = message.parent_header.as_ref().map(|h| h.msg_id.as_str());

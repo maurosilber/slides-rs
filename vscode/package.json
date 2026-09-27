@@ -1,7 +1,7 @@
 {
 	"name": "slides-notebook",
 	"displayName": "Slides Notebook",
-	"description": "Opens the markdown of a slides-rs deck as a notebook, with the outputs its code cells saved.",
+	"description": "Opens the markdown of a slides-rs deck as a notebook, runs its code cells as the deck does, and saves their outputs where the deck reads them.",
 	"version": "0.1.0",
 	"publisher": "maurosilber",
 	"license": "MIT",
@@ -36,14 +36,44 @@
 				"title": "Open as Slides Notebook",
 				"category": "Slides",
 				"icon": "$(notebook)"
+			},
+			{
+				"command": "slides.restartKernel",
+				"title": "Restart Kernel",
+				"category": "Slides",
+				"icon": "$(debug-restart)",
+				"enablement": "!isWeb"
 			}
 		],
+		"configuration": {
+			"title": "Slides Notebook",
+			"properties": {
+				"slides.path": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The `slides-rs` command, which runs the code cells with `slides-rs kernel`. Empty, the one that comes with the extension, or else `slides-rs` on the `PATH`."
+				}
+			}
+		},
 		"menus": {
 			"editor/title": [
 				{
 					"command": "slides.openNotebook",
 					"when": "resourceLangId == markdown && activeEditor == workbench.editors.files.textFileEditor",
 					"group": "navigation"
+				}
+			],
+			"notebook/toolbar": [
+				{
+					"command": "slides.restartKernel",
+					"when": "notebookType == slides-notebook && !isWeb",
+					"group": "navigation/execute"
+				}
+			],
+			"commandPalette": [
+				{
+					"command": "slides.restartKernel",
+					"when": "notebookType == slides-notebook && !isWeb"
 				}
 			],
 			"explorer/context": [
@@ -57,10 +87,11 @@
 	},
 	"scripts": {
 		"build:wasm": "cargo build --package slides-notebook --release --target wasm32-wasip1-threads && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/wasm32-wasip1-threads/release/slides-notebook.wasm','dist/slides-notebook.wasm')\"",
-		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap",
-		"build": "npm run build:wasm && npm run build:ts",
+		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:node:* --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap",
+		"build:cli": "cargo build --bin slides-rs --release && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/release/slides-rs','dist/slides-rs');require('fs').chmodSync('dist/slides-rs',0o755)\"",
+		"build": "npm run build:wasm && npm run build:cli && npm run build:ts",
 		"test": "node test/run.mjs",
-		"package": "vsce package --no-dependencies --no-rewrite-relative-links"
+		"package": "vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository --skip-license"
 	},
 	"dependencies": {
 		"@vscode/wasm-wasi": "^1.0.1"

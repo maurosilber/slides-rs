@@ -7,7 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { downloadAndUnzipVSCode, resolveCliArgsFromVSCodeExecutablePath, runTests } from '@vscode/test-electron';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE ?? (await downloadAndUnzipVSCode());
+let vscodeExecutablePath = process.env.VSCODE_EXECUTABLE ?? (await downloadAndUnzipVSCode());
+// On macOS, VS Code's binary is `Code` since 1.139, which @vscode/test-electron still calls `Electron`.
+if (!fs.existsSync(vscodeExecutablePath)) {
+	vscodeExecutablePath = path.join(path.dirname(vscodeExecutablePath), 'Code');
+}
 const extensions = path.join(root, '.vscode-test', 'extensions');
 const [cli, ...args] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
 execFileSync(cli, [...args, '--extensions-dir', extensions, '--install-extension', 'ms-vscode.wasm-wasi-core'], { stdio: 'inherit' });
