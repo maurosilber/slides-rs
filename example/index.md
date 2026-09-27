@@ -2,7 +2,4 @@
 theme: dark
 ---
 
-<import-slide src="sections/slide1.md" />
-<import-slide src="sections/slide2.md" />
-<import-slide src="sections/slide3.md" />
-<import-slide src="sections/equations.md" />
+<import-slide src="sections/showcase.md" />

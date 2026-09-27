@@ -57,8 +57,14 @@ def parent_of(root: ET.Element, element: ET.Element) -> ET.Element:
     return next(parent for parent in root.iter() if element in list(parent))
 
 
-def translate(element: ET.Element) -> tuple[float, float]:
-    x, y = re.fullmatch(r"translate\((\S+) (\S+)\)", element.get("transform")).groups()
+def anchoring(root: ET.Element) -> ET.Element:
+    """The animation that takes the artist to the origin while it moves."""
+    (animation,) = root.iter(f"{SVG}animateTransform")
+    return animation
+
+
+def translate(text: str) -> tuple[float, float]:
+    x, y = text.split()
     return float(x), float(y)
 
 
@@ -114,7 +120,7 @@ def test_it_starts_in_a_step_of_its_own(figure):
     # in the artist's step.
     start = parent_of(root, animation)
     assert start.get("id") == "step=2.."
-    assert list(start) == [animation]
+    assert list(start) == [animation, anchoring(root)]
     assert parent_of(root, start) is parent_of(root, moving)
     assert parent_of(root, moving).get("id") == "step=1.."
 
@@ -127,10 +133,15 @@ def test_it_moves_from_where_it_is_drawn(figure, options):
     moving, animation = motion_of(root)
     (inner,) = list(moving)
     # The dot is drawn where the line starts, as the SVG draws it, and taken to the
-    # origin, which the motion moves along the line from.
+    # origin while it moves, which the motion moves along the line from. Otherwise, it
+    # is where it is drawn.
     d = named(root, animation).find(f"{SVG}path").get("d")
     start = [float(value) for value in re.findall(r"-?[\d.]+", d)[:2]]
-    assert translate(inner) == pytest.approx((-start[0], -start[1]), abs=1e-3)
+    anchor = anchoring(root)
+    assert inner.get("transform") is None
+    assert anchor.get(f"{XLINK}href") == f"#{inner.get('id')}"
+    assert (anchor.get("attributeName"), anchor.get("type")) == ("transform", "translate")
+    assert translate(anchor.get("from")) == translate(anchor.get("to")) == pytest.approx((-start[0], -start[1]), abs=1e-3)
     (marker,) = inner.iter(f"{SVG}use")
     assert (float(marker.get("x")), float(marker.get("y"))) == pytest.approx(start, abs=1e-3)
 
@@ -263,12 +274,32 @@ def test_its_settings_are_the_animation_s(figure, settings, attributes):
 def test_it_repeats_for_a_while_and_on_from_where_it_ended(figure):
     figure, line, dot = figure
     Motion(dot, along=line).repeat(seconds=5, accumulate=True)
-    _, animation = motion_of(svg(figure))
-    assert {key: animation.get(key) for key in ("repeatCount", "repeatDur", "accumulate")} == {
-        "repeatCount": "indefinite",
-        "repeatDur": "5s",
-        "accumulate": "sum",
-    }
+    root = svg(figure)
+    _, animation = motion_of(root)
+    # Taken back to the origin as it goes on, as long as it moves.
+    for animation in (animation, anchoring(root)):
+        assert {key: animation.get(key) for key in ("repeatCount", "repeatDur", "accumulate")} == {
+            "repeatCount": "indefinite",
+            "repeatDur": "5s",
+            "accumulate": "sum",
+        }
+
+
+def test_it_is_taken_to_the_origin_as_long_as_it_moves(figure):
+    figure, line, dot = figure
+    Motion(dot, along=line).timing(duration=3).repeat(2).hold(False)
+    root = svg(figure)
+    _, animation = motion_of(root)
+    for key in ("begin", "dur", "fill", "repeatCount"):
+        assert anchoring(root).get(key) == animation.get(key), key
+
+
+def test_it_does_not_rotate_as_it_accumulates(figure):
+    figure, line, dot = figure
+    with pytest.raises(ValueError):
+        Motion(dot, along=line).rotate("auto").repeat(accumulate=True)
+    with pytest.raises(ValueError):
+        Motion(dot, along=line).repeat(accumulate=True).rotate(30)
 
 
 @pytest.mark.parametrize(

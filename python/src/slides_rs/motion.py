@@ -35,6 +35,10 @@ EASINGS = {
     "ease-in-out": (0.42, 0.0, 0.58, 1.0),
 }
 
+#: Accumulated, the artist is taken back as far as the path starts from the origin
+#: every time, within the motion, which would turn that too.
+ACCUMULATE_ROTATE = "a motion that accumulates does not rotate"
+
 Curve = tuple[float, float, float, float]
 Easing = Literal["linear", "ease", "ease-in", "ease-out", "ease-in-out"] | Curve
 
@@ -142,6 +146,8 @@ class Motion:
         ``angle`` in degrees, or, with ``None``, not."""
         if not (angle is None or angle in ("auto", "auto-reverse") or _real(angle)):
             raise ValueError(f"rotate takes auto, auto-reverse or an angle, not {angle!r}")
+        if angle is not None and "accumulate" in self._repeat:
+            raise ValueError(ACCUMULATE_ROTATE)
         self._rotate = angle if angle is None or isinstance(angle, str) else _number(angle)
         return self
 
@@ -156,11 +162,14 @@ class Motion:
 
         With ``accumulate``, each time moves on from where the last one ended,
         rather than from the start, as along a path that is one of many alike.
+        It does not turn as it does, as :meth:`rotate` would.
         """
         if not (count == "indefinite" or (_real(count) and count > 0)):
             raise ValueError(f"repeat takes a positive number of times or indefinite, not {count!r}")
         if not (seconds is None or (_real(seconds) and seconds > 0)):
             raise ValueError(f"repeat takes a positive number of seconds, not {seconds!r}")
+        if accumulate and self._rotate is not None:
+            raise ValueError(ACCUMULATE_ROTATE)
         self._repeat = {}
         if count != 1:
             self._repeat["repeatCount"] = count if isinstance(count, str) else _number(count)
@@ -212,15 +221,15 @@ class Motion:
         if attributes is None:
             return self._draw_original(self.artist, renderer)
         writer = svg.writer
-        moving = f"motion-{id(self):x}"
+        moving, anchored = f"motion-{id(self):x}", f"motion-{id(self):x}-anchored"
         # The artist's step is the whole motion's, that it moves in once it shows.
         gid = self.artist.get_gid()
         renderer.open_group("motion", gid=gid)
-        # The motion moves and turns the artist, drawn at the start of the path, as
-        # from the origin. It is on a group of its own, as how it adds to a transform
-        # differs across browsers.
+        # The motion moves and turns the artist, drawn at the start of the path, as from
+        # the origin, where it is taken while it moves. It is on a group of its own, as
+        # how it adds to a transform differs across browsers.
         writer.start("g", id=moving)
-        writer.start("g", transform=f"translate({_number(-start[0])} {_number(-start[1])})")
+        writer.start("g", id=anchored)
         self.artist.set_gid(None)
         try:
             self._draw_original(self.artist, renderer)
@@ -228,13 +237,30 @@ class Motion:
             self.artist.set_gid(gid)
         writer.end("g")
         writer.end("g")
-        # The animation is apart from what it moves, in a group of the step it starts
-        # in: the deck starts it over by replacing it, and steps through the group.
+        # The animations are apart from what they move, in a group of the step they
+        # start in: the deck starts them over by replacing them, and steps through the
+        # group.
         if self._step is not None:
             writer.start("g", id=self._step)
         writer.start("animateMotion", attrib={"xlink:href": f"#{moving}", **attributes})
         writer.element("mpath", attrib={"xlink:href": f"#{self._name}"})
         writer.end("animateMotion")
+        # Taken to the origin only while it moves, it is where it is drawn otherwise. The
+        # path is where it is drawn too, so that the motion ends where the path does,
+        # rather than as far on as it goes: accumulated, each time is taken back as much.
+        origin = f"{_number(-start[0])} {_number(-start[1])}"
+        timing = {key: attributes[key] for key in ("begin", "dur", "fill", *self._repeat)}
+        writer.element(
+            "animateTransform",
+            attrib={
+                "xlink:href": f"#{anchored}",
+                "attributeName": "transform",
+                "type": "translate",
+                "from": origin,
+                "to": origin,
+                **timing,
+            },
+        )
         if self._step is not None:
             writer.end("g")
         renderer.close_group("motion")

@@ -85,7 +85,9 @@ function stepsOf(slide) {
         for (const { child: element, on } of children) {
             // Unmarked, the element's parts show along with it.
             if (!on) continue;
-            for (const part of element.querySelectorAll(MARKED)) {
+            // The element itself steps if it is marked, as raw html can be.
+            const marked = element.matches(MARKED) ? [element] : [];
+            for (const part of [...marked, ...element.querySelectorAll(MARKED)]) {
                 const range = rangeOf(part, latest);
                 if (range.start !== undefined) latest = Math.max(latest, range.start);
                 parts.push({ part, ...range });
