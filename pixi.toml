@@ -35,7 +35,7 @@ vscode-deps = { cmd = "npm install", cwd = "vscode" }
 vscode-build = { cmd = "npm run build", cwd = "vscode", depends-on = ["vscode-deps"] }
 vscode-dev = { cmd = "\"$VSCODE\" --extensionDevelopmentPath=\"$PIXI_PROJECT_ROOT/vscode\" \"$PIXI_PROJECT_ROOT/example\"", depends-on = ["vscode-build"], description = "Open the example deck in a VS Code window running the extension" }
 vscode-test = { cmd = "npm test", cwd = "vscode", depends-on = ["vscode-build"], description = "Test the extension in a VS Code of its own" }
-vscode-install = { cmd = "npm run package -- --out slides-notebook.vsix && \"$VSCODE\" --install-extension slides-notebook.vsix --force", cwd = "vscode", depends-on = ["vscode-build"], description = "Package the extension and install it in VS Code" }
+vscode-install = { cmd = "npm run package -- --out slides-notebook.vsix && python install.py \"$VSCODE\" slides-notebook.vsix \"$PIXI_PROJECT_ROOT\"", cwd = "vscode", depends-on = ["vscode-build"], description = "Package the extension and install it in the VS Code profile this project opens with" }
 
 [feature.vscode.activation.env]
 VSCODE = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
