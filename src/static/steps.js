@@ -221,7 +221,10 @@ function play(animation, forward, progress, speed = 1) {
     // Chrome holds no animation over by the time the SVG's timeline begins, at
     // 0, as one played to its end as the page loads is: it ends just after.
     const now = animation.ownerSVGElement.getCurrentTime();
-    const start = Math.max(now - (forward ? progress : 1 - progress) * lasts, 0.001 - lasts);
+    // Not begun, it is none of the way along, even as one that repeats on and on
+    // lasts forever, which would make it not a number of the way.
+    const along = forward ? progress : 1 - progress;
+    const start = Math.max(now - (along && along * lasts), 0.001 - lasts);
     copy.setAttribute("begin", `${start}s`);
     copy.dataset.begin = "indefinite";
     animation.replaceWith(copy);
