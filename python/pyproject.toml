@@ -4,15 +4,15 @@ version = "0.1.0"
 description = "Steps for the figures of a slides-rs deck, as matplotlib's gid."
 requires-python = ">=3.10"
 license = "MIT"
+dependencies = [
+  "matplotlib",
+  "numpy",
+]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/slides_rs"]
+requires = ["uv_build"]
+build-backend = "uv_build"
 
 [tool.pytest.ini_options]
-testpaths = ["src", "tests"]
-# The examples in the docstrings are tests too.
 addopts = ["--doctest-modules"]
+testpaths = ["src", "tests"]
