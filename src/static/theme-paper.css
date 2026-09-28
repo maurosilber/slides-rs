@@ -9,6 +9,12 @@
     --accent: #a23b2a;
     --code-bg: #ece5d5;
     --rule: #d6ccb8;
+    --syntax-keyword: #8b2e1f;
+    --syntax-string: #4f6b2a;
+    --syntax-number: #7a4b12;
+    --syntax-comment: #8a8073;
+    --syntax-title: #5a3e7a;
+    --syntax-meta: #8a5a2b;
 
     --font-body: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
     --font-heading: var(--font-body);

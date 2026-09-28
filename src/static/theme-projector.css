@@ -10,6 +10,12 @@
     --accent: #c1121f;
     --code-bg: #ececec;
     --rule: #000000;
+    --syntax-keyword: #a0001a;
+    --syntax-string: #0b4f1c;
+    --syntax-number: #003f9e;
+    --syntax-comment: #555555;
+    --syntax-title: #4b0082;
+    --syntax-meta: #7a3b00;
 
     --heading-weight: 800;
     --scale: 1.2;

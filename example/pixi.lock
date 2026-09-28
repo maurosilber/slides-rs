@@ -1749,4 +1749,7 @@ packages:
   timestamp: 1786599629846
 - pypi: ../python
   name: slides-rs
+  requires_dist:
+  - matplotlib
+  - numpy
   requires_python: '>=3.10'

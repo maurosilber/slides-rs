@@ -9,5 +9,11 @@
     --accent: #7aa2f7;
     --code-bg: #20232a;
     --rule: #3a3f4b;
+    --syntax-keyword: #bb9af7;
+    --syntax-string: #9ece6a;
+    --syntax-number: #ff9e64;
+    --syntax-comment: #6b7280;
+    --syntax-title: #7aa2f7;
+    --syntax-meta: #e0af68;
     --figure-filter: invert(1) hue-rotate(180deg);
 }
