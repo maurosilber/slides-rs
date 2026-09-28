@@ -30,6 +30,9 @@ rust = "*"
 rust-src = "*"
 sccache = "*"
 
+[feature.rust.activation.env]
+RUSTC_WRAPPER = "sccache"
+
 [feature.python.dependencies]
 python = "*"
 matplotlib = "*"

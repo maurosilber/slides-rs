@@ -1,6 +1,3 @@
-[build]
-rustc-wrapper = "sccache"
-
 # The extension creates the memory of the WASI module, which it imports as
 # threads need, so its size is fixed here: 16 MiB to start, and up to 1 GiB.
 [target.wasm32-wasip1-threads]
