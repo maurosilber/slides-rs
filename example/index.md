@@ -1,5 +1,7 @@
 ---
 theme: dark
+figures:
+    rush: 0.1
 ---
 
 # Leg by leg

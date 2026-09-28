@@ -134,7 +134,11 @@ const waiting = new WeakMap();
 // speed up to get where they were going, their end or, backward, their start,
 // and the others wait for them, so that one step's animation does not run on
 // into the next one's.
-function playAnimations(container) {
+//
+// Finished, those that begin are at their end already, as if played, but for
+// those that repeat on and on, which have none, as when a slide opens at one
+// of its steps rather than being stepped through to it.
+function playAnimations(container, finished = false) {
     // What waited to play plays now, to be sped up in turn.
     waited(container)?.();
     const begun = [];
@@ -155,7 +159,10 @@ function playAnimations(container) {
     }
     const start = () => {
         hidden.forEach(reverse);
-        for (const animation of begun) play(animation, true, progressOf(animation));
+        for (const animation of begun) {
+            const end = finished && Number.isFinite(lengthOf(animation));
+            play(animation, true, end ? 1 : progressOf(animation));
+        }
     };
     if (wait > 0) {
         waiting.set(container, { start, timer: setTimeout(() => waited(container)(), wait * 1000) });
@@ -211,7 +218,10 @@ function play(animation, forward, progress, speed = 1) {
         if (most != null && most != "indefinite") copy.setAttribute("repeatDur", `${parseFloat(most) / speed}s`);
     }
     const lasts = length / speed;
-    const start = animation.ownerSVGElement.getCurrentTime() - (forward ? progress : 1 - progress) * lasts;
+    // Chrome holds no animation over by the time the SVG's timeline begins, at
+    // 0, as one played to its end as the page loads is: it ends just after.
+    const now = animation.ownerSVGElement.getCurrentTime();
+    const start = Math.max(now - (forward ? progress : 1 - progress) * lasts, 0.001 - lasts);
     copy.setAttribute("begin", `${start}s`);
     copy.dataset.begin = "indefinite";
     animation.replaceWith(copy);

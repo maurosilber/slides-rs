@@ -39,7 +39,7 @@ addEventListener("DOMContentLoaded", () => {
         }
     }
     for (const slide of slides) wrapColumns(slide);
-    updateSlide(...positionFromHash());
+    updateSlide(...positionFromHash(), true);
 });
 
 // The current slide and step are kept in the URL, as `#slide.step`,
@@ -61,8 +61,10 @@ function showPosition() {
 }
 
 // A slide opens as its step is, without the transitions of stepping to it,
-// which would bring in at once all it shows.
-function updateSlide(i, step = 1) {
+// which would bring in at once all it shows. Its animations play as it opens,
+// unless it opens `finished`, as if stepped through already, as when coming
+// back to where the URL says, or to a slide's end, where they are over.
+function updateSlide(i, step = 1, finished = false) {
     if (i < 0 || i >= slides.length) return;
     const slide = slides[i];
     slide.classList.add("steps-instant");
@@ -71,7 +73,7 @@ function updateSlide(i, step = 1) {
     slide.style.display = "block";
     currentSlide = i;
     currentStep = Math.max(1, Math.min(step, slideSteps[i].count));
-    showStep(currentStep);
+    showStep(currentStep, finished);
     // Laid out before the transitions come back, so that none of them runs.
     slide.getBoundingClientRect();
     slide.classList.remove("steps-instant");
@@ -83,7 +85,7 @@ function updateSlide(i, step = 1) {
 // it collapses, when it takes none, so another can show in its place.
 // Disabled, every element shows, even those whose steps are over.
 // currentStep is tracked even while disabled, so re-enabling resumes here.
-function showStep(i) {
+function showStep(i, finished = false) {
     const { count, elements } = slideSteps[currentSlide];
     if (i < 1 || i > count) return false;
     currentStep = i;
@@ -91,7 +93,7 @@ function showStep(i) {
         const shown = !stepsEnabled || (from <= i && i < to);
         element.classList.toggle("step-hidden", !shown);
     }
-    playAnimations(slides[currentSlide]);
+    playAnimations(slides[currentSlide], finished);
     showPosition();
     return true;
 }
@@ -109,7 +111,7 @@ addEventListener("keydown", (event) => {
         }
     } else if (event.code == "ArrowLeft") {
         if (!moveToStep(currentStep - 1) && !rushAnimations(slides[currentSlide])) {
-            updateSlide(currentSlide - 1, Infinity);
+            updateSlide(currentSlide - 1, Infinity, true);
         }
     } else if (event.code == "ArrowDown") {
         // Alternate: finish this slide, then open the next one.
@@ -123,7 +125,7 @@ addEventListener("keydown", (event) => {
         if (stepsEnabled && currentStep > 1) {
             showStep(1);
         } else if (!rushAnimations(slides[currentSlide])) {
-            updateSlide(currentSlide - 1, Infinity);
+            updateSlide(currentSlide - 1, Infinity, true);
         }
     } else if (event.code == "KeyA") {
         // Toggle: off reveals the whole slide, on returns to where we were.
@@ -133,4 +135,4 @@ addEventListener("keydown", (event) => {
 });
 
 // The URL can also be edited, or gone back through.
-addEventListener("hashchange", () => updateSlide(...positionFromHash()));
+addEventListener("hashchange", () => updateSlide(...positionFromHash(), true));
