@@ -80,13 +80,41 @@ impl Pinned {
     }
 }
 
+/// The variables, or the starts of their names, that activating an
+/// environment sets, with pixi or conda, rather than those that configure
+/// them, such as `PIXI_CACHE_DIR`.
+const ACTIVATION: &[&str] = &[
+    "CONDA_PREFIX",
+    "CONDA_SHLVL",
+    "CONDA_DEFAULT_ENV",
+    "CONDA_ENV_SHLVL_",
+    "PIXI_ENVIRONMENT_",
+    "PIXI_EXE",
+    "PIXI_IN_SHELL",
+    "PIXI_PROJECT_",
+    "PIXI_PROMPT",
+];
+
 /// The default environment of the pixi workspace in `dir`. Frozen, pixi
 /// installs it as the lock file has it, without solving it again, so that it
 /// is the environment the cells are addressed by.
 async fn pixi(dir: &Path) -> Result<Environment> {
-    let output = tokio::process::Command::new("pixi")
+    let mut command = tokio::process::Command::new("pixi");
+    command
         .args(["shell-hook", "--json", "--frozen", "--manifest-path"])
-        .arg(dir)
+        .arg(dir);
+    // pixi prints only the variables that change what it is run in, so, run
+    // from an environment already active, as by `pixi run`, it would leave
+    // out the prefix. Without the activation, it prints all of them.
+    for (name, _) in std::env::vars_os() {
+        let activates = name
+            .to_str()
+            .is_some_and(|name| ACTIVATION.iter().any(|start| name.starts_with(start)));
+        if activates {
+            command.env_remove(name);
+        }
+    }
+    let output = command
         .output()
         .await
         .context("could not run pixi, which the pixi.lock asks for")?;
