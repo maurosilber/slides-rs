@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
 
 use crate::markdown::{NO_STEPS, PageSettings, SECTION};
-use crate::paths::parent;
+use crate::paths::{href, parent};
 use crate::store;
 
 const TEMPLATE: &str = include_str!("template.html");
@@ -93,28 +93,41 @@ pub fn write_static(root: &Path, files: &[&str]) {
     }
 }
 
-/// Where the page links a bundled file: in the outputs directory next to it.
-fn bundled_href(name: &str) -> String {
-    format!("{}/{name}", store::DIR)
+/// A file in the outputs directory, as the deck links it from where it is:
+/// through `outputs`, the outputs directory as the deck links it.
+fn in_outputs(outputs: &str, name: &str) -> String {
+    if outputs.is_empty() {
+        name.to_string()
+    } else {
+        format!("{outputs}/{name}")
+    }
 }
 
 /// The page for the slides in `body`, as the input's frontmatter asks for,
-/// to be written at `output`. A self-contained page holds every file it
+/// to be written at `output`. Its links are written as from `dir`, the
+/// deck's own directory, which links the outputs directory as `outputs`, and
+/// are moved to where the page is. A self-contained page holds every file it
 /// would link, so that it can be opened on its own.
-pub fn page(body: &str, settings: &PageSettings, output: &Path, self_contained: bool) -> String {
+pub fn page(
+    body: &str,
+    settings: &PageSettings,
+    dir: &Path,
+    outputs: &str,
+    output: &Path,
+    self_contained: bool,
+) -> String {
     let theme = settings.theme.as_deref();
-    let dir = parent(output);
     // A slide break at either end of a file, or two in a row, leaves an empty slide.
     let body = body
         .replace(&format!("{SECTION}\n</section>\n"), "")
         .replace(&format!("{NO_STEPS}\n</section>\n"), "");
     let body = indent(&body);
-    // The deck's own theme is linked where it is, relative to the page.
+    // The deck's own theme is linked where it is, relative to the deck.
     let own = theme.map(theme_href).filter(|href| bundled(href).is_none());
     if let Some(href) = &own
         && !dir.join(href).is_file()
     {
-        eprintln!("{}: no theme {href} next to it", output.display());
+        eprintln!("{}: no theme {href} in it", dir.display());
     }
     // The theme's stylesheet goes after the slides', which it overrides.
     let bundled_css = bundled_files(theme)
@@ -137,10 +150,22 @@ pub fn page(body: &str, settings: &PageSettings, output: &Path, self_contained: 
         );
         (styles, script, embed(&body, dir))
     } else {
-        let link = |href: &str| format!("<link rel=\"stylesheet\" href=\"{}\">", escape(href));
-        let mut styles: Vec<String> = bundled_css.map(|name| link(&bundled_href(name))).collect();
+        let page_dir = parent(output);
+        let link = |href: &str| {
+            let href = escape(href);
+            let href = rebase(&href, dir, page_dir).unwrap_or(href);
+            format!("<link rel=\"stylesheet\" href=\"{href}\">")
+        };
+        let mut styles: Vec<String> = bundled_css
+            .map(|name| link(&in_outputs(outputs, name)))
+            .collect();
         styles.extend(own.as_deref().map(link));
-        let script = format!("<script src=\"{}\"></script>", bundled_href("slides.js"));
+        let script = in_outputs(outputs, "slides.js");
+        let script = rebase(&script, dir, page_dir).unwrap_or(script);
+        let script = format!("<script src=\"{script}\"></script>");
+        let body = links(&body, &[" src=\"", " href=\""], |src| {
+            rebase(src, dir, page_dir)
+        });
         (styles, script, body)
     };
     fill(
@@ -260,27 +285,63 @@ fn import_href(line: &str) -> Option<&str> {
 
 /// The slides with every file they link by a relative `src`, as a raster
 /// output or an image of the markdown is, in a data URL, resolved as the
-/// browser would, next to the page.
+/// browser would, from the deck's directory `dir`.
 fn embed(html: &str, dir: &Path) -> String {
-    const SRC: &str = " src=\"";
-    let mut embedded = String::with_capacity(html.len());
+    links(html, &[" src=\""], |src| data_url(dir, src))
+}
+
+/// The html with the value of each of the `attributes`, such as ` src="`,
+/// in place of what `replace` makes of it, where it makes something.
+fn links(html: &str, attributes: &[&str], replace: impl Fn(&str) -> Option<String>) -> String {
+    let mut replaced = String::with_capacity(html.len());
     let mut rest = html;
-    while let Some(start) = rest.find(SRC) {
-        let (before, after) = rest.split_at(start + SRC.len());
-        embedded.push_str(before);
+    while let Some((start, attribute)) = attributes
+        .iter()
+        .filter_map(|attribute| Some((rest.find(attribute)?, attribute)))
+        .min()
+    {
+        let (before, after) = rest.split_at(start + attribute.len());
+        replaced.push_str(before);
         let Some(end) = after.find('"') else {
             rest = after;
             break;
         };
-        let src = &after[..end];
-        match data_url(dir, src) {
-            Some(url) => embedded.push_str(&url),
-            None => embedded.push_str(src),
+        let value = &after[..end];
+        match replace(value) {
+            Some(value) => replaced.push_str(&value),
+            None => replaced.push_str(value),
         }
         rest = &after[end..];
     }
-    embedded.push_str(rest);
-    embedded
+    replaced.push_str(rest);
+    replaced
+}
+
+/// Whether `src` is a relative path, rather than a URL, an absolute path or
+/// a place in the page.
+fn is_relative(src: &str) -> bool {
+    !src.is_empty()
+        && !src.starts_with(['/', '#', '?'])
+        && src
+            .split(['/', '?', '#'])
+            .next()
+            .is_some_and(|first| !first.contains(':'))
+}
+
+/// A relative `src` written as from the directory `dir`, as from `page_dir`
+/// instead, unless it is not relative or the two are the same.
+fn rebase(src: &str, dir: &Path, page_dir: &Path) -> Option<String> {
+    if dir == page_dir || !is_relative(src) {
+        return None;
+    }
+    let end = src.find(['?', '#']).unwrap_or(src.len());
+    let (path, rest) = src.split_at(end);
+    let href = href(page_dir, &dir.join(path));
+    Some(if href.is_empty() {
+        format!(".{rest}")
+    } else {
+        href + rest
+    })
 }
 
 /// The media types of the files a page can embed, by extension.
@@ -302,10 +363,7 @@ const MEDIA: &[(&str, &str)] = &[
 /// The file at `src`, relative to `dir`, as a data URL, unless `src` is not
 /// a relative path or its file cannot be embedded, which is reported.
 fn data_url(dir: &Path, src: &str) -> Option<String> {
-    let is_relative = !src.is_empty()
-        && !src.starts_with(['/', '#'])
-        && !src.split(['/', '?', '#']).next()?.contains(':');
-    if !is_relative {
+    if !is_relative(src) {
         return None;
     }
     let path = unescape(src.split(['?', '#']).next()?);
@@ -370,9 +428,10 @@ fn escape(text: &str) -> String {
 }
 
 /// The outputs a cell saved under `root`, in the order the kernel produced
-/// them. Raster images are linked, relative to the html, and the rest is
-/// inlined: an SVG too, so that the slides can reach into it for steps.
-pub fn cell_html(root: &Path, hash: &str) -> String {
+/// them. Raster images are linked through `outputs`, the outputs directory
+/// as the deck links it, and the rest is inlined: an SVG too, so that the
+/// slides can reach into it for steps.
+pub fn cell_html(root: &Path, outputs: &str, hash: &str) -> String {
     let Ok(files) = store::saved(root, hash) else {
         // The cell has not run, or its notebook failed; its error was reported then.
         return format!("<!-- no outputs for cell {hash} -->\n");
@@ -382,7 +441,7 @@ pub fn cell_html(root: &Path, hash: &str) -> String {
         let name = file.file_name().unwrap().to_str().unwrap();
         let extension = file.extension().and_then(|extension| extension.to_str());
         if let Some("png" | "jpeg" | "gif") = extension {
-            html.push_str(&format!("<img src=\"{}/{name}\">\n", store::DIR));
+            html.push_str(&format!("<img src=\"{}\">\n", in_outputs(outputs, name)));
             continue;
         }
         let Ok(mut text) = fs::read_to_string(&file) else {
@@ -477,6 +536,8 @@ mod tests {
         let html = page(
             "<section>\n</section>\n",
             &settings(Some("dark"), None),
+            &dir,
+            store::DIR,
             &output,
             false,
         );
@@ -517,6 +578,22 @@ mod tests {
     }
 
     #[test]
+    fn a_page_in_the_outputs_links_as_from_there() {
+        let dir = Path::new("/deck");
+        let body = "<section>\n<img src=\"_outputs/figure.png\">\n<img src=\"photo.jpg?v=1\">\n<a href=\"#3\">back</a>\n<a href=\"https://example.com\">site</a>\n</section>\n";
+        let settings = settings(Some("custom/talk.css"), None);
+        let output = dir.join(store::DIR).join("index.html");
+        let html = page(body, &settings, dir, store::DIR, &output, false);
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"slides.css\">"));
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"../custom/talk.css\">"));
+        assert!(html.contains("<script src=\"slides.js\"></script>"));
+        assert!(html.contains("<img src=\"figure.png\">"));
+        assert!(html.contains("<img src=\"../photo.jpg?v=1\">"));
+        assert!(html.contains("<a href=\"#3\">"));
+        assert!(html.contains("<a href=\"https://example.com\">"));
+    }
+
+    #[test]
     fn an_own_theme_is_linked_where_it_is() {
         let dir = temp_dir();
         fs::write(
@@ -526,9 +603,13 @@ mod tests {
         .unwrap();
         fs::write(dir.join("base.css"), "h2 { color: blue; }\n").unwrap();
         let output = dir.join("index.html");
-        let linked = page("", &settings(Some("talk.css"), None), &output, false);
+        let page = |self_contained| {
+            let settings = settings(Some("talk.css"), None);
+            page("", &settings, &dir, store::DIR, &output, self_contained)
+        };
+        let linked = page(false);
         assert!(linked.contains("<link rel=\"stylesheet\" href=\"talk.css\">"));
-        let inlined = page("", &settings(Some("talk.css"), None), &output, true);
+        let inlined = page(true);
         assert!(inlined.contains("h2 { color: blue; }\nh1 { color: red; }"));
         assert!(!inlined.contains("theme-base.css") && !inlined.contains("@import"));
         fs::remove_dir_all(&dir).unwrap();
@@ -547,6 +628,8 @@ mod tests {
         let html = page(
             &body,
             &settings(Some("dark"), None),
+            &dir,
+            store::DIR,
             &dir.join("index.html"),
             true,
         );
@@ -571,7 +654,16 @@ mod tests {
     #[test]
     fn the_shape_of_the_slides_is_set_on_the_page() {
         let output = Path::new("index.html");
-        let html = |ratio| page("", &settings(None, ratio), output, false);
+        let html = |ratio| {
+            page(
+                "",
+                &settings(None, ratio),
+                Path::new("."),
+                store::DIR,
+                output,
+                false,
+            )
+        };
         assert!(html(None).starts_with("<!DOCTYPE html>\n<html>\n"));
         let four_three = AspectRatio::Fixed {
             width: 4.0,
@@ -591,7 +683,7 @@ mod tests {
                 figures: FigureSettings { invert, fade, rush },
                 ..PageSettings::default()
             };
-            page("", &settings, output, false)
+            page("", &settings, Path::new("."), store::DIR, output, false)
         };
         assert!(html(None, Some(true), None).starts_with("<!DOCTYPE html>\n<html>\n"));
         let all =

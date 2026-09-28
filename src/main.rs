@@ -22,7 +22,8 @@ struct Cli {
     /// The markdown file to render.
     #[arg(required = true)]
     input: Option<PathBuf>,
-    /// Where to write the HTML. Defaults to the input with an `.html` extension.
+    /// Where to write the HTML. Defaults to the input's name with an `.html`
+    /// extension, in the outputs directory, which keeps it out of git.
     output: Option<PathBuf>,
     /// Re-render on every change to the input or to a file it imports.
     #[arg(short, long)]
@@ -32,8 +33,9 @@ struct Cli {
     #[arg(short, long, value_enum)]
     kernel: Option<KernelChoice>,
     /// After rendering, remove the saved outputs that no cell of the deck
-    /// uses anymore, and anything else in the outputs directory. It is shared
-    /// by every deck rendered next to it, so their outputs are removed too.
+    /// uses anymore, and anything else in the outputs directory but the
+    /// pages in it. It is shared by every deck rendered next to it, so their
+    /// outputs are removed too.
     #[arg(long)]
     clean: bool,
     /// Put every file the page links inside it: the stylesheets, the script,
@@ -103,20 +105,25 @@ fn main() {
     }
     // Required unless there is a command, which returned above.
     let input = input.unwrap();
-    let output = output.unwrap_or_else(|| input.with_extension("html"));
     // The cache is keyed by canonical path, as watch events report those.
     let input = canonical(&input);
+    // The outputs are saved where the extension saves them for the same file.
+    let outputs = store::root(parent(&input));
+    let output = match output {
+        Some(output) => canonical(&output),
+        None => outputs.join(input.with_extension("html").file_name().unwrap()),
+    };
     // Naming a kernel narrows the search to that one, so asking for a kernel
     // that is not installed is an error rather than a quiet fallback.
     let kernels = kernel.map_or(notebook::KERNELS, KernelChoice::kernelspecs);
 
     let start = Instant::now();
-    let mut deck = Deck::new(parent(&output).join(store::DIR), kernels, self_contained);
+    let mut deck = Deck::new(outputs, kernels, self_contained);
     deck.update(std::slice::from_ref(&input));
     deck.write(&input, &output);
     eprintln!(
         "rendered {} in {}",
-        output.display(),
+        progress::relative(&output).display(),
         progress::duration(start.elapsed())
     );
     if clean {

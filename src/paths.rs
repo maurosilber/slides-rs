@@ -31,3 +31,33 @@ pub fn read(path: &Path) -> String {
         String::new()
     })
 }
+
+/// How a page in `dir` links `path`, as a URL relative to it, with `/` for
+/// every separator; nothing for `dir` itself. Both are canonical.
+pub fn href(dir: &Path, path: &Path) -> String {
+    let common = dir
+        .components()
+        .zip(path.components())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let up = dir.components().skip(common).map(|_| "..".to_string());
+    let down = path
+        .components()
+        .skip(common)
+        .map(|component| component.as_os_str().to_string_lossy().into_owned());
+    up.chain(down).collect::<Vec<_>>().join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_href_climbs_out_of_the_page_and_down_to_the_file() {
+        let href = |dir: &str, path: &str| href(Path::new(dir), Path::new(path));
+        assert_eq!(href("/deck", "/deck"), "");
+        assert_eq!(href("/deck", "/deck/_outputs"), "_outputs");
+        assert_eq!(href("/deck/_outputs", "/deck"), "..");
+        assert_eq!(href("/deck/out", "/deck/_outputs"), "../_outputs");
+    }
+}

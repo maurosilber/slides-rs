@@ -113,8 +113,8 @@ impl Removed {
 
 /// Removes everything under `root` but its `.gitignore`, the directories of
 /// the cells whose hash is in `keep`, holding only their lists, the outputs
-/// those cells list, and the other `files` named, such as the page's
-/// stylesheets.
+/// those cells list, the other `files` named, such as the page's
+/// stylesheets, and the pages of the decks rendered into it.
 pub fn remove_stale(
     root: &Path,
     keep: &HashSet<&str>,
@@ -171,6 +171,13 @@ pub fn remove_stale(
             .and_then(|stem| stem.to_str())
             .is_some_and(|stem| is_hash(stem, OUTPUT_HASH_LEN))
             && path.extension().is_some();
+        if !is_output
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "html")
+        {
+            continue;
+        }
         removed.remove(&path, file_type)?;
         if is_output {
             removed.outputs += 1;
@@ -322,8 +329,9 @@ mod tests {
         std::fs::write(root.join("0123456789abcdef.txt"), "short").unwrap();
         std::fs::write(root.join(".partial.txt.1234"), "half").unwrap();
         std::fs::write(root.join("notes.txt"), "notes").unwrap();
-        // A page's own file, which it links.
+        // A page's own file, which it links, and the page itself.
         std::fs::write(root.join("slides.css"), "css").unwrap();
+        std::fs::write(root.join("index.html"), "html").unwrap();
         std::fs::create_dir_all(root.join("images")).unwrap();
         std::fs::write(root.join("images").join("a.png"), "png").unwrap();
 
@@ -338,7 +346,7 @@ mod tests {
         left.sort();
         let output = saved(&root, kept).unwrap()[0].clone();
         let output = output.file_name().unwrap().to_str().unwrap();
-        assert_eq!(left, [GITIGNORE, kept, output, "slides.css"]);
+        assert_eq!(left, [GITIGNORE, kept, output, "index.html", "slides.css"]);
         let mut lists: Vec<String> = std::fs::read_dir(root.join(kept))
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())

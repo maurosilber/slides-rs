@@ -71,9 +71,15 @@ pub fn watch(deck: &mut Deck, input: &Path, output: &Path) {
         watch_dirs(&mut watcher, &mut watched, deck, &readers);
         let took = progress::duration(start.elapsed());
         if deck.write(input, output) {
-            eprintln!("rendered {} in {took}", output.display());
+            eprintln!(
+                "rendered {} in {took}",
+                progress::relative(output).display()
+            );
         } else {
-            eprintln!("{} is unchanged, after {took}", output.display());
+            eprintln!(
+                "{} is unchanged, after {took}",
+                progress::relative(output).display()
+            );
         }
     }
 }

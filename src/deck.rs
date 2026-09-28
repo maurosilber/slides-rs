@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::markdown::{self, File, NO_STEPS, Part, SECTION};
 use crate::notebook::{Notebook, Runner};
-use crate::paths::read;
+use crate::paths::{href, parent, read};
 use crate::{page, store};
 
 /// Each file is rendered on its own, so that a change re-renders only that file.
@@ -129,16 +129,17 @@ impl Deck {
 
     /// Concatenates the cached renders, following the imports from `path`.
     /// The slides of a file whose steps are off, as set in its own
-    /// frontmatter or, without it, as `steps` says, are marked so.
-    fn body(&self, path: &Path, steps: bool, body: &mut String) {
+    /// frontmatter or, without it, as `steps` says, are marked so. Outputs
+    /// are linked through `outputs`, the outputs directory as the deck links it.
+    fn body(&self, path: &Path, steps: bool, outputs: &str, body: &mut String) {
         let file = &self.files[path];
         let steps = file.steps.unwrap_or(steps);
         for part in &file.parts {
             match part {
                 Part::Html(html) if steps => body.push_str(html),
                 Part::Html(html) => body.push_str(&html.replace(SECTION, NO_STEPS)),
-                Part::Cell(hash) => body.push_str(&page::cell_html(&self.outputs, hash)),
-                Part::Import(import) => self.body(import, steps, body),
+                Part::Cell(hash) => body.push_str(&page::cell_html(&self.outputs, outputs, hash)),
+                Part::Import(import) => self.body(import, steps, outputs, body),
             }
         }
     }
@@ -148,18 +149,25 @@ impl Deck {
         self.files[input].page.theme.as_deref()
     }
 
-    /// Writes the deck, and the files it links next to it, unless the html on
-    /// disk is already the same, so that a save that changes nothing does not
-    /// reload the slides. Returns whether it wrote.
+    /// Writes the deck, and the files it links in the outputs directory,
+    /// unless the html on disk is already the same, so that a save that
+    /// changes nothing does not reload the slides. Returns whether it wrote.
+    /// The `output` is canonical, as `input` is.
     pub fn write(&self, input: &Path, output: &Path) -> bool {
         let theme = self.theme(input);
+        // The page may be in the outputs directory, which keeps it out of git too.
+        if let Err(error) = store::create(&self.outputs) {
+            eprintln!("{}: {error}", self.outputs.display());
+        }
         if !self.self_contained {
             page::write_static(&self.outputs, &page::bundled_files(theme));
         }
+        let dir = parent(input);
+        let outputs = href(dir, &self.outputs);
         let mut body = String::new();
-        self.body(input, true, &mut body);
+        self.body(input, true, &outputs, &mut body);
         let settings = &self.files[input].page;
-        let html = page::page(&body, settings, output, self.self_contained);
+        let html = page::page(&body, settings, dir, &outputs, output, self.self_contained);
         if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
             return false;
         }
@@ -191,7 +199,7 @@ mod tests {
             );
         }
         let mut body = String::new();
-        deck.body(Path::new("/deck/index.md"), true, &mut body);
+        deck.body(Path::new("/deck/index.md"), true, store::DIR, &mut body);
         let opening = |title: &str| {
             let heading = body.find(&format!(">{title}</h1>")).unwrap();
             let section = body[..heading].rfind("<section").unwrap();

@@ -12,7 +12,7 @@ including matplotlib figures, are embedded in the slides.
 ## Command line
 
 ```sh
-slides-rs talk.md                  # writes talk.html next to it
+slides-rs talk.md                  # writes _outputs/talk.html, which git ignores
 slides-rs talk.md out/deck.html    # or to a given path
 slides-rs talk.md --watch          # re-render on every change to talk.md or a file it imports
 slides-rs talk.md --self-contained # inline CSS, JS and images: one shareable .html (KaTeX still from CDN)
@@ -21,7 +21,11 @@ slides-rs talk.md --clean          # after rendering, delete saved outputs no ce
 ```
 
 `--clean` wipes everything in the `_outputs/` directory that the current deck
-doesn't use, including outputs of other decks rendered in the same directory.
+doesn't use, including outputs of other decks rendered in the same directory,
+but keeps their pages.
+
+Links in the markdown (images, a `theme:` stylesheet) are written relative to
+the deck's `.md`; the page rewrites them to work from wherever it is written.
 
 In the browser: → / ← step forward and back, ↓ finishes the slide (then goes
 to the next), ↑ restarts it (then goes to the previous), and <kbd>A</kbd>
