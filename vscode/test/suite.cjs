@@ -41,6 +41,28 @@ async function until(value, timeout = 20000) {
 }
 
 const tests = {
+	async 'the frontmatter completes its keys and values, and describes them'() {
+		const content = '---\ntheme: dark\n\nfigures:\n  fade: \n---\n\n# Slide\n';
+		const document = await vscode.workspace.openTextDocument({ language: 'markdown', content });
+		// Opening a markdown file activates the extension, which may not have finished.
+		await vscode.extensions.getExtension('maurosilber.slides-notebook').activate();
+		const labels = async (line, character) => {
+			const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', document.uri, new vscode.Position(line, character));
+			// Its keys and values, rather than the words of the document VS Code suggests too.
+			const ours = [vscode.CompletionItemKind.Property, vscode.CompletionItemKind.Value];
+			return list.items.filter((item) => ours.includes(item.kind)).map((item) => item.label).sort();
+		};
+		// Of the keys at the top, those not set yet, and of those under figures, those
+		// not set but on the line being written.
+		assert.deepStrictEqual(await labels(2, 0), ['aspect-ratio', 'steps']);
+		assert.deepStrictEqual(await labels(4, 2), ['fade', 'invert', 'rush']);
+		assert.deepStrictEqual(await labels(4, 8), ['false', 'true']);
+		// Past the frontmatter, it has nothing to say.
+		assert.deepStrictEqual(await labels(7, 0), []);
+		const [hover] = await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(4, 3));
+		assert.match(hover.contents[0].value, /^\*\*fade\*\* \(boolean\)/);
+	},
+
 	async 'a deck opens as its cells, with the outputs the deck saved'() {
 		const file = renderedSlide();
 		const before = fs.readFileSync(file);

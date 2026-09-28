@@ -20,6 +20,13 @@ Run **Slides: Open as Slides Notebook** on a markdown file (from its editor
 title, the explorer, or the command palette), or use *Reopen Editor With… ›
 Slides Notebook*.
 
+In the YAML frontmatter of any markdown file, as a notebook's first cell or in
+the text editor, the keys the deck reads are completed, with *Trigger Suggest*
+(<kbd>Ctrl</kbd>+<kbd>Space</kbd>) as markdown suggests nothing as it is typed,
+and their values after the space that follows a key. Hovering over a key
+describes it. Both come from the deck's
+[`frontmatter.schema.json`](../src/frontmatter.schema.json).
+
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.
 Showing them is an edit, so a notebook that was saved is saved again when it

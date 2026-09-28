@@ -46,6 +46,7 @@ impl AspectRatio {
 /// The ratio as the frontmatter has it, which YAML reads as a number or as
 /// text, as it is written.
 #[derive(serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum Written {
     Number(f64),

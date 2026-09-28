@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "slides-rs frontmatter",
+  "description": "What the YAML frontmatter of a slides-rs deck's markdown sets. Keys the\ndeck does not read are left alone, as a title, an author or notes.",
+  "type": "object",
+  "properties": {
+    "aspect-ratio": {
+      "description": "The shape the slides keep, as 16:9, 4:3 or a number, or none, to fill\nthe window.",
+      "anyOf": [
+        {
+          "description": "The ratio as the frontmatter has it, which YAML reads as a number or as\ntext, as it is written.",
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "examples": [
+        "16:9",
+        "4:3",
+        "16/10",
+        1.6,
+        "none"
+      ]
+    },
+    "figures": {
+      "description": "How figures are shown, and step.",
+      "type": "object",
+      "properties": {
+        "fade": {
+          "description": "Whether the steps inside figures fade, as the others do, rather than\nshow at once. Unset, they do.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "invert": {
+          "description": "Whether figures are shown as the theme filters them, as a dark theme\ninverts them, rather than as they were drawn. Unset, they are.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "rush": {
+          "description": "How many seconds an animation still playing takes, sped up, to get\nwhere it is going when the next one begins. Unset, 0.2.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "examples": [
+            0.2,
+            0.5,
+            0
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "steps": {
+      "description": "Whether to step through the slides of this file, and of the files it\nimports that do not say. Unset, it does.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null
+    },
+    "theme": {
+      "description": "The theme of the page: one the deck comes with, or the path of a\nstylesheet of your own.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "examples": [
+        "light",
+        "dark",
+        "paper",
+        "projector"
+      ]
+    }
+  }
+}

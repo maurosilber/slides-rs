@@ -59,3 +59,7 @@ debug = false
 # and is several times slower unoptimized.
 [profile.dev.package.sha2]
 opt-level = 3
+
+[dev-dependencies]
+schemars = "1.2.2"
+serde_json = "1.0.151"

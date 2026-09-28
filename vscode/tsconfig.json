@@ -10,7 +10,8 @@
 		"strict": true,
 		"skipLibCheck": true,
 		"noEmit": true,
-		"allowJs": true
+		"allowJs": true,
+		"resolveJsonModule": true
 	},
 	"include": [
 		"src"

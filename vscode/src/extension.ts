@@ -3,6 +3,7 @@
 
 import * as vscode from 'vscode';
 import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
+import { registerFrontmatter } from './frontmatter';
 import { canRunCells, Kernels } from './kernel';
 import { Cell, CodeCell, Module } from './wasm';
 
@@ -14,6 +15,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const outputs = new Outputs(module, log);
 	context.subscriptions.push(
 		log,
+		registerFrontmatter(),
 		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(module)),
 		vscode.workspace.onDidOpenNotebookDocument((notebook) => outputs.load(notebook)),
 		vscode.workspace.onDidSaveNotebookDocument((notebook) => outputs.save(notebook)),

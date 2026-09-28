@@ -255,8 +255,9 @@ pub struct PageSettings {
     pub figures: FigureSettings,
 }
 
-/// What the frontmatter's `figures` sets.
+/// How figures are shown, and step.
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct FigureSettings {
     /// Whether figures are shown as the theme filters them, as a dark theme
@@ -266,23 +267,39 @@ pub struct FigureSettings {
     /// show at once. Unset, they do.
     pub fade: Option<bool>,
     /// How many seconds an animation still playing takes, sped up, to get
-    /// where it is going when the next one begins. Unset, the deck's own.
+    /// where it is going when the next one begins. Unset, 0.2.
+    #[cfg_attr(test, schemars(range(min = 0), extend("examples" = [0.2, 0.5, 0])))]
     pub rush: Option<f64>,
 }
 
-/// What a file's frontmatter sets. Keys the deck does not read are ignored,
-/// so the frontmatter can hold a title, an author, or notes of its own.
+// It is also src/frontmatter.schema.json, which a test writes from it, and the
+// VS Code extension completes the frontmatter from: its doc comments, and those
+// of its fields, describe them there.
+
+/// What the YAML frontmatter of a slides-rs deck's markdown sets. Keys the
+/// deck does not read are left alone, as a title, an author or notes.
 #[derive(Default, serde::Deserialize)]
+#[cfg_attr(
+    test,
+    derive(schemars::JsonSchema),
+    schemars(title = "slides-rs frontmatter")
+)]
 #[serde(default)]
 struct Frontmatter {
+    /// The theme of the page: one the deck comes with, or the path of a
+    /// stylesheet of your own.
+    #[cfg_attr(test, schemars(extend("examples" = ["light", "dark", "paper", "projector"])))]
     theme: Option<String>,
-    /// The shape of the slides.
+    /// The shape the slides keep, as 16:9, 4:3 or a number, or none, to fill
+    /// the window.
     #[serde(rename = "aspect-ratio")]
+    #[cfg_attr(test, schemars(extend("examples" = ["16:9", "4:3", "16/10", 1.6, "none"])))]
     aspect_ratio: Option<aspect::Written>,
-    figures: FigureSettings,
-    /// Whether to step through the file's slides, and those of the files it
-    /// imports that do not say. Unset, they are stepped through.
+    /// Whether to step through the slides of this file, and of the files it
+    /// imports that do not say. Unset, it does.
     steps: Option<bool>,
+    /// How figures are shown, and step.
+    figures: FigureSettings,
 }
 
 impl Frontmatter {
@@ -417,6 +434,23 @@ mod tests {
         assert_eq!(figures("# Slide\n"), FigureSettings::default());
         assert_eq!(figures("---\nfigures:\n  rush: 1\n---\n").rush, Some(1.0));
         assert_eq!(figures("---\nfigures:\n  rush: -1\n---\n").rush, None);
+    }
+
+    /// src/frontmatter.schema.json is written from the frontmatter as it is read,
+    /// with what each key holds in place, for the VS Code extension to follow.
+    /// Out of date, it is written anew, and the test fails, for it to be seen.
+    #[test]
+    fn the_schema_is_the_frontmatter_as_read() {
+        let generator = schemars::generate::SchemaSettings::draft07()
+            .with(|settings| settings.inline_subschemas = true)
+            .into_generator();
+        let schema = generator.into_root_schema_for::<Frontmatter>();
+        let json = serde_json::to_string_pretty(&schema).unwrap() + "\n";
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/frontmatter.schema.json");
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(json.as_str()) {
+            std::fs::write(&path, &json).unwrap();
+            panic!("{} was out of date, and is written anew", path.display());
+        }
     }
 
     #[test]
