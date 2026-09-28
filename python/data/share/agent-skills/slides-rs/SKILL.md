@@ -15,6 +15,7 @@ including matplotlib figures, are embedded in the slides.
 slides-rs talk.md                  # writes _outputs/talk.html, which git ignores
 slides-rs talk.md out/deck.html    # or to a given path
 slides-rs talk.md --watch          # re-render on every change to talk.md or a file it imports
+slides-rs talk.md --open           # open the page in the default browser once rendered
 slides-rs talk.md --self-contained # inline CSS, JS and images: one shareable .html (KaTeX still from CDN)
 slides-rs talk.md --kernel python3 # xpython (xeus-python) or python3 (ipykernel); default: first installed
 slides-rs talk.md --clean          # after rendering, delete saved outputs no cell uses anymore

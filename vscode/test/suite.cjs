@@ -284,6 +284,22 @@ const tests = {
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
 
+	async 'the slides are shown as rendered, and rendered again on every save'() {
+		const deck = path.join(process.env.SLIDES_DECK, 'show');
+		// Its own, rather than the one another test leaves above it.
+		fs.mkdirSync(path.join(deck, '_outputs'), { recursive: true });
+		const file = path.join(deck, 'talk.md');
+		fs.writeFileSync(file, '# First\n');
+		await vscode.commands.executeCommand('slides.showSlides', vscode.Uri.file(file));
+		const page = path.join(deck, '_outputs', 'talk.html');
+		assert.match(fs.readFileSync(page, 'utf8'), />First</);
+
+		fs.writeFileSync(file, '# Second\n');
+		await until(() => fs.readFileSync(page, 'utf8').includes('>Second<'));
+		await vscode.commands.executeCommand('slides.stopSlides');
+		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+	},
+
 	async 'an interrupted cell stops, and the next one runs'() {
 		const deck = path.join(process.env.SLIDES_DECK, 'interrupt');
 		fs.mkdirSync(deck, { recursive: true });

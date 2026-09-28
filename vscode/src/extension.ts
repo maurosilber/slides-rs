@@ -4,6 +4,7 @@
 import * as vscode from 'vscode';
 import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
 import { registerFrontmatter } from './frontmatter';
+import { Previews } from './preview';
 import { canRunCells, Kernels } from './kernel';
 import { registerPython } from './python';
 import { Cell, CodeCell, Module } from './wasm';
@@ -31,8 +32,17 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	if (canRunCells()) {
 		const kernels = new Kernels(NOTEBOOK, context.extensionUri, log);
+		const previews = new Previews(context.extensionUri, log);
 		context.subscriptions.push(
 			kernels,
+			previews,
+			vscode.commands.registerCommand('slides.showSlides', (uri?: vscode.Uri) => {
+				uri ??= vscode.window.activeNotebookEditor?.notebook.uri ?? vscode.window.activeTextEditor?.document.uri;
+				if (uri) {
+					return previews.show(uri);
+				}
+			}),
+			vscode.commands.registerCommand('slides.stopSlides', () => previews.stop()),
 			vscode.commands.registerCommand('slides.restartKernel', () => {
 				const notebook = vscode.window.activeNotebookEditor?.notebook;
 				if (notebook?.notebookType === NOTEBOOK) {

@@ -70,6 +70,17 @@ the next cell. xeus-python's `xpython` cannot stop a cell, so interrupting one
 stops its kernel too. The `slides.path` setting names another `slides-rs` to
 run, and running cells needs VS Code on the desktop.
 
+## Show
+
+**Slides: Show Slides**, in the editor's title, the notebook's toolbar, the
+explorer, or the command palette, renders the deck with `slides-rs --watch`
+and opens its page in VS Code's integrated browser, or in the default browser
+where VS Code has none. It renders again whenever the deck or a file it
+imports is saved, and the integrated browser reloads the page, as its
+`workbench.browser.autoReloadOnFileChange` setting has it by default.
+**Slides: Stop Rendering Slides** stops every deck being rendered. Like
+running cells, this needs VS Code on the desktop.
+
 ## Build
 
 The Rust half builds for `wasm32-wasip1-threads`, which vscode-wasm runs and

@@ -223,7 +223,7 @@ class Session {
 }
 
 /** The `slides-rs` the settings name, or else the one that comes with the extension, or else the one on the `PATH`. */
-async function command(extensionUri: vscode.Uri): Promise<string> {
+export async function command(extensionUri: vscode.Uri): Promise<string> {
 	const configured = vscode.workspace.getConfiguration('slides').get<string>('path');
 	if (configured) {
 		return configured;

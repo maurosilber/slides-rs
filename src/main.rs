@@ -1,3 +1,4 @@
+mod browser;
 mod deck;
 mod notebook;
 mod page;
@@ -43,6 +44,10 @@ struct Cli {
     /// all there is to share. KaTeX still loads from its CDN.
     #[arg(long)]
     self_contained: bool,
+    /// Open the page in the default browser once it is rendered. With
+    /// `--watch`, it opens once, and a reload shows each render after.
+    #[arg(long)]
+    open: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -94,6 +99,7 @@ fn main() {
         kernel,
         clean,
         self_contained,
+        open,
     } = Cli::parse();
     if let Some(Command::Kernel { file, kernel }) = command {
         let kernels = kernel.map_or(notebook::KERNELS, KernelChoice::kernelspecs);
@@ -128,6 +134,9 @@ fn main() {
     );
     if clean {
         deck.clean(&input);
+    }
+    if open {
+        browser::open(&output);
     }
 
     if watching {

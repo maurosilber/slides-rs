@@ -46,6 +46,19 @@
 				"category": "Slides",
 				"icon": "$(debug-restart)",
 				"enablement": "!isWeb"
+			},
+			{
+				"command": "slides.showSlides",
+				"title": "Show Slides",
+				"category": "Slides",
+				"icon": "$(open-preview)",
+				"enablement": "!isWeb"
+			},
+			{
+				"command": "slides.stopSlides",
+				"title": "Stop Rendering Slides",
+				"category": "Slides",
+				"enablement": "!isWeb"
 			}
 		],
 		"notebookRenderer": [
@@ -75,6 +88,11 @@
 					"command": "slides.openNotebook",
 					"when": "resourceLangId == markdown && activeEditor == workbench.editors.files.textFileEditor",
 					"group": "navigation"
+				},
+				{
+					"command": "slides.showSlides",
+					"when": "resourceLangId == markdown && !isWeb",
+					"group": "navigation"
 				}
 			],
 			"notebook/toolbar": [
@@ -82,18 +100,36 @@
 					"command": "slides.restartKernel",
 					"when": "notebookType == slides-notebook && !isWeb",
 					"group": "navigation/execute"
+				},
+				{
+					"command": "slides.showSlides",
+					"when": "notebookType == slides-notebook && !isWeb",
+					"group": "navigation"
 				}
 			],
 			"commandPalette": [
 				{
 					"command": "slides.restartKernel",
 					"when": "notebookType == slides-notebook && !isWeb"
+				},
+				{
+					"command": "slides.showSlides",
+					"when": "(resourceLangId == markdown || notebookType == slides-notebook) && !isWeb"
+				},
+				{
+					"command": "slides.stopSlides",
+					"when": "!isWeb"
 				}
 			],
 			"explorer/context": [
 				{
 					"command": "slides.openNotebook",
 					"when": "resourceLangId == markdown",
+					"group": "navigation"
+				},
+				{
+					"command": "slides.showSlides",
+					"when": "resourceLangId == markdown && !isWeb",
 					"group": "navigation"
 				}
 			]
