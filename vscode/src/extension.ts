@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
 import { registerFrontmatter } from './frontmatter';
 import { canRunCells, Kernels } from './kernel';
+import { registerPython } from './python';
 import { Cell, CodeCell, Module } from './wasm';
 
 const NOTEBOOK = 'slides-notebook';
@@ -16,6 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		log,
 		registerFrontmatter(),
+		registerPython(),
 		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(module)),
 		vscode.workspace.onDidOpenNotebookDocument((notebook) => outputs.load(notebook)),
 		vscode.workspace.onDidSaveNotebookDocument((notebook) => outputs.save(notebook)),

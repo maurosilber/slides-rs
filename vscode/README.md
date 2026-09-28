@@ -27,6 +27,13 @@ and their values after the space that follows a key. Hovering over a key
 describes it. Both come from the deck's
 [`frontmatter.schema.json`](../src/frontmatter.schema.json).
 
+In the text editor, the code of a Python cell is completed by the Python
+language server installed, such as Pylance or ty, as the cells before it run:
+after a `.`, or with *Trigger Suggest*. The server is asked of a hidden file
+next to the deck, `.<deck>.md.<id>.py`, which holds the file's Python cells and
+is deleted once it answers. In a notebook, its cells are Python documents the
+server completes itself.
+
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.
 Showing them is an edit, so a notebook that was saved is saved again when it

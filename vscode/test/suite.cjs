@@ -63,6 +63,53 @@ const tests = {
 		assert.match(hover.contents[0].value, /^\*\*fade\*\* \(boolean\)/);
 	},
 
+	async 'the code cells complete as a Python file of their own would'() {
+		const dir = path.join(process.env.SLIDES_DECK, 'python');
+		fs.mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, 'deck.md');
+		const content = [
+			'---', 'theme: dark', '---', '', '# Slide', '',
+			'```python', 'not_a_cell = 1', '```', '',
+			'~~~python', 'import numpy as np', 'np.', '~~~', '',
+			'~~~', 'x = 1', '~~~', '',
+			'~~~rust', 'let y = 2;', '~~~', '',
+		].join('\n');
+		fs.writeFileSync(file, content);
+		// Stands in for a Python language server, answering with what it was asked of.
+		let asked;
+		const server = vscode.languages.registerCompletionItemProvider({ language: 'python', scheme: 'file' }, {
+			provideCompletionItems(document, position) {
+				asked = { name: path.basename(document.fileName), text: document.getText() };
+				const item = new vscode.CompletionItem(document.lineAt(position.line).text, vscode.CompletionItemKind.Event);
+				item.additionalTextEdits = [vscode.TextEdit.insert(new vscode.Position(0, 0), 'import os\n'), vscode.TextEdit.insert(new vscode.Position(4, 0), 'no')];
+				return [item];
+			},
+		}, '.');
+		try {
+			const document = await vscode.workspace.openTextDocument(file);
+			await vscode.extensions.getExtension('maurosilber.slides-notebook').activate();
+			const items = async (line, character) => {
+				const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', document.uri, new vscode.Position(line, character), '.');
+				return list.items.filter((item) => item.kind === vscode.CompletionItemKind.Event);
+			};
+			const [item] = await items(12, 3);
+			assert.strictEqual(item.label, 'np.');
+			// The Python cells, each line in its place, and nothing else.
+			const lines = content.split('\n').map((text, i) => ([11, 12, 16].includes(i) ? text : ''));
+			assert.strictEqual(asked.text, lines.join('\n'));
+			assert.match(asked.name, /^\.deck\.md\.\w+\.py$/);
+			// The import goes at the top of the first cell, and the edit in the markdown not at all.
+			assert.deepStrictEqual(item.additionalTextEdits.map((edit) => [edit.range.start.line, edit.newText]), [[11, 'import os\n']]);
+			// A cell whose fence names no language is in Python.
+			assert.deepStrictEqual((await items(16, 1)).map((item) => item.label), ['x = 1']);
+			// Outside the Python cells, it has nothing to say.
+			for (const [line, character] of [[4, 2], [7, 3], [21, 3]]) assert.deepStrictEqual(await items(line, character), []);
+			assert.deepStrictEqual(fs.readdirSync(dir), ['deck.md']);
+		} finally {
+			server.dispose();
+		}
+	},
+
 	async 'a deck opens as its cells, with the outputs the deck saved'() {
 		const file = renderedSlide();
 		const before = fs.readFileSync(file);
