@@ -16,3 +16,8 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 addopts = ["--doctest-modules"]
 testpaths = ["src", "tests"]
+
+# data/ is installed into the environment's prefix, which puts the agent skill
+# in share/agent-skills, where pixi finds skills.
+[tool.uv.build-backend]
+data = { data = "data" }

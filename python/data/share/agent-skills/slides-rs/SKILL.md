@@ -1,0 +1,215 @@
+---
+name: slides-rs
+description: "Write and render slides-rs decks: markdown files that become HTML slide decks with stepped reveals, KaTeX equations, and Python cells whose outputs and matplotlib figures (with stepping artists and animations via the slides_rs package) are embedded. Use when creating or editing a slides-rs presentation, running the slides-rs command, or drawing figures with slides_rs.Step / slides_rs.Motion."
+---
+
+# slides-rs
+
+`slides-rs` turns a markdown file into an HTML slide deck. Slides reveal
+step by step. Python cells run on a Jupyter kernel, and their outputs,
+including matplotlib figures, are embedded in the slides.
+
+## Command line
+
+```sh
+slides-rs talk.md                  # writes talk.html next to it
+slides-rs talk.md out/deck.html    # or to a given path
+slides-rs talk.md --watch          # re-render on every change to talk.md or a file it imports
+slides-rs talk.md --self-contained # inline CSS, JS and images: one shareable .html (KaTeX still from CDN)
+slides-rs talk.md --kernel python3 # xpython (xeus-python) or python3 (ipykernel); default: first installed
+slides-rs talk.md --clean          # after rendering, delete saved outputs no cell uses anymore
+```
+
+`--clean` wipes everything in the `_outputs/` directory that the current deck
+doesn't use, including outputs of other decks rendered in the same directory.
+
+In the browser: → / ← step forward and back, ↓ finishes the slide (then goes
+to the next), ↑ restarts it (then goes to the previous), and <kbd>A</kbd>
+toggles showing every step at once. The URL hash tracks the slide.
+
+## Deck structure
+
+```markdown
+---
+theme: dark           # light (default look), dark, paper, projector, or a path to your own .css
+aspect-ratio: 16:9    # 4:3, 16/10, 1.6, or none to fill the window
+steps: false          # show this file's slides all at once (imported files inherit unless they say)
+figures:
+  invert: false       # show figures as drawn instead of filtered by the theme (dark inverts)
+  fade: false         # figure steps appear at once instead of fading
+  rush: 0.5           # seconds an animation still playing takes to finish when the next step begins (default 0.2)
+---
+
+# Slide title
+
+Plain CommonMark: **bold**, *italic*, `code`, [links](https://example.com), > quotes.
+
+---
+
+# Next slide
+```
+
+- `---` separates slides. The frontmatter keys are exactly those above;
+  other keys, such as a title or author, are ignored.
+- `#` is the slide title. `##` is a full-width subtitle, which counts as a
+  step. Each `###` starts a column, and consecutive `###` columns sit side by
+  side. Content before the first `##`/`###` shows at once.
+- Headings take attributes: `# Title { #some-id .some-class }`, and
+  `{ steps=false }` turns stepping off for that heading's content.
+- `<import-slide src="sections/intro.md" />` inlines another markdown file's
+  slides. That file may have its own frontmatter.
+- Raw HTML and `<style>` blocks are allowed. Theme colors are CSS
+  variables, such as `var(--accent)`.
+
+## Steps
+
+By default, reveals happen in document order:
+
+- Each list item (nested ones too) is one step.
+- Each `##` subtitle and `###` column is a step, and its list items follow.
+- Any HTML element with a `step` attribute steps: `<span step>`. `also`
+  shows it together with the previous step: `<span also>`.
+- Explicit ranges use Rust syntax: `step="2..4"` shows from step 2 up to
+  (not including) 4, `step="..3"` until 3, and `step="3.."` or `step="3"`
+  from 3 on.
+- `collapse` makes a hidden element take no space. Use it to swap content in
+  place:
+
+  ```html
+  <p step="..3" collapse>First version…</p>
+  <p step="3" collapse>…replaced by this.</p>
+  ```
+
+## Math (KaTeX)
+
+Use `$inline$` and `$$display$$`. Parts of an equation can step:
+
+- `\step{...}` appears one step after the latest, and `\also{...}` appears
+  along with it.
+- `\step[2..4]{...}` takes an explicit range, as above.
+- A hidden `\step{}` keeps its space, while `\step*{}` takes none. Use
+  `\step*` to rewrite an expression in place:
+
+  ```latex
+  $$
+  \step*[..2]{x^2 + 2x - 3}
+  \step*[2..3]{(x + 1)^2 - 4}
+  \step*[3..]{(x + 3)(x - 1)}
+  = 0
+  $$
+  ```
+
+## Code: shown vs. run
+
+- A backtick fence (```` ```python ````) is only displayed, as highlighted
+  code.
+- A tilde fence (`~~~python`) is executed, and the slide shows its outputs
+  instead of the code: stdout, stderr, rich reprs (`IPython.display.Markdown`
+  and `HTML`, whose markdown lists step too), images, and tracebacks.
+
+Execution model:
+
+- Each markdown file is one notebook: its cells share one kernel and run in
+  order. Imported files run as their own notebooks.
+- Cells run in the Python environment pinned by the nearest `pixi.lock` or
+  `uv.lock` in the deck's directory or above it, which slides-rs activates,
+  installing it first if needed. They do not run in the environment
+  slides-rs was launched from. That environment needs a kernel (`xeus-python`
+  or `ipykernel`), plus `matplotlib` and `slides-rs` (the Python package) for
+  figures.
+- Outputs are cached in `_outputs/` next to the deck. A cell reruns only when
+  its code, an earlier cell in the same file, the lock file, or a file it
+  read changes. slides-rs audits which files the cells open.
+- The last expression's repr is shown, as in Jupyter. End a figure cell with
+  `None`, or assign to `_ = ...`, so that no `[<Line2D ...>]` text appears
+  under the figure.
+- Figures are rendered as inline SVG (slides-rs sets
+  `InlineBackend.figure_formats = ['svg']`), and one figure is drawn per
+  `plt.figure()`.
+
+Recommended setup cell for figures that blend with the theme:
+
+```python
+plt.rcParams["figure.facecolor"] = "none"
+plt.rcParams["axes.facecolor"] = "none"
+plt.rcParams["svg.fonttype"] = "none"   # text uses the deck's fonts
+```
+
+## Stepping figure artists: `gid`
+
+matplotlib writes an artist's `gid` into the SVG, and slides-rs reads it as
+that artist's step:
+
+```python
+plt.plot(x, np.sin(x), gid="step")                           # next step
+plt.plot(x, np.cos(x), gid="step")                           # the one after
+plt.fill_between(x, np.sin(x), np.cos(x), alpha=.2, gid="also")  # with the previous
+```
+
+`slides_rs.Step` builds range gids. It is a `str` subclass, so it can be
+passed directly as `gid=`:
+
+```python
+from slides_rs import Step
+
+Step(3, 5)                 # "step=3..5"  shown on steps 3 and 4
+Step(3)                    # "step=3.."   from 3 on
+Step(stop=3)               # "step=..3"   until 3
+Step()                     # "step=.."    always
+Step(1, 3, collapse=True)  # "step*=1..3" collapse variant
+
+step = Step(1, 2)
+for i, phase in enumerate(phases):
+    plt.plot(x, np.sin(x + phase), gid=step.next(i))   # one curve per step
+# .next(n) / .previous(n) shift both bounds by n
+```
+
+## Animating figure artists: `Motion`
+
+`slides_rs.Motion` moves an artist along another artist's path, using SVG
+`<animateMotion>`. Draw the moving artist at the start of the path. It plays
+when its step shows and restarts when the step is hidden again. Every method
+returns the motion, so calls chain.
+
+```python
+from slides_rs import Motion, Step
+
+(path,) = plt.plot(np.cos(t), np.sin(t))
+(dot,) = plt.plot(1, 0, "o")
+_ = (
+    Motion(dot, along=path)
+    .starts(Step(2))                  # start on step 2 instead of when the dot appears
+    .timing(duration=3, easing="ease-in-out")
+    .rotate("auto")                   # turn along the path ("auto-reverse", degrees, or None)
+    .repeat()                         # forever; .repeat(3), .repeat(seconds=...)
+)
+```
+
+- `.timing(duration=s)` crosses the whole path in `s` seconds.
+- `.timing(t)` sets a time for each vertex of `along`, so a line plotted
+  from `x(t), y(t)` is followed as plotted. It waits at the start until
+  `t[0]`.
+- `.timing(t, fraction=f)` puts the artist at fraction `f[i]` (0–1) of the
+  path at time `t[i]`, so it can pause by repeating a fraction.
+- `easing=` takes `"linear"`, `"ease"`, `"ease-in"`, `"ease-out"`,
+  `"ease-in-out"`, a cubic-Bézier 4-tuple, one easing per interval, or
+  `"discrete"` to jump from vertex to vertex.
+- `.repeat(n, accumulate=True)` continues each lap from where the previous
+  one ended. `accumulate` can't be combined with `rotate`.
+- `.hold(False)` returns to the start when done. By default the artist stays
+  at the end.
+- `.remove()` undoes the motion.
+- Animations run only in the deck's SVG. A PNG shows the artist where it
+  was drawn.
+- Stepping forward while an animation plays rushes it to its end (see
+  `figures.rush`). Stepping back plays it backward.
+
+## Tips for writing decks
+
+- Keep one idea per slide, and use lists or `###` columns for progressive
+  reveals.
+- To see a whole slide at once, press <kbd>A</kbd> in the browser, or set
+  `steps: false` or `{ steps=false }`.
+- Use `--watch` while editing. Cached outputs keep re-renders fast.
+- A VS Code extension can run a deck's cells as a notebook and step through
+  its figures.
