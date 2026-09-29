@@ -2,5 +2,6 @@
 
 from .motion import Motion
 from .step import Step
+from .widget import Slider
 
-__all__ = ["Motion", "Step"]
+__all__ = ["Motion", "Slider", "Step"]

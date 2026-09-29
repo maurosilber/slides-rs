@@ -78,6 +78,8 @@ class Motion:
         self._rotate: str | None = None
         self._repeat: dict[str, str] = {}
         self._fill = "freeze"
+        # When it begins: when the deck says, or, driven by a widget, with the SVG.
+        self._begin = "indefinite"
         # The artist draws itself through the motion, where the axes draw it, and the
         # path it follows with its name.
         self._draws = {artist: artist.__dict__.get("draw") for artist in (artist, along)}
@@ -315,8 +317,8 @@ class Motion:
         """The animation's attributes, or none if it has nowhere to move."""
         times, points, curves = self._times, self._fraction, self._curves
         attributes = {
-            # The deck begins it when its step shows.
-            "begin": "indefinite",
+            # The deck begins it when its step shows, unless a widget drives it.
+            "begin": self._begin,
             "dur": f"{_number(times[-1])}s",
             "fill": self._fill,
         }
