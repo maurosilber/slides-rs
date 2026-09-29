@@ -1,6 +1,6 @@
 ---
 name: slides-rs
-description: "Write and render slides-rs decks: markdown files that become HTML slide decks with stepped reveals, KaTeX equations, and Python cells whose outputs and matplotlib figures (with stepping artists and animations via the slides_rs package) are embedded. Use when creating or editing a slides-rs presentation, running the slides-rs command, or drawing figures with slides_rs.Step / slides_rs.Motion."
+description: "Write and render slides-rs decks: markdown files that become HTML slide decks with stepped reveals, KaTeX equations, and Python cells whose outputs and matplotlib figures (with stepping artists and animations via the slides_rs package) are embedded. Use when creating or editing a slides-rs presentation, running the slides-rs command, or drawing figures with slides_rs.Step / slides_rs.Motion / slides_rs.Slider."
 ---
 
 # slides-rs
@@ -208,6 +208,41 @@ _ = (
   was drawn.
 - Stepping forward while an animation plays rushes it to its end (see
   `figures.rush`). Stepping back plays it backward.
+
+## Scrubbing motions with a slider: `Slider`
+
+`slides_rs.Slider` shows a figure with a slider that sets the time its
+motions are at, instead of the deck playing them. Make it the cell's last
+expression: it is shown as HTML, and the figure is closed so that it is not
+shown twice. Every method returns the slider, so calls chain.
+
+```python
+from slides_rs import Motion, Slider
+
+(line,) = plt.plot(t, np.sin(t))
+(dot,) = plt.plot(0, 0, "o")
+(
+    Slider(plt.gcf(), Motion(dot, along=line).timing(t))
+    .range(0, 10, step=0.1)           # default: 0 to the end of the longest motion, 100 ticks
+    .value(2)                         # where it starts; default: the start
+    .label("t")
+    .play(speed=2)                    # ▶ plays 2 slider-seconds per second; .play(False) hides it
+    .style(width="80%", accent="tomato")
+)
+```
+
+- The slider's value is the motions' time in seconds, so `.timing(t)` with
+  the times a line was plotted at puts the artist where the line was at `t`.
+- `.style(part, **properties)` adds inline CSS to a part: `"slider"` (the
+  default), `"figure"`, `"controls"`, `"button"`, `"label"`, `"input"` or
+  `"output"`. Underscores become dashes (`font_size`), `None` removes a
+  property, and `css={...}` takes any other name, such as a custom property.
+- On the slider, `accent`, `track`, `thumb`, `text`, `track_height` and
+  `thumb_size` set its `--slider-*` custom properties. They default to the
+  theme's colors.
+- A deck stylesheet can restyle every slider through `.slides-rs-slider`,
+  `.slides-rs-slider-controls` and `.slides-rs-slider > svg`.
+- Motions driven by a slider ignore `.starts(Step(...))`.
 
 ## Tips for writing decks
 

@@ -65,10 +65,63 @@ def test_the_same_figure_is_the_same_html(figure):
 
 
 def test_the_slider_goes_up_to_the_end_of_the_motion(figure):
-    html = Slider(*figure, label="t")._repr_html_()
-    assert '<input type="range" min="0" max="100" value="0"' in html
+    html = Slider(*figure).label("t")._repr_html_()
+    assert '<input type="range" min="0" max="100" value="0" aria-label="t"' in html
     assert '"start": 0.0, "stop": 2.0, "step": 0.02' in html
     assert "<label>t</label>" in html
+
+
+def test_each_method_returns_the_slider(figure):
+    slider = Slider(*figure)
+    assert slider.range(0, 4, step=0.5).value(1).label("t").play(speed=2).style(width="50%") is slider
+    html = slider._repr_html_()
+    assert '<input type="range" min="0" max="8" value="2"' in html
+    assert '"step": 0.5, "digits": 1, "speed": 2.0' in html
+
+
+def test_the_range_is_read_from_the_motion_when_shown(figure):
+    slider = Slider(*figure)
+    figure[1].timing(duration=5)
+    assert '"stop": 5.0' in slider._repr_html_()
+
+
+def test_without_play_it_has_no_button(figure):
+    assert "<button" not in Slider(*figure).play(False)._repr_html_()
+
+
+def test_a_value_is_at_the_closest_tick(figure):
+    html = Slider(*figure).range(step=0.5).value(1.2)._repr_html_()
+    assert 'max="4" value="2"' in html
+    assert ">1.0</output>" in html
+
+
+def test_a_part_is_styled_with_properties(figure):
+    slider = Slider(*figure).style(width="80%", accent="tomato").style("output", font_size="1em")
+    slider.style("figure", css={"--anything": "1"}).style("input", flex=2)
+    html = slider._repr_html_()
+    assert '<div class="slides-rs-slider" style="width: 80%; --slider-accent: tomato">' in html
+    assert '<output style="min-width: 4ch; font-size: 1em">' in html
+    assert '<input type="range" min="0" max="100" value="0" style="flex: 2">' in html
+    assert svg_of(html).get("style") == "--anything: 1"
+
+
+def test_a_style_is_removed_with_none(figure):
+    slider = Slider(*figure).style(width="80%").style(width=None)
+    assert '<div class="slides-rs-slider">' in slider._repr_html_()
+
+
+def test_a_part_or_value_that_is_not_one_is_refused(figure):
+    slider = Slider(*figure)
+    with pytest.raises(ValueError, match="parts"):
+        slider.style("track", color="red")
+    with pytest.raises(ValueError, match="value"):
+        slider.style(color="red; display: none")
+    with pytest.raises(ValueError, match="name"):
+        slider.style(css={"a b": "1"})
+    with pytest.raises(ValueError, match="later stop"):
+        slider.range(2, 1)
+    with pytest.raises(ValueError, match="speed"):
+        slider.play(speed=0)
 
 
 def test_a_motion_of_another_figure_is_refused(figure):

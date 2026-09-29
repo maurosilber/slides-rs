@@ -128,9 +128,9 @@ Slider(
     figure,
     Motion(dot, along=path).timing(t),
     Motion(wheel, along=axle).timing(t),
-    label="t",
-)
+).label("t").play(speed=2).style(accent="#2ca02c")
 ~~~
 
 `Slider(figure, *motions)` moves them to the time it is set to, rather than
-playing them: dragged, or played with ▶.
+playing them: dragged, or played with ▶. `.range()`, `.value()`, `.label()`,
+`.play()` and `.style()` set it up.
