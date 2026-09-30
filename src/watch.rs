@@ -11,8 +11,9 @@ use crate::deck::Deck;
 use crate::paths::{canonical, parent};
 use crate::{progress, store};
 
-/// Re-renders the deck whenever one of its files changes, until interrupted.
-pub fn watch(deck: &mut Deck, input: &Path, output: &Path) {
+/// Re-renders the slides of `input`, as they are in the deck of `root`,
+/// whenever one of the deck's files changes, until interrupted.
+pub fn watch(deck: &mut Deck, root: &Path, input: &Path, output: &Path) {
     let (sender, receiver) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(sender).unwrap();
     let mut watched = HashSet::new();
@@ -66,11 +67,11 @@ pub fn watch(deck: &mut Deck, input: &Path, output: &Path) {
             .collect();
         eprintln!("changed: {}", names.join(", "));
         deck.update(&changed);
-        deck.prune(input);
+        deck.prune(root);
         readers = deck.readers();
         watch_dirs(&mut watcher, &mut watched, deck, &readers);
         let took = progress::duration(start.elapsed());
-        if deck.write(input, output) {
+        if deck.write(root, input, output) {
             eprintln!(
                 "rendered {} in {took}",
                 progress::relative(output).display()

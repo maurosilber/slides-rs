@@ -19,6 +19,7 @@ slides-rs talk.md --open           # open the page in the default browser once r
 slides-rs talk.md --self-contained # inline CSS, JS and images: one shareable .html (KaTeX still from CDN)
 slides-rs talk.md --kernel python3 # xpython (xeus-python) or python3 (ipykernel); default: first installed
 slides-rs talk.md --clean          # after rendering, delete saved outputs no cell uses anymore
+slides-rs part.md --deck talk.md   # only part.md's slides, as they are in talk.md, which imports it
 ```
 
 `--clean` wipes everything in the `_outputs/` directory that the current deck

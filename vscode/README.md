@@ -78,6 +78,8 @@ and opens its page in VS Code's integrated browser, or in the default browser
 where VS Code has none. It renders again whenever the deck or a file it
 imports is saved, and the integrated browser reloads the page, as its
 `workbench.browser.autoReloadOnFileChange` setting has it by default.
+A file another one in the workspace imports shows its own slides as they are
+in that deck, with `--deck`: in its theme and shape, and stepping as it does.
 **Slides: Stop Rendering Slides** stops every deck being rendered. Like
 running cells, this needs VS Code on the desktop.
 

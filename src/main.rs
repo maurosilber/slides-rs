@@ -26,6 +26,11 @@ struct Cli {
     /// Where to write the HTML. Defaults to the input's name with an `.html`
     /// extension, in the outputs directory, which keeps it out of git.
     output: Option<PathBuf>,
+    /// A deck that imports the input, directly or through other files, to
+    /// render the input's slides as they are in it: in its theme and shape,
+    /// with links as from its directory, and stepping as it does.
+    #[arg(long, value_name = "DECK")]
+    deck: Option<PathBuf>,
     /// Re-render on every change to the input or to a file it imports.
     #[arg(short, long)]
     watch: bool,
@@ -95,6 +100,7 @@ fn main() {
         command,
         input,
         output,
+        deck: importer,
         watch: watching,
         kernel,
         clean,
@@ -113,8 +119,9 @@ fn main() {
     let input = input.unwrap();
     // The cache is keyed by canonical path, as watch events report those.
     let input = canonical(&input);
+    let root = importer.as_deref().map_or_else(|| input.clone(), canonical);
     // The outputs are saved where the extension saves them for the same file.
-    let outputs = store::root(parent(&input));
+    let outputs = store::root(parent(&root));
     let output = match output {
         Some(output) => canonical(&output),
         None => outputs.join(input.with_extension("html").file_name().unwrap()),
@@ -125,21 +132,29 @@ fn main() {
 
     let start = Instant::now();
     let mut deck = Deck::new(outputs, kernels, self_contained);
-    deck.update(std::slice::from_ref(&input));
-    deck.write(&input, &output);
+    deck.update(std::slice::from_ref(&root));
+    if !deck.imports(&root, &input) {
+        eprintln!(
+            "{} does not import {}",
+            progress::relative(&root).display(),
+            progress::relative(&input).display()
+        );
+        std::process::exit(1);
+    }
+    deck.write(&root, &input, &output);
     eprintln!(
         "rendered {} in {}",
         progress::relative(&output).display(),
         progress::duration(start.elapsed())
     );
     if clean {
-        deck.clean(&input);
+        deck.clean(&root);
     }
     if open {
         browser::open(&output);
     }
 
     if watching {
-        watch::watch(&mut deck, &input, &output);
+        watch::watch(&mut deck, &root, &input, &output);
     }
 }

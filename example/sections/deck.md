@@ -20,6 +20,7 @@ Other files join with `<import-slide src="..." />`.
 
 - `slides-rs talk.md` writes `talk.html`
 - `--watch` renders again on every change
+- `--deck talk.md` renders an imported file as it is in `talk.md`
 - `--self-contained` puts every file inside the page
 - `--kernel` picks `xpython` or `python3`
 - `--clean` removes outputs no cell uses anymore
