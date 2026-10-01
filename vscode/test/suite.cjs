@@ -63,7 +63,7 @@ const tests = {
 		assert.match(hover.contents[0].value, /^\*\*fade\*\* \(boolean\)/);
 	},
 
-	async 'a slide moves with all its markdown, and a new one is added after one'() {
+	async 'a slide moves with all its markdown, and a new one is added before or after one'() {
 		const dir = path.join(process.env.SLIDES_DECK, 'move');
 		fs.mkdirSync(dir, { recursive: true });
 		const file = path.join(dir, 'talk.slides.md');
@@ -77,10 +77,12 @@ const tests = {
 			return lenses.map((lens) => `${lens.range.start.line} ${lens.command.title}`);
 		};
 		await until(async () => (await lenses()).length > 0);
+		// Under the frontmatter for the first, and under the rule for the others.
+		const add = (line) => [`${line} $(add) New slide above`, `${line} $(add) New slide below`];
 		assert.deepStrictEqual(await lenses(), [
-			'3 $(arrow-down) Move down', '3 $(list-ordered) Move to…', '3 $(add) New slide',
-			'9 $(arrow-up) Move up', '9 $(arrow-down) Move down', '9 $(list-ordered) Move to…', '9 $(add) New slide',
-			'13 $(arrow-up) Move up', '13 $(list-ordered) Move to…', '13 $(add) New slide',
+			'3 $(arrow-down) Move down', '3 $(list-ordered) Move to…', ...add(3),
+			'8 $(arrow-up) Move up', '8 $(arrow-down) Move down', '8 $(list-ordered) Move to…', ...add(8),
+			'12 $(arrow-up) Move up', '12 $(list-ordered) Move to…', ...add(12),
 		]);
 		// The rules stay where they are, and the slides move around them.
 		await vscode.commands.executeCommand('slides.moveSlideDown', document.uri, 0);
@@ -89,6 +91,8 @@ const tests = {
 		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
 		await vscode.commands.executeCommand('slides.newSlide', document.uri, 0);
 		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# Title\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
+		await vscode.commands.executeCommand('slides.newSlideAbove', document.uri, 0);
+		assert.strictEqual(document.getText(), `${frontmatter}# Title\n\n---\n\n# Two\n\n---\n\n# Title\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
 		// Markdown that is not a deck has no buttons.
 		const readme = await vscode.workspace.openTextDocument({ language: 'markdown', content: '# A\n\n---\n\n# B\n' });
 		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeCodeLensProvider', readme.uri), []);

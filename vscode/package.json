@@ -78,7 +78,13 @@
 			},
 			{
 				"command": "slides.newSlide",
-				"title": "New Slide",
+				"title": "New Slide Below",
+				"category": "Slides",
+				"icon": "$(add)"
+			},
+			{
+				"command": "slides.newSlideAbove",
+				"title": "New Slide Above",
 				"category": "Slides",
 				"icon": "$(add)"
 			},
@@ -116,6 +122,16 @@
 					"light": "#0066bf1a",
 					"highContrast": "#ffffff26",
 					"highContrastLight": "#0000001a"
+				}
+			},
+			{
+				"id": "slides.alternateSlide",
+				"description": "The background of every other slide of a deck's markdown, so that two in a row tell apart.",
+				"defaults": {
+					"dark": "#ffffff08",
+					"light": "#0000000a",
+					"highContrast": null,
+					"highContrastLight": null
 				}
 			}
 		],
@@ -173,6 +189,10 @@
 			"commandPalette": [
 				{
 					"command": "slides.newSlide",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && editorTextFocus"
+				},
+				{
+					"command": "slides.newSlideAbove",
 					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && editorTextFocus"
 				},
 				{

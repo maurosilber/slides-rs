@@ -1,6 +1,7 @@
 // The slides of a deck's markdown in the text editor: where each one begins, marked on
-// the rule or the import that breaks it from the one before, and buttons above each to
-// move it, with all its markdown, before another one, or to add one after it. Where
+// the rule or the import that breaks it from the one before, every other slide shaded,
+// and buttons under the break, or under the frontmatter for the first, to move it, with
+// all its markdown, before another one, or to add one before or after it. Where
 // they break is the deck's own reading of the markdown, which the module answers.
 
 import * as vscode from 'vscode';
@@ -12,6 +13,9 @@ const DELAY = 150;
 
 /** A slide of the markdown, by its first and last lines that are not blank. */
 interface Slide {
+	/** The lines between the break before it and the one after, blank ones too. */
+	start: number;
+	end: number;
 	first: number;
 	last: number;
 	/** Its heading, or else its first line, to tell it apart. */
@@ -44,6 +48,11 @@ export class SlideEditor implements vscode.Disposable {
 			margin: '0 0 0 2em',
 		},
 	});
+	/** Every other slide, so that two in a row tell apart. */
+	private readonly shade = vscode.window.createTextEditorDecorationType({
+		isWholeLine: true,
+		backgroundColor: new vscode.ThemeColor('slides.alternateSlide'),
+	});
 
 	constructor(
 		private readonly module: Module,
@@ -52,6 +61,7 @@ export class SlideEditor implements vscode.Disposable {
 	) {
 		this.disposables.push(
 			this.decoration,
+			this.shade,
 			this.lensesChanged,
 			vscode.languages.registerCodeLensProvider(SELECTOR, {
 				onDidChangeCodeLenses: this.lensesChanged.event,
@@ -65,6 +75,8 @@ export class SlideEditor implements vscode.Disposable {
 				this.run(uri, index, (editor, layout, i) => this.moveTo(editor, layout, i))),
 			vscode.commands.registerCommand('slides.newSlide', (uri?: vscode.Uri, index?: number) =>
 				this.run(uri, index, (editor, layout, i) => this.add(editor, layout, i))),
+			vscode.commands.registerCommand('slides.newSlideAbove', (uri?: vscode.Uri, index?: number) =>
+				this.run(uri, index, (editor, layout, i) => this.addBefore(editor, layout, i))),
 			vscode.window.onDidChangeVisibleTextEditors((editors) => editors.forEach((editor) => void this.decorate(editor))),
 			vscode.workspace.onDidChangeTextDocument(({ document }) => this.later(document)),
 			vscode.workspace.onDidCloseTextDocument((document) => this.layouts.delete(document.uri.toString())),
@@ -116,6 +128,7 @@ export class SlideEditor implements vscode.Disposable {
 		const document = editor.document;
 		if (!this.decks.isDeck(document)) {
 			editor.setDecorations(this.decoration, []);
+			editor.setDecorations(this.shade, []);
 			return;
 		}
 		let layout: Layout;
@@ -137,9 +150,13 @@ export class SlideEditor implements vscode.Disposable {
 		});
 		const imports = layout.breaks.imports.map((line) => mark(line, 'its slides, imported'));
 		editor.setDecorations(this.decoration, [...rules, ...imports]);
+		editor.setDecorations(this.shade, layout.slides
+			.filter((_, i) => i % 2 === 1)
+			.map((slide) => new vscode.Range(slide.start, 0, slide.end, 0)));
 	}
 
-	/** Buttons above each slide, to move it or to add one after it. */
+	/** Buttons at the top of each slide, under its break, to move it or to add one before
+	 * or after it. */
 	private async codeLenses(document: vscode.TextDocument): Promise<vscode.CodeLens[]> {
 		if (!this.decks.isDeck(document)) {
 			return [];
@@ -147,14 +164,15 @@ export class SlideEditor implements vscode.Disposable {
 		const { slides } = await this.layout(document);
 		const uri = document.uri;
 		return slides.flatMap((slide, i) => {
-			const range = new vscode.Range(slide.first, 0, slide.first, 0);
+			const range = new vscode.Range(slide.start, 0, slide.start, 0);
 			const lens = (title: string, command: string, tooltip: string) =>
 				new vscode.CodeLens(range, { title, command, tooltip, arguments: [uri, i] });
 			return [
 				...(i > 0 ? [lens('$(arrow-up) Move up', 'slides.moveSlideUp', 'Move this slide before the one above it')] : []),
 				...(i < slides.length - 1 ? [lens('$(arrow-down) Move down', 'slides.moveSlideDown', 'Move this slide after the one below it')] : []),
 				...(slides.length > 1 ? [lens('$(list-ordered) Move to…', 'slides.moveSlideTo', 'Move this slide before another one')] : []),
-				lens('$(add) New slide', 'slides.newSlide', 'Add a slide after this one'),
+				lens('$(add) New slide above', 'slides.newSlideAbove', 'Add a slide before this one'),
+				lens('$(add) New slide below', 'slides.newSlide', 'Add a slide after this one'),
 			];
 		});
 	}
@@ -179,7 +197,7 @@ export class SlideEditor implements vscode.Disposable {
 		}
 		if (index === undefined) {
 			const line = editor.selection.active.line;
-			index = Math.max(0, layout.slides.filter((slide) => slide.first <= line).length - 1);
+			index = Math.max(0, layout.slides.filter((slide) => slide.start <= line).length - 1);
 		}
 		await command(editor, layout, index);
 	}
@@ -247,6 +265,16 @@ export class SlideEditor implements vscode.Disposable {
 		}
 	}
 
+	/** Adds a slide before the one at `index`, with a heading to fill in. */
+	private async addBefore(editor: vscode.TextEditor, layout: Layout, index: number) {
+		const slide = layout.slides[index];
+		if (slide) {
+			await editor.insertSnippet(new vscode.SnippetString('# ${1:Title}\n\n---\n\n'), new vscode.Position(slide.first, 0));
+		} else {
+			await this.add(editor, layout, index);
+		}
+	}
+
 	dispose() {
 		this.timers.forEach((timer) => clearTimeout(timer));
 		this.disposables.forEach((disposable) => disposable.dispose());
@@ -259,12 +287,14 @@ function slidesOf(lines: string[], breaks: Breaks): Slide[] {
 	const blank = (line: number) => /^\s*$/.test(lines[line]);
 	const slides: Slide[] = [];
 	for (let i = 0; i + 1 < bounds.length; i++) {
-		let first = bounds[i] + 1;
-		let last = bounds[i + 1] - 1;
+		const start = bounds[i] + 1;
+		const end = bounds[i + 1] - 1;
+		let first = start;
+		let last = end;
 		while (first <= last && blank(first)) first++;
 		while (last >= first && blank(last)) last--;
 		if (first <= last) {
-			slides.push({ first, last, title: titleOf(lines.slice(first, last + 1)) });
+			slides.push({ start, end, first, last, title: titleOf(lines.slice(first, last + 1)) });
 		}
 	}
 	return slides;

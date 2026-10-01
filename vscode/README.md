@@ -64,11 +64,13 @@ In the text editor, the line where each slide begins, its `---` or an
 `<import-slide>`, is highlighted, with the slide it begins written after it,
 as the deck breaks them: not at a `---` under a line of text, which makes it
 a heading, nor in a code block. Its color is `slides.slideBreak`, which a
-`workbench.colorCustomizations` setting can change. Above each slide, buttons
-move it, with all its markdown, up, down, or before any other, and add a
-slide after it; the rules and blank lines between slides stay where they are.
-**Slides: New Slide**, **Move Slide Up**, **Move Slide Down** and **Move
-Slide To…** do the same for the slide the cursor is in.
+`workbench.colorCustomizations` setting can change, as can
+`slides.alternateSlide`, the background of every other slide. Under each
+break, or under the frontmatter for the first slide, buttons move the slide,
+with all its markdown, up, down, or before any other, and add a slide before
+or after it; the rules and blank lines between slides stay where they are.
+**Slides: New Slide Above**, **New Slide Below**, **Move Slide Up**, **Move
+Slide Down** and **Move Slide To…** do the same for the slide the cursor is in.
 
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.
