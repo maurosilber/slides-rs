@@ -9,9 +9,9 @@
 //! marks: every list item, the elements with a `step`, an `also` or a
 //! `data-step`, as raw html and an SVG's are, and the steps of its math, as
 //! `\step{...}` writes them. A list shows with its first item, rather than
-//! a step before it. Every number an element's ranges start or end
-//! at is a step, in order, and an element shows from the step its range
-//! starts at, or its own, up to the one it ends at. A `<style>` or a
+//! a step before it. The numbers of a range are the slide's steps, wherever
+//! the element is, and an element shows from the step its range starts at,
+//! or its own, up to the one it ends at. A `<style>` or a
 //! `<script>` shows nothing, and is no step.
 //!
 //! A heading with `steps="false"`, as `{ steps=false }` writes, shows
@@ -559,7 +559,7 @@ fn number_items(
     // Later entries win, as an element's own range wins over its step's.
     let mut shown: Vec<(Target, Shown)> = Vec::new();
     let mut count = 0;
-    // In a column, the latest step that is not a range's.
+    // The latest step, but in a column, not a range's.
     let mut cursor = 0;
     for (i, group) in groups.iter().enumerate() {
         let marks: Vec<(Target, Mark)> = group
@@ -576,61 +576,35 @@ fn number_items(
                 .elements
                 .first()
                 .is_some_and(|&(child, _)| matches!(elements[child].name.as_str(), "ul" | "ol"));
-        let own;
-        let parts;
-        if column {
-            own = if i == 0 { 0 } else { cursor + 1 };
-            let latest;
-            (parts, latest) = ranges(&marks, if list { own - 1 } else { own }, false, labels);
-            cursor = latest.max(own);
-            count = steps_of(&parts).fold(count.max(cursor), u32::max);
-            // Before its marks, which win over it.
-            for &(child, _) in &group.elements {
-                let own = Shown {
-                    from: At::Step(own),
-                    to: None,
-                    collapse: false,
-                };
-                shown.push((Target::Element(child), own));
-            }
-            for (target, range, collapse) in parts {
-                let from = range
-                    .start
-                    .map_or(At::Step(own), |start| At::of(start, |step| step));
-                let to = range.end.map(|end| At::of(end, |step| step));
-                shown.push((target, Shown { from, to, collapse }));
-            }
+        // On a slide, the numbers of a range are its steps, from 1, the step
+        // it opens with, which is 0 here; in a column, they are the column's.
+        let marks: Vec<(Target, Mark)> = if column {
+            marks
         } else {
-            (parts, _) = ranges(&marks, 0, true, labels);
-            let mut bounds: Vec<u32> = steps_of(&parts).collect();
-            bounds.sort_unstable();
-            bounds.dedup();
-            own = if i == 0 {
-                0
-            } else if list && !bounds.is_empty() {
-                count + 1
-            } else {
-                count += 1;
-                count
+            marks
+                .into_iter()
+                .map(|(target, mark)| (target, from_slide(mark)))
+                .collect()
+        };
+        let own = if i == 0 { 0 } else { cursor + 1 };
+        let (parts, latest) = ranges(&marks, if list { own - 1 } else { own }, !column, labels);
+        cursor = latest.max(own);
+        count = steps_of(&parts).fold(count.max(cursor), u32::max);
+        // Before its marks, which win over it.
+        for &(child, _) in &group.elements {
+            let own = Shown {
+                from: At::Step(own),
+                to: None,
+                collapse: false,
             };
-            // Before its marks, which win over it.
-            for &(child, _) in &group.elements {
-                let own = Shown {
-                    from: At::Step(own),
-                    to: None,
-                    collapse: false,
-                };
-                shown.push((Target::Element(child), own));
-            }
-            let step = |bound: u32| count + 1 + bounds.binary_search(&bound).unwrap() as u32;
-            for (target, range, collapse) in parts {
-                let from = range
-                    .start
-                    .map_or(At::Step(own), |start| At::of(start, step));
-                let to = range.end.map(|end| At::of(end, step));
-                shown.push((target, Shown { from, to, collapse }));
-            }
-            count += bounds.len() as u32;
+            shown.push((Target::Element(child), own));
+        }
+        for (target, range, collapse) in parts {
+            let from = range
+                .start
+                .map_or(At::Step(own), |start| At::of(start, |step| step));
+            let to = range.end.map(|end| At::of(end, |step| step));
+            shown.push((target, Shown { from, to, collapse }));
         }
         for &(mode, columns) in &group.columns {
             let (merged, length) = merge(html, elements, mode, columns, labels);
@@ -642,9 +616,29 @@ fn number_items(
                 shown.push((target, Shown { from, to, ..merged }));
             }
             count += length;
+            if !column {
+                cursor = count;
+            }
         }
     }
     (shown, count)
+}
+
+/// The mark with the numbers of its range counted from 0, the step a slide
+/// opens with, rather than from 1.
+fn from_slide(mark: Mark) -> Mark {
+    let shift = |bound: Option<Bound>| match bound {
+        Some(Bound::Step(step)) => Some(Bound::Step(step.saturating_sub(1))),
+        bound => bound,
+    };
+    let step = match mark.step {
+        Step::Range(Range { start, end }) => Step::Range(Range {
+            start: shift(start),
+            end: shift(end),
+        }),
+        step => step,
+    };
+    Mark { step, ..mark }
 }
 
 /// The numbers that the bounds of `parts` are, rather than names.
@@ -1202,7 +1196,7 @@ mod tests {
 
     #[test]
     fn a_marked_element_joins_the_step_before_it() {
-        let html = "<section><h1>T</h1><p>a</p><p step=\"..2\" collapse>b</p><p step=\"2\" collapse>c</p></section>";
+        let html = "<section><h1>T</h1><p>a</p><p step=\"..3\" collapse>b</p><p step=\"3\" collapse>c</p></section>";
         assert_eq!(
             steps(html),
             ["count 3", "p --from:2", "p* --from:2;--to:3", "p* --from:3",]
@@ -1222,6 +1216,23 @@ mod tests {
                 "p --from:2",
                 "p* --from:1;--to:2",
                 "p --from:3",
+            ]
+        );
+    }
+
+    #[test]
+    fn ranges_are_steps_of_the_slide_wherever_they_are() {
+        let html =
+            "<section><h1>T</h1><p>a</p><p>b</p><p>c</p><svg><g step=\"3..\"></g></svg></section>";
+        assert_eq!(
+            steps(html),
+            [
+                "count 5",
+                "p --from:2",
+                "p --from:3",
+                "p --from:4",
+                "svg --from:5",
+                "g --from:3"
             ]
         );
     }
@@ -1351,7 +1362,7 @@ mod tests {
 
     #[test]
     fn math_steps_are_written_for_katex() {
-        let html = "<section><p><span class=\"math math-inline\">a \\htmlData{step=1}{= b} \\htmlData{step=2,collapse=true} c</span></p></section>";
+        let html = "<section><p><span class=\"math math-inline\">a \\htmlData{step=2}{= b} \\htmlData{step=3,collapse=true} c</span></p></section>";
         assert_eq!(
             number(html),
             "<section data-count=\"3\"><p><span class=\"math math-inline\">a \\htmlStyle{--from:2}{\\htmlClass{step}{= b}} \\htmlStyle{--from:3}{\\htmlClass{step step-collapse}{c}}</span></p></section>"
@@ -1360,7 +1371,7 @@ mod tests {
 
     #[test]
     fn math_steps_count_as_steps_of_their_element() {
-        let html = "<section><ul><li>a</li></ul><p><span class=\"math\">\\htmlData{step=3}{x}</span></p></section>";
+        let html = "<section><ul><li>a</li></ul><p><span class=\"math\">\\htmlData{step=4}{x}</span></p></section>";
         assert_eq!(steps(html), ["count 4", "li --from:2", "p --from:3"]);
         assert!(number(html).contains("\\htmlStyle{--from:4}{\\htmlClass{step}{x}}"));
     }
@@ -1402,7 +1413,7 @@ mod tests {
         let numbered = number_figure(svg);
         assert_eq!(
             numbered,
-            "<svg viewBox=\"0 0 1 1\"><g step=\"\" class=\"step\" style=\"--from:2\"><path d=\"M0\"/></g><g also=\"\" class=\" step\" style=\"--from:2\"/><g step=\"2..3\" collapse=\"\" style=\"fill:red;;--from:3;--to:4\" class=\"step step-collapse\"></g><title>a <g step></title></svg>"
+            "<svg viewBox=\"0 0 1 1\"><g step=\"\" class=\"step\" style=\"--from:2\"><path d=\"M0\"/></g><g also=\"\" class=\" step\" style=\"--from:2\"/><g step=\"2..3\" collapse=\"\" style=\"fill:red;;--from:2;--to:3\" class=\"step step-collapse\"></g><title>a <g step></title></svg>"
         );
         assert_eq!(unnumber_figure(&numbered), svg);
     }

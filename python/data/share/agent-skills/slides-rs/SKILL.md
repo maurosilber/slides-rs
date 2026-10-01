@@ -81,8 +81,9 @@ By default, reveals happen in document order:
   before it, instead of being a step itself.
 - Explicit ranges use Rust syntax: `step="2..4"` shows from step 2 up to
   (not including) 4, `step="..3"` until 3, and `step="3.."` or `step="3"`
-  from 3 on. They count from the step of the element they are in (or join),
-  in order: `1` is the first step after it shows.
+  from 3 on. They are the slide's steps, wherever the element is: `1` is
+  the step the slide opens with. For steps relative to an element, name it
+  and count from its name, as `@a+1` (see below).
 - `{ steps=parallel }` on a heading makes the `###` columns under it step
   together: the first step of each column at once, then the second of each.
   `{ steps=interleave }` makes them take turns: the first step of each
