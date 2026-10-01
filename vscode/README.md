@@ -70,8 +70,25 @@ break, or under the frontmatter for the first slide, buttons move the slide,
 with all its markdown, up, down, or before any other, and add a slide before
 or after it; the rules and blank lines between slides stay where they are.
 **Slides: New Slide Above**, **New Slide Below**, **Move Slide Up**, **Move
-Slide Down** and **Move Slide To…** do the same for the slide the cursor is in. The `src` of an `<import-slide>` is a link: Ctrl/Cmd+click it to open the
+Slide Down** and **Move Slide To…** do the same for the slide the cursor is
+in. The `src` of an `<import-slide>` is a link: Ctrl/Cmd+click it to open the
 imported file.
+
+The headings are highlighted by what they are on the slide: its title, a `#`,
+in `slides.title`, a subtitle, a `##`, in `slides.subtitle`, and a column's
+`###` in `slides.columnHeading`. Each column, from its `###` up to the next
+heading of its level or above, has a line down its left, in `slides.column`
+and `slides.alternateColumn` by turns, so that two side by side tell apart.
+After each line that steps, the steps it shows in are written as the deck
+numbers them, to tell why an animation steps as it does: `step 3` from the
+third step on, `step 2..4` from the second up to the fourth, and a `*` if it
+takes no space while hidden; above each slide, how many steps it has. A code
+cell counts as one step, whatever its outputs, and the frontmatter's `steps`
+is the file's own, as it is unless another file imports it.
+
+Each of these is a setting, to turn off for a quieter editor:
+`slides.editor.alternateSlides`, `slides.editor.headings`,
+`slides.editor.columns` and `slides.editor.steps`.
 
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.

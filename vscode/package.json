@@ -125,6 +125,66 @@
 				}
 			},
 			{
+				"id": "slides.title",
+				"description": "The background of a slide's title, a `#` heading, in a deck's markdown.",
+				"defaults": {
+					"dark": "#c586c02e",
+					"light": "#af00db1a",
+					"highContrast": null,
+					"highContrastLight": null
+				}
+			},
+			{
+				"id": "slides.subtitle",
+				"description": "The background of a subtitle, a `##` heading, in a deck's markdown.",
+				"defaults": {
+					"dark": "#4ec9b026",
+					"light": "#00808018",
+					"highContrast": null,
+					"highContrastLight": null
+				}
+			},
+			{
+				"id": "slides.columnHeading",
+				"description": "The background of a column's heading, a `###`, in a deck's markdown.",
+				"defaults": {
+					"dark": "#dcdcaa1f",
+					"light": "#795e2618",
+					"highContrast": null,
+					"highContrastLight": null
+				}
+			},
+			{
+				"id": "slides.column",
+				"description": "The line down the left of a column of a deck's markdown.",
+				"defaults": {
+					"dark": "#dcdcaa80",
+					"light": "#795e2680",
+					"highContrast": "#ffffff",
+					"highContrastLight": "#000000"
+				}
+			},
+			{
+				"id": "slides.alternateColumn",
+				"description": "The line down the left of every other column of a deck's markdown, beside the one before.",
+				"defaults": {
+					"dark": "#4fc1ff80",
+					"light": "#0070c180",
+					"highContrast": "#ffffff",
+					"highContrastLight": "#000000"
+				}
+			},
+			{
+				"id": "slides.step",
+				"description": "The steps written after a line of a deck's markdown that steps.",
+				"defaults": {
+					"dark": "#b5cea8",
+					"light": "#098658",
+					"highContrast": "#b5cea8",
+					"highContrastLight": "#098658"
+				}
+			},
+			{
 				"id": "slides.alternateSlide",
 				"description": "The background of every other slide of a deck's markdown, so that two in a row tell apart.",
 				"defaults": {
@@ -149,6 +209,26 @@
 		"configuration": {
 			"title": "Slides Notebook",
 			"properties": {
+				"slides.editor.alternateSlides": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Shade every other slide of a deck's markdown, in `slides.alternateSlide`."
+				},
+				"slides.editor.headings": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Highlight a slide's title (`#`), its subtitles (`##`) and its columns' headings (`###`), each in a color of its own: `slides.title`, `slides.subtitle` and `slides.columnHeading`."
+				},
+				"slides.editor.columns": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Draw a line down the left of each column, from its `###` to the next, in `slides.column` and `slides.alternateColumn` by turns."
+				},
+				"slides.editor.steps": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Write after each line that steps the steps it shows in, as the deck numbers them: `3` from the third on, `2..4` up to the fourth, and a `*` if it takes no space while hidden. And above each slide, how many steps it has."
+				},
 				"slides.pythonServer": {
 					"type": "string",
 					"default": "",

@@ -53,6 +53,69 @@ use super::{Bound, Mark, Range, Step};
 pub fn number(html: &str) -> String {
     let elements = elements(html);
     let mut edits = Vec::new();
+    for (index, children, steps) in sections(html, &elements) {
+        let count = number_slide(html, &elements, &children, steps, &mut edits);
+        let close = elements[index].close;
+        edits.push((close..close, format!(" data-count=\"{count}\"")));
+    }
+    apply(html, edits)
+}
+
+/// A slide's steps, as `number` numbers them, by where they are in the html.
+#[derive(Debug, PartialEq)]
+pub struct Slide {
+    /// Where its `<section>` begins.
+    pub at: usize,
+    /// How many steps it has.
+    pub count: u32,
+    /// What steps in it, in order, but what shows from the start all along.
+    pub steps: Vec<Stepped>,
+}
+
+/// What steps, by where it begins in the html: an element's start tag, or a
+/// step of math, and the steps it shows in, from `from` up to `to`, excluded.
+#[derive(Debug, PartialEq)]
+pub struct Stepped {
+    pub at: usize,
+    pub from: u32,
+    pub to: Option<u32>,
+    pub collapse: bool,
+}
+
+/// The steps of every `<section>`, as `number` numbers them, rather than
+/// written into the html.
+pub fn slides(html: &str) -> Vec<Slide> {
+    let elements = elements(html);
+    sections(html, &elements)
+        .into_iter()
+        .map(|(index, children, steps)| {
+            let (resolved, count) = resolve_slide(html, &elements, &children, steps);
+            let mut steps: Vec<Stepped> = resolved
+                .into_iter()
+                .map(|(target, from, to, collapse)| Stepped {
+                    at: match target {
+                        Target::Element(index) => elements[index].start,
+                        Target::Math { span, .. } => span.start,
+                    },
+                    from,
+                    to,
+                    collapse,
+                })
+                .collect();
+            steps.sort_by_key(|stepped| stepped.at);
+            Slide {
+                at: elements[index].start,
+                count,
+                steps,
+            }
+        })
+        .collect()
+}
+
+/// The `<section>`s of the html, each with its children and whether it steps
+/// through them.
+fn sections(html: &str, elements: &[Element]) -> Vec<(usize, Vec<usize>, bool)> {
+    let mut sections = Vec::new();
     for (index, element) in elements.iter().enumerate() {
         if element.parent.is_some() || element.name != "section" {
             continue;
@@ -61,13 +124,9 @@ pub fn number(html: &str) -> String {
             .filter(|&child| elements[child].parent == Some(index))
             .collect();
         let steps = element.attribute(html, "data-steps") != Some("false");
-        let count = number_slide(html, &elements, &children, steps, &mut edits);
-        edits.push((
-            element.close..element.close,
-            format!(" data-count=\"{count}\""),
-        ));
+        sections.push((index, children, steps));
     }
-    apply(html, edits)
+    sections
 }
 
 /// A figure with its steps numbered, as a slide that holds it alone numbers
@@ -247,7 +306,11 @@ struct Frame {
 fn items(html: &str, elements: &[Element], children: &[usize], steps: bool) -> Vec<Item> {
     // Where the next item goes: the column it is in, or the slide.
     fn target<'a>(slide: &'a mut Vec<Item>, frames: &'a mut [Frame]) -> &'a mut Vec<Item> {
-        match frames.iter_mut().rev().find(|frame| !frame.columns.is_empty()) {
+        match frames
+            .iter_mut()
+            .rev()
+            .find(|frame| !frame.columns.is_empty())
+        {
             Some(frame) => frame.columns.last_mut().unwrap(),
             None => slide,
         }
@@ -334,6 +397,46 @@ fn number_slide(
     steps: bool,
     edits: &mut Vec<Edit>,
 ) -> u32 {
+    let (resolved, count) = resolve_slide(html, elements, children, steps);
+    for (target, from, to, collapse) in resolved {
+        let classes = if collapse {
+            "step step-collapse"
+        } else {
+            "step"
+        };
+        let mut vars = format!("--from:{from}");
+        if let Some(to) = to {
+            vars.push_str(&format!(";--to:{to}"));
+        }
+        match target {
+            Target::Element(index) => {
+                let element = &elements[index];
+                append(html, element, "class", " ", classes, edits);
+                append(html, element, "style", ";", &vars, edits);
+            }
+            Target::Math { span, argument } => {
+                let argument = &html[argument];
+                let tex =
+                    format!("\\htmlStyle{{{vars}}}{{\\htmlClass{{{classes}}}{{{argument}}}}}");
+                edits.push((span, tex));
+            }
+        }
+    }
+    count
+}
+
+/// What steps, the steps it shows from and hides at, and whether it collapses.
+type Resolved = (Target, u32, Option<u32>, bool);
+
+/// The steps that what steps in a slide made of `children` shows from and
+/// hides at, and whether it collapses, but for what shows from the start all
+/// along, which needs no step, and how many steps the slide has.
+fn resolve_slide(
+    html: &str,
+    elements: &[Element],
+    children: &[usize],
+    steps: bool,
+) -> (Vec<Resolved>, u32) {
     let items = items(html, elements, children, steps);
     let mut labels = Vec::new();
     let (shown, count) = number_items(html, elements, &items, false, &mut labels);
@@ -386,7 +489,7 @@ fn number_slide(
             }
         }
     }
-    let resolved: Vec<(Target, u32, Option<u32>, bool)> = targets
+    let resolved: Vec<Resolved> = targets
         .iter()
         .map(|(target, shown)| {
             let from = resolve(&shown.from, &named, &targets, 0).unwrap_or(1);
@@ -401,36 +504,12 @@ fn number_slide(
         .iter()
         .map(|&(_, from, _, _)| from)
         .fold(count + 1, u32::max);
-
-    for (target, from, to, collapse) in resolved {
-        // What shows from the start, all along, needs no step.
-        if from == 1 && to.is_none() {
-            continue;
-        }
-        let classes = if collapse {
-            "step step-collapse"
-        } else {
-            "step"
-        };
-        let mut vars = format!("--from:{from}");
-        if let Some(to) = to {
-            vars.push_str(&format!(";--to:{to}"));
-        }
-        match target {
-            Target::Element(index) => {
-                let element = &elements[index];
-                append(html, element, "class", " ", classes, edits);
-                append(html, element, "style", ";", &vars, edits);
-            }
-            Target::Math { span, argument } => {
-                let argument = &html[argument];
-                let tex =
-                    format!("\\htmlStyle{{{vars}}}{{\\htmlClass{{{classes}}}{{{argument}}}}}");
-                edits.push((span, tex));
-            }
-        }
-    }
-    count
+    // What shows from the start, all along, needs no step.
+    let resolved = resolved
+        .into_iter()
+        .filter(|&(_, from, to, _)| !(from == 1 && to.is_none()))
+        .collect();
+    (resolved, count)
 }
 
 /// Numbers the steps of `items`, from 0, the step they open with, and returns
@@ -515,7 +594,9 @@ fn number_items(
                 shown.push((Target::Element(child), own));
             }
             for (target, range, collapse) in parts {
-                let from = range.start.map_or(At::Step(own), |start| At::of(start, |step| step));
+                let from = range
+                    .start
+                    .map_or(At::Step(own), |start| At::of(start, |step| step));
                 let to = range.end.map(|end| At::of(end, |step| step));
                 shown.push((target, Shown { from, to, collapse }));
             }
@@ -543,7 +624,9 @@ fn number_items(
             }
             let step = |bound: u32| count + 1 + bounds.binary_search(&bound).unwrap() as u32;
             for (target, range, collapse) in parts {
-                let from = range.start.map_or(At::Step(own), |start| At::of(start, step));
+                let from = range
+                    .start
+                    .map_or(At::Step(own), |start| At::of(start, step));
                 let to = range.end.map(|end| At::of(end, step));
                 shown.push((target, Shown { from, to, collapse }));
             }
@@ -836,6 +919,8 @@ struct Attribute {
 struct Element {
     /// Its name, in lower case.
     name: String,
+    /// Where its start tag begins.
+    start: usize,
     attributes: Vec<Attribute>,
     /// Where its start tag closes, with `>` or `/>`, where attributes go.
     close: usize,
@@ -938,6 +1023,7 @@ fn elements(html: &str) -> Vec<Element> {
         let name = tag.name.clone();
         elements.push(Element {
             name: tag.name,
+            start,
             attributes: tag.attributes,
             close: tag.close,
             parent: open.last().copied(),
@@ -1119,12 +1205,7 @@ mod tests {
         let html = "<section><h1>T</h1><p>a</p><p step=\"..2\" collapse>b</p><p step=\"2\" collapse>c</p></section>";
         assert_eq!(
             steps(html),
-            [
-                "count 3",
-                "p --from:2",
-                "p* --from:2;--to:3",
-                "p* --from:3",
-            ]
+            ["count 3", "p --from:2", "p* --from:2;--to:3", "p* --from:3",]
         );
     }
 
@@ -1152,7 +1233,13 @@ mod tests {
         let html = "<section><h1>T</h1><h3 steps=\"false\">A</h3><p>a</p><ul><li>b</li></ul><h3>B</h3></section>";
         assert_eq!(
             steps(html),
-            ["count 3", "h3 --from:2", "p --from:2", "ul --from:2", "h3 --from:3"]
+            [
+                "count 3",
+                "h3 --from:2",
+                "p --from:2",
+                "ul --from:2",
+                "h3 --from:3"
+            ]
         );
         let html = "<section data-steps=\"false\"><ul><li>a</li></ul><h2 steps=\"true\">A</h2><ul><li>b</li></ul><p>c</p></section>";
         assert_eq!(
@@ -1166,7 +1253,13 @@ mod tests {
         let html = "<section><h1 steps=\"parallel\">T</h1><h3>A</h3><ul><li>a</li><li>b</li></ul><h3>B</h3><p>c</p></section>";
         assert_eq!(
             steps(html),
-            ["count 3", "ul --from:2", "li --from:2", "li --from:3", "p --from:2"]
+            [
+                "count 3",
+                "ul --from:2",
+                "li --from:2",
+                "li --from:3",
+                "p --from:2"
+            ]
         );
     }
 

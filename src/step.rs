@@ -22,7 +22,7 @@ use std::fmt;
 
 mod html;
 
-pub use html::{number, number_figure, unnumber_figure};
+pub use html::{Slide, Stepped, number, number_figure, slides, unnumber_figure};
 
 /// How an element marks itself as a step: by the range it shows in, or as
 /// the next step, or the next step with a name, or along with the latest one.

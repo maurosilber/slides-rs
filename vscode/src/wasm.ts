@@ -59,6 +59,18 @@ export interface Breaks {
 	rules: number[];
 	/** The lines of the imports, which bring slides of their own. */
 	imports: number[];
+	/** The headings of the slides, by their first and last lines, and their level, from 1. */
+	headings: { line: number; last: number; level: number }[];
+}
+
+/** The steps of a slide, as the deck numbers them, by line, counted from zero. */
+export interface SlideSteps {
+	/** The line its slide opens at: the first of the file, or the one after its break. */
+	line: number;
+	/** How many steps it has. */
+	count: number;
+	/** What steps in it, in order, but what shows from the start all along. */
+	steps: { line: number; from: number; to: number | null; collapse: boolean }[];
 }
 
 export class Module {
@@ -87,6 +99,11 @@ export class Module {
 	/** Where the slides of a markdown file break. */
 	slides(markdown: string): Promise<Breaks> {
 		return this.run({ command: 'slides', markdown });
+	}
+
+	/** The steps of the slides of a markdown file, by line. */
+	steps(markdown: string): Promise<SlideSteps[]> {
+		return this.run({ command: 'steps', markdown });
 	}
 
 	/** The saved outputs of each code cell of the file at `uri`, given their sources in order. */

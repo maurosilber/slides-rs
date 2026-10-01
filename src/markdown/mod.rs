@@ -6,12 +6,11 @@ mod math;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{
-    CodeBlockKind, Event, OffsetIter, Options, Parser, Tag, TagEnd, html,
-};
+use pulldown_cmark::{CodeBlockKind, Event, OffsetIter, Options, Parser, Tag, TagEnd, html};
 
 use crate::aspect::{self, AspectRatio};
 use crate::paths::{canonical, parent};
+use crate::step;
 use crate::store;
 
 /// Marks an import in the rendered html, followed by its path and a newline.
@@ -67,7 +66,52 @@ impl File {
 /// boundary at every import and at every code cell. The code of the cells
 /// comes along, in order.
 pub fn render(markdown: &str, path: &Path) -> File {
+    let (rendered, frontmatter, cells) = html_of(markdown, parent(path), false);
+
+    // Split at the markers, so every file is cached apart from the ones it
+    // imports, and apart from the outputs of its cells, which may come later.
+    let frontmatter = Frontmatter::parse(&frontmatter, path);
     let dir = parent(path);
+    let lock = store::lock_file(dir);
+    let hashes = store::hashes(dir, &store::environment(lock.as_deref()), &cells);
+    let mut next_hash = hashes.iter().cloned();
+    let mut parts = Vec::new();
+    let mut rest = rendered.as_str();
+    while let Some(start) = rest.find([IMPORT, CELL]) {
+        let (html, marked) = rest.split_at(start);
+        let (marker, after) = marked.split_once('\n').unwrap();
+        parts.push(Part::Html(html.to_string()));
+        parts.push(match marker.strip_prefix(IMPORT) {
+            Some(import) => Part::Import(PathBuf::from(import)),
+            None => Part::Cell(next_hash.next().unwrap()),
+        });
+        rest = after;
+    }
+    parts.push(Part::Html(rest.to_string()));
+    File {
+        parts,
+        cells,
+        hashes,
+        lock,
+        page: PageSettings {
+            aspect_ratio: frontmatter.aspect_ratio(path),
+            figures: frontmatter.figures(path),
+            theme: frontmatter.theme,
+        },
+        steps: frontmatter.steps,
+    }
+}
+
+/// Opens a comment that `html_of` marks where in the markdown what follows
+/// it is with, as `<!--@120-->`, by its byte offset, and a newline, for the
+/// html to go on as it would without it, rather than add one before a block.
+const AT: &str = "<!--@";
+
+/// The html of a file's markdown in `dir`, in `<section>`s, with its imports
+/// and its code cells marked with `IMPORT` and `CELL`, its frontmatter, and
+/// the code of its cells, in order. With `at`, each block, piece of raw html,
+/// math and rule comes after a comment with where it is in the markdown.
+fn html_of(markdown: &str, dir: &Path, at: bool) -> (String, String, Vec<String>) {
     let mut metadata = false;
     let mut frontmatter = String::new();
     let mut code: Option<String> = None;
@@ -75,7 +119,33 @@ pub fn render(markdown: &str, path: &Path) -> File {
     // The events are consumed by the time the cells are needed again.
     let cell_codes = &mut cells;
     let yaml = &mut frontmatter;
-    let events = parse(markdown).filter_map(move |(event, range)| match event {
+    let events = parse(markdown).flat_map(|(event, range)| {
+        let marked = at
+            && matches!(
+                event,
+                Event::Start(
+                    Tag::Paragraph
+                        | Tag::Heading { .. }
+                        | Tag::BlockQuote(_)
+                        | Tag::CodeBlock(_)
+                        | Tag::HtmlBlock
+                        | Tag::List(_)
+                        | Tag::Item
+                        | Tag::Table(_)
+                ) | Event::InlineHtml(_)
+                    | Event::InlineMath(_)
+                    | Event::DisplayMath(_)
+                    | Event::Rule
+            );
+        let marker = marked.then(|| {
+            (
+                Event::Html(format!("{AT}{}-->\n", range.start).into()),
+                range.clone(),
+            )
+        });
+        marker.into_iter().chain(std::iter::once((event, range)))
+    });
+    let events = events.filter_map(move |(event, range)| match event {
         // The frontmatter is metadata, not content.
         Event::Start(Tag::MetadataBlock(_)) => {
             metadata = true;
@@ -126,9 +196,7 @@ pub fn render(markdown: &str, path: &Path) -> File {
             Some(Event::Html(html.into()))
         }
         // Every other rule delimits two slides.
-        Event::Rule => {
-            Some(Event::Html("</section>\n<section>\n".into()))
-        }
+        Event::Rule => Some(Event::Html("</section>\n<section>\n".into())),
         Event::InlineMath(tex) => Some(Event::InlineMath(math::number(&tex).into())),
         Event::DisplayMath(tex) => Some(Event::DisplayMath(math::number(&tex).into())),
         event => Some(event),
@@ -137,38 +205,94 @@ pub fn render(markdown: &str, path: &Path) -> File {
     let mut rendered = String::from("<section>\n");
     html::push_html(&mut rendered, events);
     rendered.push_str("</section>\n");
+    (rendered, frontmatter, cells)
+}
 
-    // Split at the markers, so every file is cached apart from the ones it
-    // imports, and apart from the outputs of its cells, which may come later.
-    let frontmatter = Frontmatter::parse(&frontmatter, path);
-    let lock = store::lock_file(dir);
-    let hashes = store::hashes(dir, &store::environment(lock.as_deref()), &cells);
-    let mut next_hash = hashes.iter().cloned();
-    let mut parts = Vec::new();
-    let mut rest = rendered.as_str();
-    while let Some(start) = rest.find([IMPORT, CELL]) {
-        let (html, marked) = rest.split_at(start);
-        let (marker, after) = marked.split_once('\n').unwrap();
-        parts.push(Part::Html(html.to_string()));
-        parts.push(match marker.strip_prefix(IMPORT) {
-            Some(import) => Part::Import(PathBuf::from(import)),
-            None => Part::Cell(next_hash.next().unwrap()),
-        });
-        rest = after;
+/// A slide of a file, as the deck numbers its steps, by line, counted from
+/// zero.
+#[derive(Debug, PartialEq)]
+pub struct SlideSteps {
+    /// The line its `<section>` opens at: the first of the file, or the one
+    /// after the rule or the import before it.
+    pub line: usize,
+    /// How many steps it has.
+    pub count: u32,
+    /// What steps in it, in order, but what shows from the start all along.
+    pub steps: Vec<LineStep>,
+}
+
+/// What steps in a slide, by the line it begins at, and the steps it shows
+/// in, from `from` up to `to`, excluded.
+#[derive(Debug, PartialEq)]
+pub struct LineStep {
+    pub line: usize,
+    pub from: u32,
+    pub to: Option<u32>,
+    pub collapse: bool,
+}
+
+/// The steps of a file's slides, numbered as the deck numbers them, for an
+/// editor to show where they are. A code cell is a step, as its outputs are
+/// when it has one, and the frontmatter's `steps` is the file's own, as it is
+/// when the file is the deck rather than imported.
+pub fn steps(markdown: &str) -> Vec<SlideSteps> {
+    let (html, frontmatter, _) = html_of(markdown, Path::new(""), true);
+    let mut html = html.replace(&format!("{CELL}\n"), "<div></div>\n");
+    while let Some(start) = html.find(IMPORT) {
+        let end = html[start..]
+            .find('\n')
+            .map_or(html.len(), |end| start + end + 1);
+        html.replace_range(start..end, "");
     }
-    parts.push(Part::Html(rest.to_string()));
-    File {
-        parts,
-        cells,
-        hashes,
-        lock,
-        page: PageSettings {
-            aspect_ratio: frontmatter.aspect_ratio(path),
-            figures: frontmatter.figures(path),
-            theme: frontmatter.theme,
-        },
-        steps: frontmatter.steps,
+    if Frontmatter::parse(&frontmatter, Path::new("slides.md")).steps == Some(false) {
+        html = html.replace(SECTION, NO_STEPS);
     }
+
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(markdown.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let line_of = |offset: usize| starts.partition_point(|&start| start <= offset) - 1;
+    // Where each comment ends in the html, and the line it marks.
+    let marks: Vec<(usize, usize)> = html
+        .match_indices(AT)
+        .filter_map(|(start, _)| {
+            let rest = &html[start + AT.len()..];
+            let digits = rest.find("-->")?;
+            let offset: usize = rest[..digits].parse().ok()?;
+            Some((start + AT.len() + digits + 4, line_of(offset)))
+        })
+        .collect();
+    // The line of what is at `at` in the html: that of the comment before it,
+    // and as many more as the lines between them, which the html keeps from
+    // the markdown, as soft breaks and raw html do.
+    let line = |at: usize| {
+        let mark = marks.partition_point(|&(end, _)| end <= at);
+        let (from, line) = mark.checked_sub(1).map_or((0, 0), |mark| marks[mark]);
+        line + html[from..at].matches('\n').count()
+    };
+    step::slides(&html)
+        .into_iter()
+        .map(|slide| SlideSteps {
+            line: line(slide.at),
+            count: slide.count,
+            steps: slide
+                .steps
+                .into_iter()
+                .map(|stepped| LineStep {
+                    line: line(stepped.at),
+                    from: stepped.from,
+                    to: stepped.to,
+                    collapse: stepped.collapse,
+                })
+                // A list shows along with its first item, on its line.
+                .fold(Vec::new(), |mut steps: Vec<LineStep>, step| {
+                    if steps.last() != Some(&step) {
+                        steps.push(step);
+                    }
+                    steps
+                }),
+        })
+        .collect()
 }
 
 /// A code cell as written in the markdown.
@@ -345,6 +469,18 @@ pub struct Breaks {
     pub rules: Vec<usize>,
     /// The lines of the imports.
     pub imports: Vec<usize>,
+    /// The headings of the slides, which slides.js makes columns of, rather
+    /// than those in a list or a quote.
+    pub headings: Vec<Heading>,
+}
+
+/// A heading of a slide, by its first and last lines, two for one
+/// underlined, and its level, from 1.
+#[derive(Debug, PartialEq)]
+pub struct Heading {
+    pub line: usize,
+    pub last: usize,
+    pub level: u8,
 }
 
 /// Where the slides of a file's markdown break.
@@ -354,8 +490,23 @@ pub fn breaks(markdown: &str) -> Breaks {
         .collect();
     let line = |offset: usize| starts.partition_point(|&start| start <= offset) - 1;
     let mut breaks = Breaks::default();
+    // How many lists and quotes the events are in.
+    let mut depth = 0;
     for (event, range) in parse(markdown) {
         match event {
+            Event::Start(Tag::List(_) | Tag::BlockQuote(_) | Tag::FootnoteDefinition(_)) => {
+                depth += 1
+            }
+            Event::End(TagEnd::List(_) | TagEnd::BlockQuote(_) | TagEnd::FootnoteDefinition) => {
+                depth -= 1
+            }
+            Event::Start(Tag::Heading { level, .. }) if depth == 0 => {
+                breaks.headings.push(Heading {
+                    line: line(range.start),
+                    last: line(range.end.saturating_sub(1)),
+                    level: level as u8,
+                })
+            }
             Event::End(TagEnd::MetadataBlock(_)) => {
                 // The block ends with its closing fence, or just after it.
                 breaks.start = line(range.end.saturating_sub(1)) + 1;
@@ -394,16 +545,63 @@ mod tests {
 
     #[test]
     fn slides_break_at_rules_and_imports_but_not_at_what_looks_like_one() {
-        let markdown = "---\ntheme: dark\n---\n# One\n\n---\n\nA heading\n---\n\n```\n---\n```\n\n***\n<import-slide src=\"part.md\" />\n";
+        let markdown = "---\ntheme: dark\n---\n# One\n\n---\n\nA heading\n---\n\n```\n---\n```\n\n***\n<import-slide src=\"part.md\" />\n\n> # quoted\n";
+        let heading = |line, last, level| Heading { line, last, level };
         assert_eq!(
             breaks(markdown),
             Breaks {
                 start: 3,
                 rules: vec![5, 14],
                 imports: vec![15],
+                headings: vec![heading(3, 3, 1), heading(7, 8, 2)],
             }
         );
         assert_eq!(breaks("# One\n").start, 0);
+    }
+
+    /// Each slide's line and count, and each step, as `line from..to`.
+    fn lines(markdown: &str) -> Vec<String> {
+        steps(markdown)
+            .into_iter()
+            .flat_map(|slide| {
+                let steps = slide.steps.into_iter().map(|step| {
+                    let to = step.to.map_or(String::new(), |to| to.to_string());
+                    format!("{} {}..{to}", step.line, step.from)
+                });
+                std::iter::once(format!("slide {} count {}", slide.line, slide.count)).chain(steps)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_steps_are_found_by_the_line_they_are_written_on() {
+        let markdown = "---\ntheme: dark\n---\n# One\n\ntext\n\n- a\n- b\n\n---\n\n# Two { steps=parallel }\n\n### L\n\n- x\n\n### R\n\n<p step=\"..3\"\n  collapse>y</p>\n\n$$\na \\step{b}\n$$\n";
+        assert_eq!(
+            lines(markdown),
+            [
+                "slide 0 count 4",
+                "5 2..",
+                "7 3..",
+                "8 4..",
+                // The columns' headings show with the title, and a range of
+                // a column counts from its heading, 0.
+                "slide 11 count 4",
+                "16 2..",
+                "20 1..4",
+                "23 2..",
+                "24 3..",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_code_cell_is_a_step_and_an_import_ends_the_slide() {
+        let markdown =
+            "# One\n\n~~~python\nx = 1\n~~~\n\n<import-slide src=\"part.md\" />\n\ntext\n";
+        assert_eq!(
+            lines(markdown),
+            ["slide 0 count 2", "2 2..", "slide 7 count 1"]
+        );
     }
 
     fn theme(yaml: &str) -> Option<String> {

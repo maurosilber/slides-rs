@@ -1,12 +1,14 @@
 // The slides of a deck's markdown in the text editor: where each one begins, marked on
 // the rule or the import that breaks it from the one before, every other slide shaded,
-// and buttons under the break, or under the frontmatter for the first, to move it, with
-// all its markdown, before another one, or to add one before or after it. Where
-// they break is the deck's own reading of the markdown, which the module answers.
+// its headings by their level, its columns, the step each part shows in, and buttons
+// under the break, or under the frontmatter for the first, to move it, with all its
+// markdown, before another one, or to add one before or after it. Where they break,
+// and how they step, is the deck's own reading of the markdown, which the module
+// answers. The `slides.editor` settings turn each of the marks off.
 
 import * as vscode from 'vscode';
 import { Decks, SELECTOR } from './decks';
-import { Breaks, Module } from './wasm';
+import { Breaks, Module, SlideSteps } from './wasm';
 
 /** How long to wait, after an edit, before marking the slides again. */
 const DELAY = 150;
@@ -28,7 +30,30 @@ interface Layout {
 	breaks: Breaks;
 	/** The slides that are not empty, which are the ones the deck shows. */
 	slides: Slide[];
+	/** The steps of each slide, unless they are not shown. */
+	steps?: SlideSteps[];
 }
+
+/** Which of the marks the `slides.editor` settings show. */
+interface Shown {
+	alternateSlides: boolean;
+	headings: boolean;
+	columns: boolean;
+	steps: boolean;
+}
+
+function shown(document: vscode.TextDocument): Shown {
+	const settings = vscode.workspace.getConfiguration('slides.editor', document);
+	return {
+		alternateSlides: settings.get('alternateSlides', true),
+		headings: settings.get('headings', true),
+		columns: settings.get('columns', true),
+		steps: settings.get('steps', true),
+	};
+}
+
+/** The level of the headings that start the columns, as slides.js boxes them. */
+const COLUMN = 3;
 
 export class SlideEditor implements vscode.Disposable {
 	/** The layout of the last version asked for of each document, by uri. */
@@ -53,6 +78,28 @@ export class SlideEditor implements vscode.Disposable {
 		isWholeLine: true,
 		backgroundColor: new vscode.ThemeColor('slides.alternateSlide'),
 	});
+	/** The title, the subtitles and the columns' headings, each its own way. */
+	private readonly headings = (['slides.title', 'slides.subtitle', 'slides.columnHeading'] as const).map((color) =>
+		vscode.window.createTextEditorDecorationType({
+			isWholeLine: true,
+			backgroundColor: new vscode.ThemeColor(color),
+			fontWeight: 'bold',
+		}));
+	/** Every column, by a line down its left, of two colors for two side by side. */
+	private readonly columns = (['slides.column', 'slides.alternateColumn'] as const).map((color) =>
+		vscode.window.createTextEditorDecorationType({
+			isWholeLine: true,
+			borderColor: new vscode.ThemeColor(color),
+			borderStyle: 'solid',
+			borderWidth: '0 0 0 3px',
+		}));
+	/** The steps what is on a line shows in, written after it. */
+	private readonly steps = vscode.window.createTextEditorDecorationType({
+		after: {
+			color: new vscode.ThemeColor('slides.step'),
+			margin: '0 0 0 2em',
+		},
+	});
 
 	constructor(
 		private readonly module: Module,
@@ -62,6 +109,9 @@ export class SlideEditor implements vscode.Disposable {
 		this.disposables.push(
 			this.decoration,
 			this.shade,
+			...this.headings,
+			...this.columns,
+			this.steps,
 			this.lensesChanged,
 			vscode.languages.registerCodeLensProvider(SELECTOR, {
 				onDidChangeCodeLenses: this.lensesChanged.event,
@@ -80,12 +130,22 @@ export class SlideEditor implements vscode.Disposable {
 			vscode.window.onDidChangeVisibleTextEditors((editors) => editors.forEach((editor) => void this.decorate(editor))),
 			vscode.workspace.onDidChangeTextDocument(({ document }) => this.later(document)),
 			vscode.workspace.onDidCloseTextDocument((document) => this.layouts.delete(document.uri.toString())),
-			this.decks.onDidChange(() => {
-				vscode.window.visibleTextEditors.forEach((editor) => void this.decorate(editor));
-				this.lensesChanged.fire();
+			this.decks.onDidChange(() => this.refresh()),
+			vscode.workspace.onDidChangeConfiguration((event) => {
+				if (event.affectsConfiguration('slides.editor')) {
+					// The steps are found only while they are shown.
+					this.layouts.clear();
+					this.refresh();
+				}
 			}),
 		);
 		vscode.window.visibleTextEditors.forEach((editor) => void this.decorate(editor));
+	}
+
+	/** Marks the slides of every editor again, and their buttons. */
+	private refresh() {
+		vscode.window.visibleTextEditors.forEach((editor) => void this.decorate(editor));
+		this.lensesChanged.fire();
 	}
 
 	/** The slides of the document as it is now. */
@@ -102,7 +162,10 @@ export class SlideEditor implements vscode.Disposable {
 	private compute(document: vscode.TextDocument): Promise<Layout> {
 		const version = document.version;
 		const text = document.getText();
-		const layout = this.module.slides(text).then((breaks) => ({ version, breaks, slides: slidesOf(text.split(/\r?\n/), breaks) }));
+		const layout = Promise.all([
+			this.module.slides(text),
+			shown(document).steps ? this.module.steps(text) : undefined,
+		]).then(([breaks, steps]) => ({ version, breaks, slides: slidesOf(text.split(/\r?\n/), breaks), steps }));
 		this.layouts.set(document.uri.toString(), layout);
 		layout.catch((error) => {
 			this.log.error(`${vscode.workspace.asRelativePath(document.uri)}: could not find its slides: ${error}`);
@@ -126,9 +189,9 @@ export class SlideEditor implements vscode.Disposable {
 	/** Marks where each slide of the editor's document begins. */
 	private async decorate(editor: vscode.TextEditor) {
 		const document = editor.document;
+		const types = [this.decoration, this.shade, ...this.headings, ...this.columns, this.steps];
 		if (!this.decks.isDeck(document)) {
-			editor.setDecorations(this.decoration, []);
-			editor.setDecorations(this.shade, []);
+			types.forEach((type) => editor.setDecorations(type, []));
 			return;
 		}
 		let layout: Layout;
@@ -150,9 +213,19 @@ export class SlideEditor implements vscode.Disposable {
 		});
 		const imports = layout.breaks.imports.map((line) => mark(line, 'its slides, imported'));
 		editor.setDecorations(this.decoration, [...rules, ...imports]);
-		editor.setDecorations(this.shade, layout.slides
-			.filter((_, i) => i % 2 === 1)
-			.map((slide) => new vscode.Range(slide.start, 0, slide.end, 0)));
+		const show = shown(document);
+		editor.setDecorations(this.shade, show.alternateSlides
+			? layout.slides.filter((_, i) => i % 2 === 1).map((slide) => new vscode.Range(slide.start, 0, slide.end, 0))
+			: []);
+		const headings = show.headings ? layout.breaks.headings : [];
+		this.headings.forEach((type, i) => editor.setDecorations(type, headings
+			.filter((heading) => heading.level === i + 1)
+			.map((heading) => new vscode.Range(heading.line, 0, heading.last, 0))));
+		const columns = show.columns ? columnsOf(document, layout) : [];
+		this.columns.forEach((type, i) => editor.setDecorations(type, columns
+			.filter((column) => column.index % 2 === i)
+			.map((column) => column.range)));
+		editor.setDecorations(this.steps, show.steps && layout.steps ? stepMarks(layout.steps) : []);
 	}
 
 	/** Buttons at the top of each slide, under its break, to move it or to add one before
@@ -161,13 +234,18 @@ export class SlideEditor implements vscode.Disposable {
 		if (!this.decks.isDeck(document)) {
 			return [];
 		}
-		const { slides } = await this.layout(document);
+		const layout = await this.layout(document);
+		const { slides } = layout;
+		const counts = layout.steps ? countsOf(layout) : [];
 		const uri = document.uri;
 		return slides.flatMap((slide, i) => {
 			const range = new vscode.Range(slide.start, 0, slide.start, 0);
 			const lens = (title: string, command: string, tooltip: string) =>
 				new vscode.CodeLens(range, { title, command, tooltip, arguments: [uri, i] });
+			const count = counts[i];
 			return [
+				// Only to read, as a lens with no command is.
+				...(count === undefined ? [] : [lens(`${count} ${count === 1 ? 'step' : 'steps'}`, '', 'How many steps the slide shows in')]),
 				...(i > 0 ? [lens('$(arrow-up) Move up', 'slides.moveSlideUp', 'Move this slide before the one above it')] : []),
 				...(i < slides.length - 1 ? [lens('$(arrow-down) Move down', 'slides.moveSlideDown', 'Move this slide after the one below it')] : []),
 				...(slides.length > 1 ? [lens('$(list-ordered) Move to…', 'slides.moveSlideTo', 'Move this slide before another one')] : []),
@@ -279,6 +357,65 @@ export class SlideEditor implements vscode.Disposable {
 		this.timers.forEach((timer) => clearTimeout(timer));
 		this.disposables.forEach((disposable) => disposable.dispose());
 	}
+}
+
+/** A column of a slide, from its heading to the last line before the next heading of its
+ * level or above, and which of the columns side by side it is, from 0. */
+interface Column {
+	range: vscode.Range;
+	index: number;
+}
+
+/** The columns of the slides, as slides.js boxes them: from each heading of their level
+ * up to the next one, or to one above it, which ends the row, as the slide's end does. */
+function columnsOf(document: vscode.TextDocument, layout: Layout): Column[] {
+	const columns: Column[] = [];
+	for (const slide of layout.slides) {
+		// A heading under the columns' level is in one, rather than its end.
+		const headings = layout.breaks.headings.filter((heading) =>
+			heading.level <= COLUMN && slide.first <= heading.line && heading.line <= slide.last);
+		let index = 0;
+		headings.forEach((heading, i) => {
+			if (heading.level !== COLUMN) {
+				index = 0;
+				return;
+			}
+			let last = (headings[i + 1]?.line ?? slide.last + 1) - 1;
+			while (last > heading.last && document.lineAt(last).isEmptyOrWhitespace) last--;
+			columns.push({ range: new vscode.Range(heading.line, 0, last, 0), index: index++ });
+		});
+	}
+	return columns;
+}
+
+/** The steps written after each line that steps: `3` from the third step on, `2..4` from
+ * the second up to the fourth, excluded, as a range of the deck is written, and with a
+ * `*` if it takes no space while hidden. */
+function stepMarks(slides: SlideSteps[]): vscode.DecorationOptions[] {
+	const lines = new Map<number, string[]>();
+	for (const { line, from, to, collapse } of slides.flatMap((slide) => slide.steps)) {
+		const text = `${to === null ? from : `${from}..${to}`}${collapse ? '*' : ''}`;
+		lines.set(line, [...(lines.get(line) ?? []), text]);
+	}
+	return [...lines].map(([line, steps]) => ({
+		range: new vscode.Range(line, 0, line, 0),
+		renderOptions: { after: { contentText: `${steps.length === 1 ? 'step' : 'steps'} ${steps.join(' · ')}` } },
+	}));
+}
+
+/** How many steps each slide has, by its index, as the deck numbers them. The module's
+ * slides open after each break, those of the first at the file's start, and an empty one
+ * is none of the editor's. */
+function countsOf(layout: Layout): (number | undefined)[] {
+	const counts: (number | undefined)[] = layout.slides.map(() => undefined);
+	for (const { line, count } of layout.steps ?? []) {
+		const at = Math.max(line, layout.breaks.start);
+		const index = layout.slides.findIndex((slide) => slide.start <= at && at <= slide.end);
+		if (index >= 0) {
+			counts[index] ??= count;
+		}
+	}
+	return counts;
 }
 
 /** The slides between the breaks that are not empty, as the deck leaves the others out. */

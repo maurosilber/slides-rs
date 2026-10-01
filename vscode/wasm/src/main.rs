@@ -18,6 +18,8 @@ enum Request {
     Markdown { cells: Vec<notebook::Cell> },
     /// Where the slides of a markdown file break.
     Slides { markdown: String },
+    /// The steps of the slides of a markdown file, by line.
+    Steps { markdown: String },
     /// The saved outputs of each code cell of a file.
     Load {
         place: outputs::Place,
@@ -40,7 +42,35 @@ fn respond(request: Request) -> Result<serde_json::Value> {
                 "start": breaks.start,
                 "rules": breaks.rules,
                 "imports": breaks.imports,
+                "headings": breaks.headings.iter().map(|heading| serde_json::json!({
+                    "line": heading.line,
+                    "last": heading.last,
+                    "level": heading.level,
+                })).collect::<Vec<_>>(),
             })
+        }
+        Request::Steps { markdown } => {
+            let slides = slides::markdown::steps(&markdown);
+            serde_json::Value::Array(
+                slides
+                    .into_iter()
+                    .map(|slide| {
+                        let steps: Vec<_> = slide
+                            .steps
+                            .into_iter()
+                            .map(|step| {
+                                serde_json::json!({
+                                    "line": step.line,
+                                    "from": step.from,
+                                    "to": step.to,
+                                    "collapse": step.collapse,
+                                })
+                            })
+                            .collect();
+                        serde_json::json!({ "line": slide.line, "count": slide.count, "steps": steps })
+                    })
+                    .collect(),
+            )
         }
         Request::Load { place, sources } => serde_json::to_value(outputs::load(&place, &sources))?,
         Request::Save { place, cells } => serde_json::to_value(outputs::save(&place, &cells)?)?,

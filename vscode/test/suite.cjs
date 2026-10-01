@@ -77,13 +77,23 @@ const tests = {
 			return lenses.map((lens) => `${lens.range.start.line} ${lens.command.title}`);
 		};
 		await until(async () => (await lenses()).length > 0);
-		// Under the frontmatter for the first, and under the rule for the others.
+		// Under the frontmatter for the first, and under the rule for the others, after
+		// how many steps the slide has: its title, and the paragraph after it.
 		const add = (line) => [`${line} $(add) New slide above`, `${line} $(add) New slide below`];
-		assert.deepStrictEqual(await lenses(), [
+		const buttons = [
 			'3 $(arrow-down) Move down', '3 $(list-ordered) Move to…', ...add(3),
 			'8 $(arrow-up) Move up', '8 $(arrow-down) Move down', '8 $(list-ordered) Move to…', ...add(8),
 			'12 $(arrow-up) Move up', '12 $(list-ordered) Move to…', ...add(12),
+		];
+		assert.deepStrictEqual(await lenses(), [
+			'3 2 steps', ...buttons.slice(0, 4), '8 1 step', ...buttons.slice(4, 9), '12 1 step', ...buttons.slice(9),
 		]);
+		// Without the steps, there are only the buttons.
+		const editorSettings = vscode.workspace.getConfiguration('slides.editor');
+		await editorSettings.update('steps', false, vscode.ConfigurationTarget.Global);
+		await until(async () => (await lenses()).length === buttons.length);
+		assert.deepStrictEqual(await lenses(), buttons);
+		await editorSettings.update('steps', undefined, vscode.ConfigurationTarget.Global);
 		// The rules stay where they are, and the slides move around them.
 		await vscode.commands.executeCommand('slides.moveSlideDown', document.uri, 0);
 		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# One\n\nfirst\n\n***\n\n# Three\n`);
