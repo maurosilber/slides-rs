@@ -30,6 +30,14 @@
 //! line up with the other columns', and the steps after it go on as if it
 //! were not there.
 //!
+//! A step can be named, by the `label` of the element that shows in it, or
+//! by `step="a"`, which marks the next step, as `\step[a]{...}` does in
+//! math, and shown from or hidden at a number of steps from it, wherever in
+//! the slide it is, with `@a`, `@a+1` or `@a-1` as a bound of a range. These
+//! steps do not count as the latest, nor as the steps a range is numbered
+//! among: they show where the name says, once the whole slide is numbered.
+//! A name that names no step shows what is marked from it all along.
+//!
 //! Each element that steps is given the class `step`, and `step-collapse` if
 //! it takes no space while hidden, with the steps it shows in as
 //! `--from` and `--to`, excluded, in its style; each slide is given how many
@@ -39,7 +47,7 @@
 use std::collections::HashMap;
 use std::ops::Range as Span;
 
-use super::{Mark, Range, Step};
+use super::{Bound, Mark, Range, Step};
 
 /// The html with the steps of every `<section>` numbered.
 pub fn number(html: &str) -> String {
@@ -159,11 +167,37 @@ fn apply(html: &str, mut edits: Vec<Edit>) -> String {
 }
 
 /// What an element or a step of math is shown in, numbered.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Shown {
-    from: u32,
-    to: Option<u32>,
+    from: At,
+    to: Option<At>,
     collapse: bool,
+}
+
+/// A step an element shows from or hides at: a number, or a number of steps
+/// from a named one, which is found once the whole slide is numbered.
+#[derive(Clone, Debug, PartialEq)]
+enum At {
+    Step(u32),
+    Label(String, i32),
+}
+
+impl At {
+    /// The step numbered otherwise, as `f` says, if it is a number.
+    fn map(self, f: impl Fn(u32) -> u32) -> At {
+        match self {
+            At::Step(step) => At::Step(f(step)),
+            label => label,
+        }
+    }
+
+    /// The bound, numbered as `f` says, if it is a number.
+    fn of(bound: Bound, f: impl Fn(u32) -> u32) -> At {
+        match bound {
+            Bound::Step(step) => At::Step(f(step)),
+            Bound::Label { name, offset } => At::Label(name, offset),
+        }
+    }
 }
 
 /// What steps: an element, by its index, or a step of math, by where it is.
@@ -301,32 +335,85 @@ fn number_slide(
     edits: &mut Vec<Edit>,
 ) -> u32 {
     let items = items(html, elements, children, steps);
-    let (shown, count) = number_items(html, elements, &items, false);
-    // The slide counts from the step it opens with, 1.
-    let shown = shown.into_iter().map(|(target, shown)| {
+    let mut labels = Vec::new();
+    let (shown, count) = number_items(html, elements, &items, false, &mut labels);
+    let mut targets: HashMap<Target, Shown> = HashMap::new();
+    for (target, shown) in shown {
+        // The slide counts from the step it opens with, 1.
         let shown = Shown {
-            from: shown.from + 1,
-            to: shown.to.map(|to| to + 1),
+            from: shown.from.map(|from| from + 1),
+            to: shown.to.map(|to| to.map(|to| to + 1)),
             ..shown
         };
-        (target, shown)
-    });
-    let mut targets: HashMap<Target, Shown> = HashMap::new();
-    for (target, steps) in shown {
-        targets.insert(target, steps);
+        targets.insert(target, shown);
     }
-    for (target, shown) in targets {
+
+    // The steps named by a `label`, as well as by a step's name. The first
+    // to name one wins.
+    if let (Some(&first), Some(&last)) = (children.first(), children.last()) {
+        let slide = elements.iter().enumerate().take(elements[last].end);
+        for (index, element) in slide.skip(first) {
+            if let Some(name) = element.attribute(html, "label") {
+                labels.push((name.to_string(), Target::Element(index)));
+            }
+        }
+    }
+    let mut named: HashMap<String, Target> = HashMap::new();
+    for (name, target) in labels {
+        named.entry(name).or_insert(target);
+    }
+    // A step from a name, as the step it names says, or none if it names
+    // none, or one named from itself.
+    fn resolve(
+        at: &At,
+        named: &HashMap<String, Target>,
+        targets: &HashMap<Target, Shown>,
+        depth: usize,
+    ) -> Option<u32> {
+        match at {
+            &At::Step(step) => Some(step),
+            At::Label(name, offset) => {
+                let target = named.get(name)?;
+                let step = match targets.get(target) {
+                    Some(shown) if depth < named.len() => {
+                        resolve(&shown.from, named, targets, depth + 1)?
+                    }
+                    Some(_) => return None,
+                    // Unmarked, it shows from the start.
+                    None => 1,
+                };
+                Some(step.saturating_add_signed(*offset).max(1))
+            }
+        }
+    }
+    let resolved: Vec<(Target, u32, Option<u32>, bool)> = targets
+        .iter()
+        .map(|(target, shown)| {
+            let from = resolve(&shown.from, &named, &targets, 0).unwrap_or(1);
+            let to = shown
+                .to
+                .as_ref()
+                .and_then(|to| resolve(to, &named, &targets, 0));
+            (target.clone(), from, to, shown.collapse)
+        })
+        .collect();
+    let count = resolved
+        .iter()
+        .map(|&(_, from, _, _)| from)
+        .fold(count + 1, u32::max);
+
+    for (target, from, to, collapse) in resolved {
         // What shows from the start, all along, needs no step.
-        if shown.from == 1 && shown.to.is_none() {
+        if from == 1 && to.is_none() {
             continue;
         }
-        let classes = if shown.collapse {
+        let classes = if collapse {
             "step step-collapse"
         } else {
             "step"
         };
-        let mut vars = format!("--from:{}", shown.from);
-        if let Some(to) = shown.to {
+        let mut vars = format!("--from:{from}");
+        if let Some(to) = to {
             vars.push_str(&format!(";--to:{to}"));
         }
         match target {
@@ -343,7 +430,7 @@ fn number_slide(
             }
         }
     }
-    count + 1
+    count
 }
 
 /// Numbers the steps of `items`, from 0, the step they open with, and returns
@@ -356,6 +443,7 @@ fn number_items(
     elements: &[Element],
     items: &[Item],
     column: bool,
+    labels: &mut Vec<(String, Target)>,
 ) -> (Vec<(Target, Shown)>, u32) {
     // The elements of each step, and the columns that open along with it.
     // The first is the first element, and what joins it.
@@ -414,33 +502,26 @@ fn number_items(
         if column {
             own = if i == 0 { 0 } else { cursor + 1 };
             let latest;
-            (parts, latest) = ranges(&marks, if list { own - 1 } else { own }, false);
+            (parts, latest) = ranges(&marks, if list { own - 1 } else { own }, false, labels);
             cursor = latest.max(own);
-            let bounds = parts
-                .iter()
-                .flat_map(|(_, range, _)| [range.start, range.end])
-                .flatten();
-            count = bounds.fold(count.max(cursor), u32::max);
+            count = steps_of(&parts).fold(count.max(cursor), u32::max);
             // Before its marks, which win over it.
             for &(child, _) in &group.elements {
                 let own = Shown {
-                    from: own,
+                    from: At::Step(own),
                     to: None,
                     collapse: false,
                 };
                 shown.push((Target::Element(child), own));
             }
             for (target, range, collapse) in parts {
-                let from = range.start.unwrap_or(own);
-                shown.push((target, Shown { from, to: range.end, collapse }));
+                let from = range.start.map_or(At::Step(own), |start| At::of(start, |step| step));
+                let to = range.end.map(|end| At::of(end, |step| step));
+                shown.push((target, Shown { from, to, collapse }));
             }
         } else {
-            (parts, _) = ranges(&marks, 0, true);
-            let mut bounds: Vec<u32> = parts
-                .iter()
-                .flat_map(|(_, range, _)| [range.start, range.end])
-                .flatten()
-                .collect();
+            (parts, _) = ranges(&marks, 0, true, labels);
+            let mut bounds: Vec<u32> = steps_of(&parts).collect();
             bounds.sort_unstable();
             bounds.dedup();
             own = if i == 0 {
@@ -454,7 +535,7 @@ fn number_items(
             // Before its marks, which win over it.
             for &(child, _) in &group.elements {
                 let own = Shown {
-                    from: own,
+                    from: At::Step(own),
                     to: None,
                     collapse: false,
                 };
@@ -462,19 +543,19 @@ fn number_items(
             }
             let step = |bound: u32| count + 1 + bounds.binary_search(&bound).unwrap() as u32;
             for (target, range, collapse) in parts {
-                let from = range.start.map_or(own, step);
-                let to = range.end.map(step);
+                let from = range.start.map_or(At::Step(own), |start| At::of(start, step));
+                let to = range.end.map(|end| At::of(end, step));
                 shown.push((target, Shown { from, to, collapse }));
             }
             count += bounds.len() as u32;
         }
         for &(mode, columns) in &group.columns {
-            let (merged, length) = merge(html, elements, mode, columns);
+            let (merged, length) = merge(html, elements, mode, columns, labels);
             // The columns open with the step they join, and step after it.
             let at = |step: u32| if step == 0 { own } else { count + step };
             for (target, merged) in merged {
-                let from = at(merged.from);
-                let to = merged.to.map(at);
+                let from = merged.from.map(at);
+                let to = merged.to.map(|to| to.map(at));
                 shown.push((target, Shown { from, to, ..merged }));
             }
             count += length;
@@ -483,30 +564,48 @@ fn number_items(
     (shown, count)
 }
 
+/// The numbers that the bounds of `parts` are, rather than names.
+fn steps_of(parts: &[(Target, Range, bool)]) -> impl Iterator<Item = u32> + '_ {
+    parts
+        .iter()
+        .flat_map(|(_, range, _)| [&range.start, &range.end])
+        .filter_map(|bound| match bound {
+            Some(Bound::Step(step)) => Some(*step),
+            _ => None,
+        })
+}
+
 /// The ranges of `marks`, after the step `latest`: one with none comes one
 /// after the latest one so far, and an `also` along with it, and the latest.
 /// Where a range's start is not one of the steps, as in a column, it does not
-/// count as the latest.
+/// count as the latest, nor does one from a name. A step with a name is
+/// added to `labels`.
 fn ranges(
     marks: &[(Target, Mark)],
     mut latest: u32,
     ranges_count: bool,
+    labels: &mut Vec<(String, Target)>,
 ) -> (Vec<(Target, Range, bool)>, u32) {
     let start = latest;
     let mut ranges = Vec::new();
     for (target, mark) in marks {
-        let range = match mark.step {
-            Step::Range(range) => range,
-            Step::Next => Range {
-                start: Some(latest + 1),
-                end: None,
-            },
+        let next = Range {
+            start: Some(Bound::Step(latest + 1)),
+            end: None,
+        };
+        let range = match &mark.step {
+            Step::Range(range) => range.clone(),
+            Step::Next => next,
+            Step::Named(name) => {
+                labels.push((name.clone(), target.clone()));
+                next
+            }
             Step::Also => Range {
-                start: Some(latest.max(start + 1)),
+                start: Some(Bound::Step(latest.max(start + 1))),
                 end: None,
             },
         };
-        if let Some(start) = range.start
+        if let Some(Bound::Step(start)) = range.start
             && (ranges_count || !matches!(mark.step, Step::Range(_)))
         {
             latest = latest.max(start);
@@ -523,10 +622,11 @@ fn merge(
     elements: &[Element],
     mode: Mode,
     columns: &[Vec<Item>],
+    labels: &mut Vec<(String, Target)>,
 ) -> (Vec<(Target, Shown)>, u32) {
     let numbered: Vec<_> = columns
         .iter()
-        .map(|column| number_items(html, elements, column, true))
+        .map(|column| number_items(html, elements, column, true, labels))
         .collect();
     let lengths: Vec<u32> = numbered.iter().map(|&(_, length)| length).collect();
     // The step that the `step`th of a column is merged at.
@@ -551,8 +651,8 @@ fn merge(
     let mut merged = Vec::new();
     for (column, (shown, _)) in numbered.into_iter().enumerate() {
         for (target, shown) in shown {
-            let from = at(column, shown.from);
-            let to = shown.to.map(|to| at(column, to));
+            let from = shown.from.map(|from| at(column, from));
+            let to = shown.to.map(|to| to.map(|to| at(column, to)));
             merged.push((target, Shown { from, to, ..shown }));
         }
     }
@@ -627,8 +727,8 @@ fn element_mark(html: &str, element: &Element) -> Option<Mark> {
         .or_else(|| element.attribute(html, "data-step"));
     let step = if element.find("also").is_some() {
         Step::Also
-    } else if let Some(range) = range.and_then(Range::parse) {
-        Step::Range(range)
+    } else if let Some(step) = range.and_then(Step::parse) {
+        step
     } else if element.name == "li"
         || element.find("step").is_some()
         || element.find("data-step").is_some()
@@ -660,8 +760,8 @@ fn math_marks(html: &str, text: Span<usize>) -> Vec<(Target, Mark)> {
         let step = match range {
             "next" => Step::Next,
             "also" => Step::Also,
-            range => match Range::parse(range) {
-                Some(range) => Step::Range(range),
+            range => match Step::parse(range) {
+                Some(step) => step,
                 None => continue,
             },
         };
@@ -1109,6 +1209,51 @@ mod tests {
             ]
         );
         assert!(number(html).contains("x \\htmlStyle{--from:3;--to:4}{\\htmlClass{step}{y}}\\htmlStyle{--from:4}{\\htmlClass{step}{z}}"));
+    }
+
+    #[test]
+    fn a_step_can_show_from_a_named_one() {
+        // `b` is the second paragraph's step, as its label says, and `c` the
+        // third's, as its name does.
+        let html = "<section><h1>T</h1><p>a</p><p label=\"b\">b</p><p step=\"@b..@c+1\">x</p><p>c <span step=\"c\">y</span></p><p>d</p><p step=\"@b-1\">z</p></section>";
+        assert_eq!(
+            steps(html),
+            [
+                "count 6",
+                "p --from:2",
+                "p --from:3",
+                "p --from:3;--to:6",
+                "p --from:4",
+                "span --from:5",
+                "p --from:6",
+                "p --from:2",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_syncs_steps_across_columns() {
+        let html = "<section><h1>T</h1><h2 steps=\"parallel\">S</h2><h3>A</h3><ul><li label=\"b\">a</li><li>b</li><li>c</li></ul><h3>B</h3><p step=\"@b+1\">d</p><h2 label=\"next\">N</h2><p step=\"@next+1\">e</p><ul><li>f</li></ul></section>";
+        let numbered = number(html);
+        // `d` shows one after `a`, in the other column, and `@next` is the
+        // h2's step, after the columns.
+        assert!(numbered.contains("<p step=\"@b+1\" class=\"step\" style=\"--from:4\">d</p>"));
+        assert!(numbered.contains("<h2 label=\"next\" class=\"step\" style=\"--from:6\">"));
+        assert!(numbered.contains("<p step=\"@next+1\" class=\"step\" style=\"--from:7\">"));
+        assert!(numbered.contains("<li class=\"step\" style=\"--from:7\">f</li>"));
+        assert!(numbered.starts_with("<section data-count=\"7\">"));
+    }
+
+    #[test]
+    fn a_step_from_a_name_that_names_none_shows_all_along() {
+        let html = "<section><h1>T</h1><p step=\"@x\">a</p><p step=\"..@x\">b</p></section>";
+        assert_eq!(steps(html), ["count 1"]);
+    }
+
+    #[test]
+    fn math_steps_can_be_named() {
+        let html = "<section><h1>T</h1><p><span class=\"math\">\\htmlData{step=s}{a} \\htmlData{step=next}{b}</span></p><p step=\"@s\">c</p></section>";
+        assert_eq!(steps(html), ["count 4", "p --from:2", "p --from:3"]);
     }
 
     #[test]

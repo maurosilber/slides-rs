@@ -9,7 +9,7 @@
 //! side. Starred, as `\step*` or `\also*`, they take no space while hidden,
 //! and are written with a `collapse` too.
 
-use crate::step::Range;
+use crate::step::Step;
 
 /// The TeX, with every `\step` and `\also` written as `\htmlData`.
 pub fn number(tex: &str) -> String {
@@ -35,9 +35,9 @@ pub fn number(tex: &str) -> String {
         }
         let step = match name {
             "step" => match range_argument(after) {
-                Some((range, argument_len)) => {
+                Some((step, argument_len)) => {
                     after = &after[argument_len..];
-                    Some(range.to_string())
+                    step.value()
                 }
                 None => Some("next".to_string()),
             },
@@ -60,12 +60,13 @@ pub fn number(tex: &str) -> String {
     numbered
 }
 
-/// The range in a `[3..5]` that opens `tex`, and how long it is written. One
-/// that is not a range is left for KaTeX to show, which points it out.
-fn range_argument(tex: &str) -> Option<(Range, usize)> {
+/// The range in a `[3..5]`, or the name in an `[a]`, that opens `tex`, and
+/// how long it is written. One that is neither is left for KaTeX to show,
+/// which points it out.
+fn range_argument(tex: &str) -> Option<(Step, usize)> {
     let argument = tex.strip_prefix('[')?;
     let (range, _) = argument.split_once(']')?;
-    Some((Range::parse(range)?, range.len() + 2))
+    Some((Step::parse(range)?, range.len() + 2))
 }
 
 #[cfg(test)]
@@ -81,6 +82,14 @@ mod tests {
     }
 
     #[test]
+    fn a_step_can_be_named_or_from_a_name() {
+        assert_eq!(
+            number(r"\step[a]{x} \step[@a+1..]{y}"),
+            r"\htmlData{step=a}{x} \htmlData{step=@a+1}{y}"
+        );
+    }
+
+    #[test]
     fn a_starred_step_collapses() {
         assert_eq!(
             number(r"\step*[..2]{a} \also*{b} \step*{c}"),
@@ -90,7 +99,7 @@ mod tests {
 
     #[test]
     fn a_range_that_is_not_one_is_left_to_show() {
-        assert_eq!(number(r"\step[x]{a}"), r"\htmlData{step=next}[x]{a}");
+        assert_eq!(number(r"\step[1..x]{a}"), r"\htmlData{step=next}[1..x]{a}");
     }
 
     #[test]

@@ -160,11 +160,8 @@ fn element<'a>(
                 _ => (value.as_ref(), false),
             };
             if let Some(mark) = Mark::parse(value) {
-                let (key, value) = match mark.step {
-                    Step::Range(range) => ("step", range.to_string()),
-                    Step::Next => ("step", String::new()),
-                    Step::Also => ("also", String::new()),
-                };
+                let key = if mark.step == Step::Also { "also" } else { "step" };
+                let value = mark.step.value().unwrap_or_default();
                 rewritten.push_attribute(Attribute {
                     key: QName(key),
                     value: Cow::Owned(value),
@@ -313,7 +310,7 @@ mod tests {
 
     #[test]
     fn ids_nothing_refers_to_are_dropped() {
-        let svg = r#"<svg><g id="line2d_1"/><g id="step=x"/></svg>"#;
+        let svg = r#"<svg><g id="line2d_1"/><g id="step=1..x"/></svg>"#;
         assert_eq!(inline(svg).unwrap(), "<svg><g/><g/></svg>");
     }
 

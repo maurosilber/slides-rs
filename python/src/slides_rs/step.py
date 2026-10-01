@@ -13,6 +13,7 @@ which the deck reads as the step the artist shows in::
 from __future__ import annotations
 
 import dataclasses
+import re
 
 __all__ = ["Step"]
 
@@ -27,6 +28,11 @@ class Step(str):
     shows on every step: ``Step()`` is ``step=..``. ``collapse`` makes it take
     no space while hidden, as ``step*`` does.
 
+    A bound can also be a number of steps from a named one, wherever in the
+    slide it is, as ``"@a"``, ``"@a+1"`` or ``"@a-1"``: ``Step("@a", "@a+2")``
+    is ``step=@a..@a+2``. A step is named by the element it is in, as
+    ``label="a"`` does, or by ``gid="step=a"``.
+
     It is the string itself, as matplotlib escapes a ``gid`` as one::
 
         >>> Step(1, 2)
@@ -37,17 +43,20 @@ class Step(str):
         ('step=..', 'step*=1..3')
     """
 
-    start: int | None = None
-    stop: int | None = None
+    start: int | str | None = None
+    stop: int | str | None = None
     collapse: bool = dataclasses.field(default=False, kw_only=True)
 
     def __new__(
         cls,
-        start: int | None = None,
-        stop: int | None = None,
+        start: int | str | None = None,
+        stop: int | str | None = None,
         *,
         collapse: bool = False,
     ) -> Step:
+        for bound in (start, stop):
+            if isinstance(bound, str) and _LABEL.fullmatch(bound) is None:
+                raise ValueError(f"{bound!r} is not a step from a name, as '@a+1' is")
         name = "step*" if collapse else "step"
         start_ = "" if start is None else start
         stop_ = "" if stop is None else stop
@@ -62,13 +71,14 @@ class Step(str):
         Step(start=5, stop=None, collapse=False)
         >>> Step(stop=3).next()
         Step(start=None, stop=4, collapse=False)
+        >>> Step("@a", "@a+1").next()
+        Step(start='@a+1', stop='@a+2', collapse=False)
         """
         if self.start is None and self.stop is None:
             raise ValueError("Step() shows on every step, which has no steps to move")
-        shift = lambda bound: None if bound is None else bound + n
         return Step(
-            start=shift(self.start),
-            stop=shift(self.stop),
+            start=_shift(self.start, n),
+            stop=_shift(self.stop, n),
             collapse=self.collapse,
         )
 
@@ -79,3 +89,16 @@ class Step(str):
         Step(start=1, stop=2, collapse=False)
         """
         return self.next(-n)
+
+
+# A number of steps from a named one, as src/step.rs reads it.
+_LABEL = re.compile(r"@([A-Za-z_][A-Za-z0-9_]*)(?:([+-])(\d+))?")
+
+
+def _shift(bound: int | str | None, n: int) -> int | str | None:
+    """The bound, ``n`` steps later."""
+    if bound is None or isinstance(bound, int):
+        return None if bound is None else bound + n
+    name, sign, offset = _LABEL.fullmatch(bound).groups()
+    offset = (-1 if sign == "-" else 1) * int(offset or 0) + n
+    return f"@{name}" if offset == 0 else f"@{name}{offset:+d}"

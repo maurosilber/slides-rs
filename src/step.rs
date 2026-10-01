@@ -8,6 +8,12 @@
 //! the highest step any range so far starts at. An `also` before any step is
 //! the first step.
 //!
+//! A step can be named, for others to show along with it, or a number of
+//! steps from it: `step="a"` is the next step, named `a`, as an element's
+//! `label="a"` names the step it shows in, and a bound of a range can be
+//! `@a`, `@a+1` or `@a-1`, the step named `a`, or one after or before it,
+//! wherever in the slide it is, as `@a..@b`.
+//!
 //! Hidden, a step keeps its space, so that what is around it stays in place.
 //! Starred, as `step*` or `also*`, it takes none, so that another can show in
 //! its place.
@@ -19,17 +25,48 @@ mod html;
 pub use html::{number, number_figure, unnumber_figure};
 
 /// How an element marks itself as a step: by the range it shows in, or as
-/// the next step, or along with the latest one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// the next step, or the next step with a name, or along with the latest one.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
     Range(Range),
     Next,
+    Named(String),
     Also,
+}
+
+impl Step {
+    /// What it is written as, after `step=`, if anything: its range, or its
+    /// name.
+    pub fn value(&self) -> Option<String> {
+        match self {
+            Step::Range(range) => Some(range.to_string()),
+            Step::Named(name) => Some(name.clone()),
+            Step::Next | Step::Also => None,
+        }
+    }
+
+    /// The step written after `step=`: a range, or a name.
+    pub fn parse(text: &str) -> Option<Step> {
+        let text = text.trim();
+        if is_name(text) {
+            return Some(Step::Named(text.to_string()));
+        }
+        Range::parse(text).map(Step::Range)
+    }
+}
+
+/// Whether `text` is a name a step can be given: letters, digits and `_`,
+/// not starting with a digit.
+pub fn is_name(text: &str) -> bool {
+    text.starts_with(|char: char| char.is_ascii_alphabetic() || char == '_')
+        && text
+            .chars()
+            .all(|char| char.is_ascii_alphanumeric() || char == '_')
 }
 
 /// A step as an element is marked with, and whether, hidden, it takes no
 /// space.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mark {
     pub step: Step,
     pub collapse: bool,
@@ -52,32 +89,75 @@ impl Mark {
         let step = match (name, range) {
             ("step", None) => Step::Next,
             ("also", None) => Step::Also,
-            ("step", Some(range)) => Step::Range(Range::parse(range)?),
+            ("step", Some(range)) => Step::parse(range)?,
             _ => return None,
         };
         Some(Mark { step, collapse })
     }
 }
 
+/// A bound of a range: a step, or a number of steps from a named one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Bound {
+    Step(u32),
+    Label { name: String, offset: i32 },
+}
+
+impl Bound {
+    /// The bound written as `text`, as `3`, `@a`, `@a+1` or `@a-1`.
+    pub fn parse(text: &str) -> Option<Bound> {
+        let number = |text: &str| -> Option<u32> {
+            if !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()) {
+                text.parse().ok()
+            } else {
+                None
+            }
+        };
+        let Some(label) = text.strip_prefix('@') else {
+            return number(text).map(Bound::Step);
+        };
+        let (name, offset) = match label.find(['+', '-']) {
+            Some(at) => {
+                let offset = i32::try_from(number(&label[at + 1..])?).ok()?;
+                let sign = if label[at..].starts_with('-') { -1 } else { 1 };
+                (&label[..at], sign * offset)
+            }
+            None => (label, 0),
+        };
+        is_name(name).then(|| Bound::Label {
+            name: name.to_string(),
+            offset,
+        })
+    }
+}
+
+impl fmt::Display for Bound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Bound::Step(step) => write!(f, "{step}"),
+            Bound::Label { name, offset: 0 } => write!(f, "@{name}"),
+            Bound::Label { name, offset } => write!(f, "@{name}{offset:+}"),
+        }
+    }
+}
+
 /// The steps an element shows in, from `start`, or the start, up to `end`,
 /// excluded, or the end.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Range {
-    pub start: Option<u32>,
-    pub end: Option<u32>,
+    pub start: Option<Bound>,
+    pub end: Option<Bound>,
 }
 
 impl Range {
     /// The range written as `text`, if it is one.
     pub fn parse(text: &str) -> Option<Range> {
         let text = text.trim();
-        let bound = |text: &str| -> Option<Option<u32>> {
+        let bound = |text: &str| -> Option<Option<Bound>> {
             if text.is_empty() {
                 Some(None)
-            } else if text.bytes().all(|byte| byte.is_ascii_digit()) {
-                text.parse().ok().map(Some)
             } else {
-                None
+                Bound::parse(text).map(Some)
             }
         };
         match text.split_once("..") {
@@ -95,7 +175,7 @@ impl Range {
 
 impl fmt::Display for Range {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match (self.start, self.end) {
+        match (&self.start, &self.end) {
             (Some(start), None) => write!(f, "{start}"),
             (start, end) => {
                 if let Some(start) = start {
@@ -116,7 +196,10 @@ mod tests {
     use super::*;
 
     fn range(start: Option<u32>, end: Option<u32>) -> Option<Range> {
-        Some(Range { start, end })
+        Some(Range {
+            start: start.map(Bound::Step),
+            end: end.map(Bound::Step),
+        })
     }
 
     #[test]
@@ -130,7 +213,9 @@ mod tests {
 
     #[test]
     fn anything_else_is_not_a_range() {
-        for text in ["", "x", "1..x", "1...3", "-1", "1..=3", "1.5"] {
+        for text in [
+            "", "x", "1..x", "1...3", "-1", "1..=3", "1.5", "@", "@1a", "@a+", "@a*2", "a+1",
+        ] {
             assert_eq!(Range::parse(text), None, "{text}");
         }
     }
@@ -145,16 +230,19 @@ mod tests {
         };
         let range = |text| Step::Range(Range::parse(text).unwrap());
         assert_eq!(Mark::parse("step=0..3"), mark(range("0..3")));
+        assert_eq!(Mark::parse("step=a"), mark(Step::Named("a".into())));
+        assert_eq!(Mark::parse("step=@a..@b+1"), mark(range("@a..@b+1")));
         assert_eq!(Mark::parse("step = ..3"), mark(range("..3")));
         assert_eq!(Mark::parse("step"), mark(Step::Next));
         assert_eq!(Mark::parse("also"), mark(Step::Also));
         let invalid = [
             "",
             "step=",
-            "step=x",
+            "step=1x",
             "steps=1",
             "also=1",
             "step 1",
+            "step=1a",
             "fragment 1",
             "*step",
             "step**",
@@ -173,15 +261,29 @@ mod tests {
             })
         };
         let range = Step::Range(Range::parse("1..3").unwrap());
-        assert_eq!(Mark::parse("step*=1..3"), mark(range));
+        assert_eq!(Mark::parse("step*=1..3"), mark(range.clone()));
         assert_eq!(Mark::parse("step* = 1..3"), mark(range));
         assert_eq!(Mark::parse("step*"), mark(Step::Next));
         assert_eq!(Mark::parse("also*"), mark(Step::Also));
     }
 
     #[test]
+    fn a_bound_can_be_a_number_of_steps_from_a_named_one() {
+        let label = |name: &str, offset| {
+            Some(Bound::Label {
+                name: name.into(),
+                offset,
+            })
+        };
+        assert_eq!(Bound::parse("@a"), label("a", 0));
+        assert_eq!(Bound::parse("@a_1+2"), label("a_1", 2));
+        assert_eq!(Bound::parse("@b-1"), label("b", -1));
+        assert_eq!(Bound::parse("4"), Some(Bound::Step(4)));
+    }
+
+    #[test]
     fn a_range_is_written_back_the_same() {
-        for text in ["3..5", "..3", "3", ".."] {
+        for text in ["3..5", "..3", "3", "..", "@a", "@a+1..@b-2"] {
             assert_eq!(Range::parse(text).unwrap().to_string(), text);
         }
         assert_eq!(Range::parse("3..").unwrap().to_string(), "3");

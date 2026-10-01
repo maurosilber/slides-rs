@@ -89,6 +89,11 @@ By default, reveals happen in document order:
   column, one after another, then the second of each. Inside such a column,
   range numbers are that column's steps (its heading is 0), so
   `step="3"` or `\step[3..]{...}` shows with the other columns' third step.
+- Name a step to sync with it from anywhere on the slide: `label="a"` names
+  the step an element shows at (on a heading, `### Method { label=a }`), and
+  `step="a"` (or `\step[a]{...}`, or `gid="step=a"`) marks the next step and
+  names it. A range bound can then be `@a`, `@a+1` or `@a-1`:
+  `<p step="@a+1">`, `\step[@a..@b]{...}`, or `Step("@a", "@a+2")` in Python.
 - `collapse` makes a hidden element take no space. Use it to swap content in
   place:
 

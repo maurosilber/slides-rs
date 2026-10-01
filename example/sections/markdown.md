@@ -95,6 +95,24 @@ After the title, each element is a step: this paragraph, each heading, each item
 
 ---
 
+# Named steps
+
+### Method { label=method }
+
+- expand
+- complete the square
+
+### Equation
+
+$$
+x^2 + 2x - 3 = \step[square]{(x + 1)^2 - 4}
+$$
+
+<p step="@method+1">A <code>label</code> names a step, and <code>@method+1</code> shows one after it.</p>
+<p step="@square">This shows with the square, named by <code>\step[square]</code>.</p>
+
+---
+
 <style>
     .accent { color: var(--accent); }
 </style>
