@@ -16,3 +16,4 @@ Press → to step, ← to step back, ↓ and ↑ to finish or restart a slide, a
 <import-slide src="sections/figures.md" />
 <import-slide src="sections/motion.md" />
 <import-slide src="sections/deck.md" />
+<import-slide src="sections/steps.md" />

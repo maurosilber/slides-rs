@@ -89,6 +89,12 @@
 				"icon": "$(add)"
 			},
 			{
+				"command": "slides.toggleStepColumn",
+				"title": "Collapse or Expand the Steps' Column",
+				"category": "Slides",
+				"icon": "$(fold)"
+			},
+			{
 				"command": "slides.moveSlideUp",
 				"title": "Move Slide Up",
 				"category": "Slides",
@@ -156,7 +162,7 @@
 			},
 			{
 				"id": "slides.column",
-				"description": "The line down the left of a column of a deck's markdown.",
+				"description": "The line down a column of a deck's markdown, before its text.",
 				"defaults": {
 					"dark": "#dcdcaa80",
 					"light": "#795e2680",
@@ -166,7 +172,7 @@
 			},
 			{
 				"id": "slides.alternateColumn",
-				"description": "The line down the left of every other column of a deck's markdown, beside the one before.",
+				"description": "The line down every other column of a deck's markdown, beside the one before, before its text.",
 				"defaults": {
 					"dark": "#4fc1ff80",
 					"light": "#0070c180",
@@ -176,12 +182,22 @@
 			},
 			{
 				"id": "slides.step",
-				"description": "The steps written after a line of a deck's markdown that steps.",
+				"description": "The steps written before a line of a deck's markdown that steps.",
 				"defaults": {
 					"dark": "#b5cea8",
 					"light": "#098658",
 					"highContrast": "#b5cea8",
 					"highContrastLight": "#098658"
+				}
+			},
+			{
+				"id": "slides.stepColumn",
+				"description": "The background of the column the steps are written in, before the lines of a deck's markdown.",
+				"defaults": {
+					"dark": "#ffffff13",
+					"light": "#0000000c",
+					"highContrast": null,
+					"highContrastLight": null
 				}
 			},
 			{
@@ -222,12 +238,12 @@
 				"slides.editor.columns": {
 					"type": "boolean",
 					"default": true,
-					"markdownDescription": "Draw a line down the left of each column, from its `###` to the next, in `slides.column` and `slides.alternateColumn` by turns."
+					"markdownDescription": "Draw a line down each column, from its `###` to the next, before its text, in `slides.column` and `slides.alternateColumn` by turns."
 				},
 				"slides.editor.steps": {
 					"type": "boolean",
 					"default": true,
-					"markdownDescription": "Write after each line that steps the steps it shows in, as the deck numbers them: `3` from the third on, `2..4` up to the fourth, and a `*` if it takes no space while hidden. And above each slide, how many steps it has."
+					"markdownDescription": "Write before each line that steps, in a column of their own, in `slides.stepColumn`, the steps it shows in, as the deck numbers them: `3` from the third on, `2..4` up to the fourth, and a `*` if it takes no space while hidden. And above each slide, how many steps it has, which collapses or expands the column, as hovering over it does."
 				},
 				"slides.pythonServer": {
 					"type": "string",

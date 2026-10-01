@@ -85,21 +85,16 @@ export class SlideEditor implements vscode.Disposable {
 			backgroundColor: new vscode.ThemeColor(color),
 			fontWeight: 'bold',
 		}));
-	/** Every column, by a line down its left, of two colors for two side by side. */
-	private readonly columns = (['slides.column', 'slides.alternateColumn'] as const).map((color) =>
-		vscode.window.createTextEditorDecorationType({
-			isWholeLine: true,
-			borderColor: new vscode.ThemeColor(color),
-			borderStyle: 'solid',
-			borderWidth: '0 0 0 3px',
-		}));
-	/** The steps what is on a line shows in, written after it. */
-	private readonly steps = vscode.window.createTextEditorDecorationType({
-		after: {
+	/** Before every line, in a column of their own, the steps it shows in, and the line
+	 * down the column of the slide it is in, between them and the text, so that every
+	 * line is moved over as much. */
+	private readonly gutter = vscode.window.createTextEditorDecorationType({
+		before: {
 			color: new vscode.ThemeColor('slides.step'),
-			margin: '0 0 0 2em',
 		},
 	});
+	/** Whether the steps' column is narrowed to a mark on each line that steps. */
+	private collapsed = false;
 
 	constructor(
 		private readonly module: Module,
@@ -110,8 +105,7 @@ export class SlideEditor implements vscode.Disposable {
 			this.decoration,
 			this.shade,
 			...this.headings,
-			...this.columns,
-			this.steps,
+			this.gutter,
 			this.lensesChanged,
 			vscode.languages.registerCodeLensProvider(SELECTOR, {
 				onDidChangeCodeLenses: this.lensesChanged.event,
@@ -127,6 +121,10 @@ export class SlideEditor implements vscode.Disposable {
 				this.run(uri, index, (editor, layout, i) => this.add(editor, layout, i))),
 			vscode.commands.registerCommand('slides.newSlideAbove', (uri?: vscode.Uri, index?: number) =>
 				this.run(uri, index, (editor, layout, i) => this.addBefore(editor, layout, i))),
+			vscode.commands.registerCommand('slides.toggleStepColumn', () => {
+				this.collapsed = !this.collapsed;
+				this.refresh();
+			}),
 			vscode.window.onDidChangeVisibleTextEditors((editors) => editors.forEach((editor) => void this.decorate(editor))),
 			vscode.workspace.onDidChangeTextDocument(({ document }) => this.later(document)),
 			vscode.workspace.onDidCloseTextDocument((document) => this.layouts.delete(document.uri.toString())),
@@ -189,7 +187,7 @@ export class SlideEditor implements vscode.Disposable {
 	/** Marks where each slide of the editor's document begins. */
 	private async decorate(editor: vscode.TextEditor) {
 		const document = editor.document;
-		const types = [this.decoration, this.shade, ...this.headings, ...this.columns, this.steps];
+		const types = [this.decoration, this.shade, ...this.headings, this.gutter];
 		if (!this.decks.isDeck(document)) {
 			types.forEach((type) => editor.setDecorations(type, []));
 			return;
@@ -222,10 +220,8 @@ export class SlideEditor implements vscode.Disposable {
 			.filter((heading) => heading.level === i + 1)
 			.map((heading) => new vscode.Range(heading.line, 0, heading.last, 0))));
 		const columns = show.columns ? columnsOf(document, layout) : [];
-		this.columns.forEach((type, i) => editor.setDecorations(type, columns
-			.filter((column) => column.index % 2 === i)
-			.map((column) => column.range)));
-		editor.setDecorations(this.steps, show.steps && layout.steps ? stepMarks(layout.steps) : []);
+		const steps = show.steps && layout.steps ? stepMarks(layout.steps) : undefined;
+		editor.setDecorations(this.gutter, gutterOf(document.lineCount, columns, steps, this.collapsed));
 	}
 
 	/** Buttons at the top of each slide, under its break, to move it or to add one before
@@ -245,7 +241,11 @@ export class SlideEditor implements vscode.Disposable {
 			const count = counts[i];
 			return [
 				// Only to read, as a lens with no command is.
-				...(count === undefined ? [] : [lens(`${count} ${count === 1 ? 'step' : 'steps'}`, '', 'How many steps the slide shows in')]),
+				...(count === undefined ? [] : [lens(
+					`${count} ${count === 1 ? 'step' : 'steps'}`,
+					'slides.toggleStepColumn',
+					`How many steps the slide shows in. ${this.collapsed ? 'Expand' : 'Collapse'} the steps' column`,
+				)]),
 				...(i > 0 ? [lens('$(arrow-up) Move up', 'slides.moveSlideUp', 'Move this slide before the one above it')] : []),
 				...(i < slides.length - 1 ? [lens('$(arrow-down) Move down', 'slides.moveSlideDown', 'Move this slide after the one below it')] : []),
 				...(slides.length > 1 ? [lens('$(list-ordered) Move to…', 'slides.moveSlideTo', 'Move this slide before another one')] : []),
@@ -388,19 +388,76 @@ function columnsOf(document: vscode.TextDocument, layout: Layout): Column[] {
 	return columns;
 }
 
-/** The steps written after each line that steps: `3` from the third step on, `2..4` from
- * the second up to the fourth, excluded, as a range of the deck is written, and with a
- * `*` if it takes no space while hidden. */
-function stepMarks(slides: SlideSteps[]): vscode.DecorationOptions[] {
+/** The steps written for each line that steps, by line: `3` from the third step on,
+ * `2..4` from the second up to the fourth, excluded, as a range of the deck is written,
+ * and with a `*` if it takes no space while hidden. */
+function stepMarks(slides: SlideSteps[]): Map<number, string> {
 	const lines = new Map<number, string[]>();
 	for (const { line, from, to, collapse } of slides.flatMap((slide) => slide.steps)) {
 		const text = `${to === null ? from : `${from}..${to}`}${collapse ? '*' : ''}`;
 		lines.set(line, [...(lines.get(line) ?? []), text]);
 	}
-	return [...lines].map(([line, steps]) => ({
-		range: new vscode.Range(line, 0, line, 0),
-		renderOptions: { after: { contentText: `${steps.length === 1 ? 'step' : 'steps'} ${steps.join(' · ')}` } },
-	}));
+	return new Map([...lines].map(([line, steps]) => [line, steps.join(' · ')]));
+}
+
+/** A space that is kept, as one at the start of a decoration's text is not. */
+const NBSP = '\u00a0';
+
+/** What is written before each line: the steps it shows in, if they are shown, in a
+ * column as wide as the widest of them, or a mark if it is collapsed, and the line down
+ * the column of the slide it is in, if they are shown, or as much space outside one. The
+ * steps and the line are a single decoration, the line its right border, as the editor
+ * keeps no order between those of two types before the same line. */
+function gutterOf(
+	lineCount: number,
+	columns: Column[],
+	steps: Map<number, string> | undefined,
+	collapsed: boolean,
+): vscode.DecorationOptions[] {
+	if (columns.length === 0 && steps === undefined) {
+		return [];
+	}
+	const bars: (number | undefined)[] = [];
+	for (const { range, index } of columns) {
+		for (let line = range.start.line; line <= range.end.line; line++) {
+			bars[line] = index;
+		}
+	}
+	// A space on each side of the steps, or of the mark.
+	const widest = Math.max(1, ...[...(steps?.values() ?? [])].map((text) => text.length));
+	const width = steps === undefined ? '0' : `${(collapsed ? 1 : widest) + 2}ch`;
+	const background = steps === undefined ? undefined : new vscode.ThemeColor('slides.stepColumn');
+	let hover: vscode.MarkdownString | undefined;
+	if (steps !== undefined) {
+		const [icon, verb] = collapsed ? ['unfold', 'Expand'] : ['fold', 'Collapse'];
+		hover = new vscode.MarkdownString(`[$(${icon}) ${verb} the steps' column](command:slides.toggleStepColumn)`, true);
+		hover.isTrusted = { enabledCommands: ['slides.toggleStepColumn'] };
+	}
+	const options: vscode.DecorationOptions[] = [];
+	for (let line = 0; line < lineCount; line++) {
+		const text = steps?.get(line);
+		const bar = bars[line];
+		options.push({
+			range: new vscode.Range(line, 0, line, 0),
+			hoverMessage: hover,
+			renderOptions: {
+				before: {
+					// Never empty, for the editor to write it at all.
+					contentText: text === undefined ? NBSP : `${NBSP}${collapsed ? '•' : text}`,
+					backgroundColor: background,
+					width,
+					// The editor takes only a whole border, which this one, after it, narrows
+					// to its right side.
+					border: columns.length === 0 ? undefined : 'none; border-right: 3px solid',
+					borderColor: columns.length === 0 ? undefined : bar === undefined
+						? 'transparent'
+						: new vscode.ThemeColor(bar % 2 === 0 ? 'slides.column' : 'slides.alternateColumn'),
+					margin: '0 1ch 0 0',
+				},
+			},
+		});
+	}
+	return options;
 }
 
 /** How many steps each slide has, by its index, as the deck numbers them. The module's

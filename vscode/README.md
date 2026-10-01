@@ -77,12 +77,14 @@ imported file.
 The headings are highlighted by what they are on the slide: its title, a `#`,
 in `slides.title`, a subtitle, a `##`, in `slides.subtitle`, and a column's
 `###` in `slides.columnHeading`. Each column, from its `###` up to the next
-heading of its level or above, has a line down its left, in `slides.column`
-and `slides.alternateColumn` by turns, so that two side by side tell apart.
-After each line that steps, the steps it shows in are written as the deck
-numbers them, to tell why an animation steps as it does: `step 3` from the
-third step on, `step 2..4` from the second up to the fourth, and a `*` if it
-takes no space while hidden; above each slide, how many steps it has. A code
+heading of its level or above, has a line down it, before its text, in
+`slides.column` and `slides.alternateColumn` by turns, so that two side by
+side tell apart. Before each line that steps, in a column of their own, the
+steps it shows in are written as the deck numbers them, to tell why an
+animation steps as it does: `3` from the third step on, `2..4` from the second
+up to the fourth, and a `*` if it takes no space while hidden; above each
+slide, how many steps it has. Clicking that, or hovering over the column,
+collapses it to a mark on each line that steps, and expands it again. A code
 cell counts as one step, whatever its outputs, and the frontmatter's `steps`
 is the file's own, as it is unless another file imports it.
 
