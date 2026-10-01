@@ -51,6 +51,16 @@ interface Place {
 	path: string;
 }
 
+/** Where a file's slides break, by line, counted from zero, as the deck breaks them. */
+export interface Breaks {
+	/** The first line after the frontmatter, where the first slide begins. */
+	start: number;
+	/** The lines of the rules between two slides. */
+	rules: number[];
+	/** The lines of the imports, which bring slides of their own. */
+	imports: number[];
+}
+
 export class Module {
 	private loading: Promise<{ wasm: Wasm; module: WebAssembly.Module }> | undefined;
 	/** The directory the answers are written in, and read from once the module exits. */
@@ -72,6 +82,11 @@ export class Module {
 	/** The markdown file the cells make. */
 	markdown(cells: Cell[]): Promise<string> {
 		return this.run({ command: 'markdown', cells });
+	}
+
+	/** Where the slides of a markdown file break. */
+	slides(markdown: string): Promise<Breaks> {
+		return this.run({ command: 'slides', markdown });
 	}
 
 	/** The saved outputs of each code cell of the file at `uri`, given their sources in order. */

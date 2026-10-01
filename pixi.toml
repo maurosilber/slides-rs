@@ -44,6 +44,9 @@ slides-rs-python = { path = "python" }
 [feature.vscode.dependencies]
 nodejs = "*"
 rust-std-wasm32-wasip1-threads = "*"
+# The Python language servers the extension starts, which its tests use.
+basedpyright = "*"
+ty = "*"
 
 [feature.vscode.tasks]
 vscode-deps = { cmd = "npm install", cwd = "vscode" }

@@ -3,6 +3,7 @@
 // schema to YAML files, but not to the frontmatter of a markdown file.
 
 import * as vscode from 'vscode';
+import { SELECTOR } from './decks';
 import schema from '../../src/frontmatter.schema.json';
 
 /** What the schema, which schemars writes from the deck's Rust, has for a key. */
@@ -16,14 +17,13 @@ interface Schema {
 }
 
 export function registerFrontmatter(): vscode.Disposable {
-	// A markdown file, or a notebook's markdown cell, the first of which holds the
+	// A deck's markdown, or a notebook's markdown cell, the first of which holds the
 	// frontmatter of a deck opened as one.
-	const selector: vscode.DocumentSelector = { language: 'markdown' };
 	return vscode.Disposable.from(
 		// Keys, once asked for, as markdown asks for no suggestions as it is typed, and
 		// values after the space that follows a key.
-		vscode.languages.registerCompletionItemProvider(selector, { provideCompletionItems }, ' '),
-		vscode.languages.registerHoverProvider(selector, { provideHover }),
+		vscode.languages.registerCompletionItemProvider(SELECTOR, { provideCompletionItems }, ' '),
+		vscode.languages.registerHoverProvider(SELECTOR, { provideHover }),
 	);
 }
 

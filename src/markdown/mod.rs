@@ -346,6 +346,46 @@ impl Frontmatter {
     }
 }
 
+/// Where a file's slides break, by line, counted from zero, as `render` breaks
+/// them: at each rule, and at each import, which brings slides of its own.
+#[derive(Debug, Default, PartialEq)]
+pub struct Breaks {
+    /// The first line after the frontmatter, where the first slide begins.
+    pub start: usize,
+    /// The lines of the rules between two slides.
+    pub rules: Vec<usize>,
+    /// The lines of the imports.
+    pub imports: Vec<usize>,
+}
+
+/// Where the slides of a file's markdown break.
+pub fn breaks(markdown: &str) -> Breaks {
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(markdown.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    let line = |offset: usize| starts.partition_point(|&start| start <= offset) - 1;
+    let mut breaks = Breaks::default();
+    for (event, range) in parse(markdown) {
+        match event {
+            Event::End(TagEnd::MetadataBlock(_)) => {
+                // The block ends with its closing fence, or just after it.
+                breaks.start = line(range.end.saturating_sub(1)) + 1;
+            }
+            Event::Rule => breaks.rules.push(line(range.start)),
+            Event::Html(raw) if raw.contains("<import-slide") => {
+                let first = line(range.start);
+                for (i, text) in raw.lines().enumerate() {
+                    if import_src(text).is_some() {
+                        breaks.imports.push(first + i);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    breaks
+}
+
 /// The `src` of an `<import-slide src="..." />`, relative to the importing file.
 fn import_src(line: &str) -> Option<&str> {
     let rest = line.trim().strip_prefix("<import-slide")?;
@@ -362,6 +402,20 @@ fn is_tilde_fenced(markdown: &str, start: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slides_break_at_rules_and_imports_but_not_at_what_looks_like_one() {
+        let markdown = "---\ntheme: dark\n---\n# One\n\n---\n\nA heading\n---\n\n```\n---\n```\n\n***\n<import-slide src=\"part.md\" />\n";
+        assert_eq!(
+            breaks(markdown),
+            Breaks {
+                start: 3,
+                rules: vec![5, 14],
+                imports: vec![15],
+            }
+        );
+        assert_eq!(breaks("# One\n").start, 0);
+    }
 
     fn theme(yaml: &str) -> Option<String> {
         Frontmatter::parse(yaml, Path::new("slides.md")).theme

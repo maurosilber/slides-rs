@@ -16,6 +16,9 @@ const extensions = path.join(root, '.vscode-test', 'extensions');
 const [cli, ...args] = resolveCliArgsFromVSCodeExecutablePath(vscodeExecutablePath);
 execFileSync(cli, [...args, '--extensions-dir', extensions, '--install-extension', 'ms-vscode.wasm-wasi-core'], { stdio: 'inherit' });
 
+// Run from VS Code's own terminal, it would start as Node rather than as VS Code.
+delete process.env.ELECTRON_RUN_AS_NODE;
+
 // A deck outside the repository, whose outputs the tests save.
 const deck = fs.mkdtempSync(path.join(os.tmpdir(), 'slides-notebook-'));
 await runTests({

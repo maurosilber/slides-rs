@@ -17,6 +17,7 @@ use indicatif::MultiProgress;
 use crate::paths::parent;
 use crate::{progress, store};
 use environment::Environments;
+pub use environment::print as print_environment;
 pub use serve::serve;
 
 /// The kernels the cells can run on, most preferred first, as

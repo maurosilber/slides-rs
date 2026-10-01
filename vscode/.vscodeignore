@@ -3,5 +3,6 @@
 !dist/renderer.js
 !dist/slides-notebook.wasm
 !dist/slides-rs
+!language/**
 !package.json
 !README.md

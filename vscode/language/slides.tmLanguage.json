@@ -1,0 +1,5 @@
+{
+	"$comment": "A deck's markdown is markdown, as a *.slides.md file is written.",
+	"scopeName": "text.html.markdown.slides",
+	"patterns": [{ "include": "text.html.markdown" }]
+}

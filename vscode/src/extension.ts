@@ -4,7 +4,9 @@
 import * as vscode from 'vscode';
 import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
 import { registerFrontmatter } from './frontmatter';
+import { Decks } from './decks';
 import { Previews } from './preview';
+import { SlideEditor } from './slides';
 import { canRunCells, Kernels } from './kernel';
 import { registerPython } from './python';
 import { Cell, CodeCell, Module } from './wasm';
@@ -15,10 +17,22 @@ export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('Slides Notebook', { log: true });
 	const module = new Module(context.extensionUri, context.globalStorageUri, log);
 	const outputs = new Outputs(module, log);
+	const decks = new Decks();
+	// The language servers start processes, which needs VS Code on the desktop, as
+	// does the client of them, loaded only there.
+	const servers = canRunCells()
+		? import('./lsp.js').then(({ PythonServers }) => {
+			const servers = new PythonServers(context.extensionUri, decks, log);
+			context.subscriptions.push(servers);
+			return servers;
+		})
+		: Promise.resolve(undefined);
 	context.subscriptions.push(
 		log,
+		decks,
+		new SlideEditor(module, decks, log),
 		registerFrontmatter(),
-		registerPython(),
+		registerPython(servers),
 		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(module)),
 		vscode.workspace.onDidOpenNotebookDocument((notebook) => outputs.load(notebook)),
 		vscode.workspace.onDidSaveNotebookDocument((notebook) => outputs.save(notebook)),
@@ -32,7 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	if (canRunCells()) {
 		const kernels = new Kernels(NOTEBOOK, context.extensionUri, log);
-		const previews = new Previews(context.extensionUri, log);
+		const previews = new Previews(context.extensionUri, decks, log);
 		context.subscriptions.push(
 			kernels,
 			previews,

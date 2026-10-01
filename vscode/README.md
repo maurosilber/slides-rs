@@ -16,9 +16,17 @@ extension comes with, as the WebAssembly cannot start a process.
 
 ## Use
 
-Run **Slides: Open as Slides Notebook** on a markdown file (from its editor
+Run **Slides: Open as Slides Notebook** on a deck's markdown (from its editor
 title, the explorer, or the command palette), or use *Reopen Editor With… ›
 Slides Notebook*.
+
+The commands show on the markdown files that are decks, or parts of one: a file
+with a key of the deck's frontmatter, an `<import-slide>` or a `~~~` code
+cell, one another file imports, and any file named `*.slides.md`. That name
+opens in the *Slides Markdown* language, which is highlighted as markdown but
+leaves out what VS Code does for markdown, as its preview, outline and link
+checks, and what other extensions add to it. Its name still ends in `.md`, so
+GitHub and slides-rs read it as markdown.
 
 In the YAML frontmatter of any markdown file, as a notebook's first cell or in
 the text editor, the keys the deck reads are completed, with *Trigger Suggest*
@@ -27,12 +35,33 @@ and their values after the space that follows a key. Hovering over a key
 describes it. Both come from the deck's
 [`frontmatter.schema.json`](../src/frontmatter.schema.json).
 
-In the text editor, the code of a Python cell is completed by the Python
-language server installed, such as Pylance or ty, as the cells before it run:
-after a `.`, or with *Trigger Suggest*. The server is asked of a hidden file
-next to the deck, `.<deck>.md.<id>.py`, which holds the file's Python cells and
-is deleted once it answers. In a notebook, its cells are Python documents the
-server completes itself.
+In the text editor, the Python cells have the diagnostics, hovers, signature
+help, definitions, references and completions of a Python language server that
+the extension starts in the environment the cells run in, so that it resolves
+their imports as the kernel does: the first of `basedpyright-langserver`, `ty`
+and `pyright-langserver` in the environment the deck's lock file pins, which
+`slides-rs environment` activates, or else on the `PATH`. The
+`slides.pythonServer` setting names another, or is `off`. The server is told
+of the file's Python cells, in order, as the cells before each one run, each
+line where it is in the deck and the rest blank, as a file that is never
+written. An expression left unused at the end of a cell is not reported, as
+the kernel shows it. Its log is the *Slides Python Language Server* output.
+
+Without such a server, a cell is completed by the Python language server VS
+Code has, such as Pylance, after a `.` or with *Trigger Suggest*: it is asked
+of a hidden file next to the deck, `.<deck>.md.<id>.py`, which holds the
+file's Python cells and is deleted once it answers. In a notebook, its cells
+are Python documents the server completes itself.
+
+In the text editor, the line where each slide begins, its `---` or an
+`<import-slide>`, is highlighted, with the slide it begins written after it,
+as the deck breaks them: not at a `---` under a line of text, which makes it
+a heading, nor in a code block. Its color is `slides.slideBreak`, which a
+`workbench.colorCustomizations` setting can change. Above each slide, buttons
+move it, with all its markdown, up, down, or before any other, and add a
+slide after it; the rules and blank lines between slides stay where they are.
+**Slides: New Slide**, **Move Slide Up**, **Move Slide Down** and **Move
+Slide To…** do the same for the slide the cursor is in.
 
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.

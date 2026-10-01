@@ -16,11 +16,33 @@
 		"ms-vscode.wasm-wasi-core"
 	],
 	"activationEvents": [
-		"onLanguage:markdown"
+		"onLanguage:markdown",
+		"onLanguage:slides",
+		"workspaceContains:**/*.md"
 	],
 	"main": "./dist/extension.js",
 	"browser": "./dist/extension.js",
 	"contributes": {
+		"languages": [
+			{
+				"id": "slides",
+				"aliases": [
+					"Slides Markdown",
+					"slides"
+				],
+				"filenamePatterns": [
+					"*.slides.md"
+				],
+				"configuration": "./language/language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "slides",
+				"scopeName": "text.html.markdown.slides",
+				"path": "./language/slides.tmLanguage.json"
+			}
+		],
 		"notebooks": [
 			{
 				"type": "slides-notebook",
@@ -51,14 +73,50 @@
 				"command": "slides.showSlides",
 				"title": "Show Slides",
 				"category": "Slides",
-				"icon": "$(open-preview)",
+				"icon": "$(play)",
 				"enablement": "!isWeb"
+			},
+			{
+				"command": "slides.newSlide",
+				"title": "New Slide",
+				"category": "Slides",
+				"icon": "$(add)"
+			},
+			{
+				"command": "slides.moveSlideUp",
+				"title": "Move Slide Up",
+				"category": "Slides",
+				"icon": "$(arrow-up)"
+			},
+			{
+				"command": "slides.moveSlideDown",
+				"title": "Move Slide Down",
+				"category": "Slides",
+				"icon": "$(arrow-down)"
+			},
+			{
+				"command": "slides.moveSlideTo",
+				"title": "Move Slide To…",
+				"category": "Slides",
+				"icon": "$(list-ordered)"
 			},
 			{
 				"command": "slides.stopSlides",
 				"title": "Stop Rendering Slides",
 				"category": "Slides",
 				"enablement": "!isWeb"
+			}
+		],
+		"colors": [
+			{
+				"id": "slides.slideBreak",
+				"description": "The background of the line where a slide of a deck's markdown begins: its rule, or an import.",
+				"defaults": {
+					"dark": "#3794ff26",
+					"light": "#0066bf1a",
+					"highContrast": "#ffffff26",
+					"highContrastLight": "#0000001a"
+				}
 			}
 		],
 		"notebookRenderer": [
@@ -75,6 +133,11 @@
 		"configuration": {
 			"title": "Slides Notebook",
 			"properties": {
+				"slides.pythonServer": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The Python language server for the code cells in the markdown text editor, started in the environment they run in: a command, such as `basedpyright-langserver`, `ty` or `pyright-langserver`, or its path. Empty, the first of those in that environment or on the `PATH`. `off`, or with none found, the cells are completed by the Python language server VS Code has, with no diagnostics, hovers or definitions."
+				},
 				"slides.path": {
 					"type": "string",
 					"default": "",
@@ -86,12 +149,12 @@
 			"editor/title": [
 				{
 					"command": "slides.openNotebook",
-					"when": "resourceLangId == markdown && activeEditor == workbench.editors.files.textFileEditor",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && activeEditor == workbench.editors.files.textFileEditor",
 					"group": "navigation"
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "resourceLangId == markdown && !isWeb",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && !isWeb",
 					"group": "navigation"
 				}
 			],
@@ -109,12 +172,28 @@
 			],
 			"commandPalette": [
 				{
+					"command": "slides.newSlide",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && editorTextFocus"
+				},
+				{
+					"command": "slides.moveSlideUp",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && editorTextFocus"
+				},
+				{
+					"command": "slides.moveSlideDown",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && editorTextFocus"
+				},
+				{
+					"command": "slides.moveSlideTo",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && editorTextFocus"
+				},
+				{
 					"command": "slides.restartKernel",
 					"when": "notebookType == slides-notebook && !isWeb"
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "(resourceLangId == markdown || notebookType == slides-notebook) && !isWeb"
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks || notebookType == slides-notebook) && !isWeb"
 				},
 				{
 					"command": "slides.stopSlides",
@@ -124,12 +203,12 @@
 			"explorer/context": [
 				{
 					"command": "slides.openNotebook",
-					"when": "resourceLangId == markdown",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks)",
 					"group": "navigation"
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "resourceLangId == markdown && !isWeb",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && !isWeb",
 					"group": "navigation"
 				}
 			]
@@ -137,14 +216,15 @@
 	},
 	"scripts": {
 		"build:wasm": "cargo build --package slides-notebook --release --target wasm32-wasip1-threads && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/wasm32-wasip1-threads/release/slides-notebook.wasm','dist/slides-notebook.wasm')\"",
-		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:node:* --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap && esbuild src/renderer.ts --bundle --outfile=dist/renderer.js --format=esm --target=es2022 --sourcemap",
+		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:node:* --external:child_process --external:crypto --external:fs --external:net --external:os --external:path --external:util --format=cjs --platform=neutral --main-fields=module,main --target=es2022 --sourcemap && esbuild src/renderer.ts --bundle --outfile=dist/renderer.js --format=esm --target=es2022 --sourcemap",
 		"build:cli": "cargo build --bin slides-rs --release && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/release/slides-rs','dist/slides-rs');require('fs').chmodSync('dist/slides-rs',0o755)\"",
 		"build": "npm run build:wasm && npm run build:cli && npm run build:ts",
 		"test": "node test/run.mjs",
 		"package": "vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository --skip-license"
 	},
 	"dependencies": {
-		"@vscode/wasm-wasi": "^1.0.1"
+		"@vscode/wasm-wasi": "^1.0.1",
+		"vscode-languageclient": "^9.0.1"
 	},
 	"devDependencies": {
 		"@types/node": "^20.0.0",

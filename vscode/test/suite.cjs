@@ -33,7 +33,7 @@ function renderedSlide(name = 'slide2.md') {
 async function until(value, timeout = 20000) {
 	const start = Date.now();
 	for (;;) {
-		const result = value();
+		const result = await value();
 		if (result) return result;
 		if (Date.now() - start > timeout) throw new Error(`timed out waiting for ${value}`);
 		await new Promise((resolve) => setTimeout(resolve, 100));
@@ -63,6 +63,39 @@ const tests = {
 		assert.match(hover.contents[0].value, /^\*\*fade\*\* \(boolean\)/);
 	},
 
+	async 'a slide moves with all its markdown, and a new one is added after one'() {
+		const dir = path.join(process.env.SLIDES_DECK, 'move');
+		fs.mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, 'talk.slides.md');
+		const frontmatter = '---\ntheme: dark\n---\n';
+		fs.writeFileSync(file, `${frontmatter}# One\n\nfirst\n\n---\n\n# Two\n\n***\n\n# Three\n`);
+		const document = await vscode.workspace.openTextDocument(file);
+		await vscode.window.showTextDocument(document);
+		assert.strictEqual(document.languageId, 'slides');
+		const lenses = async () => {
+			const lenses = await vscode.commands.executeCommand('vscode.executeCodeLensProvider', document.uri);
+			return lenses.map((lens) => `${lens.range.start.line} ${lens.command.title}`);
+		};
+		await until(async () => (await lenses()).length > 0);
+		assert.deepStrictEqual(await lenses(), [
+			'3 $(arrow-down) Move down', '3 $(list-ordered) Move to…', '3 $(add) New slide',
+			'9 $(arrow-up) Move up', '9 $(arrow-down) Move down', '9 $(list-ordered) Move to…', '9 $(add) New slide',
+			'13 $(arrow-up) Move up', '13 $(list-ordered) Move to…', '13 $(add) New slide',
+		]);
+		// The rules stay where they are, and the slides move around them.
+		await vscode.commands.executeCommand('slides.moveSlideDown', document.uri, 0);
+		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# One\n\nfirst\n\n***\n\n# Three\n`);
+		await vscode.commands.executeCommand('slides.moveSlideUp', document.uri, 2);
+		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
+		await vscode.commands.executeCommand('slides.newSlide', document.uri, 0);
+		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# Title\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
+		// Markdown that is not a deck has no buttons.
+		const readme = await vscode.workspace.openTextDocument({ language: 'markdown', content: '# A\n\n---\n\n# B\n' });
+		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeCodeLensProvider', readme.uri), []);
+		await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
+		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+	},
+
 	async 'the code cells complete as a Python file of their own would'() {
 		const dir = path.join(process.env.SLIDES_DECK, 'python');
 		fs.mkdirSync(dir, { recursive: true });
@@ -75,6 +108,9 @@ const tests = {
 			'~~~rust', 'let y = 2;', '~~~', '',
 		].join('\n');
 		fs.writeFileSync(file, content);
+		// Without a server of its own, as with none in the environment.
+		const settings = vscode.workspace.getConfiguration('slides');
+		await settings.update('pythonServer', 'off', vscode.ConfigurationTarget.Global);
 		// Stands in for a Python language server, answering with what it was asked of.
 		let asked;
 		const server = vscode.languages.registerCompletionItemProvider({ language: 'python', scheme: 'file' }, {
@@ -107,7 +143,46 @@ const tests = {
 			assert.deepStrictEqual(fs.readdirSync(dir), ['deck.md']);
 		} finally {
 			server.dispose();
+			await settings.update('pythonServer', undefined, vscode.ConfigurationTarget.Global);
 		}
+	},
+
+	async 'the code cells have the diagnostics, hovers and definitions of a language server'() {
+		// basedpyright, which the vscode environment has, on the PATH the deck runs in
+		// without a lock file.
+		const dir = path.join(process.env.SLIDES_DECK, 'lsp');
+		fs.mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, 'talk.slides.md');
+		const content = [
+			'# Code', '',
+			'~~~python', 'import math', '', 'def double(x: float) -> float:', '    return 2 * x', '~~~', '',
+			'Some text.', '',
+			'~~~python', 'x = double(math.pi)', 'missing_name', '~~~', '',
+		].join('\n');
+		fs.writeFileSync(file, content);
+		const document = await vscode.workspace.openTextDocument(file);
+		await vscode.window.showTextDocument(document);
+		// The name that is not defined, but not that it is left unused, as the kernel shows it.
+		const diagnostics = await until(() => {
+			const found = vscode.languages.getDiagnostics(document.uri);
+			return found.some((diagnostic) => /missing_name/.test(diagnostic.message)) && found;
+		}, 60000);
+		assert.deepStrictEqual(diagnostics.map((diagnostic) => diagnostic.range.start.line), [13]);
+		const hover = await until(async () => {
+			const [hover] = await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(12, 6));
+			return hover;
+		});
+		assert.match(hover.contents.map((content) => content.value ?? content).join(''), /def double\(x: float\) -> float/);
+		const [definition] = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', document.uri, new vscode.Position(12, 6));
+		assert.strictEqual((definition.targetUri ?? definition.uri).toString(), document.uri.toString());
+		assert.strictEqual((definition.targetRange ?? definition.range).start.line, 5);
+		const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', document.uri, new vscode.Position(12, 18));
+		assert.ok(list.items.some((item) => (item.label.label ?? item.label) === 'pi'), 'math. completes pi');
+		// Outside the cells, it has nothing to say.
+		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(9, 2)), []);
+		// The cells' file is never written.
+		assert.deepStrictEqual(fs.readdirSync(dir), ['talk.slides.md']);
+		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
 
 	async 'a deck opens as its cells, with the outputs the deck saved'() {

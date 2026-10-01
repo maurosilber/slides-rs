@@ -5,12 +5,10 @@
 import * as vscode from 'vscode';
 import type { ChildProcess } from 'node:child_process';
 import { command } from './kernel';
+import type { Decks } from './decks';
 
 /** The integrated browser's command, which older versions of VS Code do not have. */
 const INTEGRATED_BROWSER = 'workbench.action.browser.open';
-
-/** An import, as a line of the markdown writes it, which src/markdown/mod.rs reads the same way. */
-const IMPORT = /^\s*<import-slide\s*src="([^"]*)"/;
 
 /** The line `slides-rs` writes once it renders the page, naming it. */
 const RENDERED = /^rendered (.+) in \S+$/;
@@ -21,6 +19,7 @@ export class Previews implements vscode.Disposable {
 
 	constructor(
 		private readonly extensionUri: vscode.Uri,
+		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {}
 
@@ -33,7 +32,7 @@ export class Previews implements vscode.Disposable {
 			void vscode.window.showErrorMessage('Only a deck saved on disk can be rendered.');
 			return;
 		}
-		const deck = await deckOf(uri, this.log);
+		const deck = await this.decks.deckOf(uri, this.log);
 		const key = `${uri}\n${deck ?? ''}`;
 		let watch = this.watches.get(key);
 		if (!watch) {
@@ -130,48 +129,6 @@ class Watch implements vscode.Disposable {
 			// It exited meanwhile.
 		}
 	}
-}
-
-/**
- * The deck the file at `uri` is part of: the markdown in the workspace that imports it,
- * or that imports one that does, which nothing imports itself. Nothing, if no file
- * imports it. Of several, the first by path.
- */
-async function deckOf(uri: vscode.Uri, log: vscode.LogOutputChannel): Promise<vscode.Uri | undefined> {
-	const path = await import('node:path');
-	const files = await vscode.workspace.findFiles('**/*.md', '{**/node_modules/**,**/_outputs/**}');
-	const importers = new Map<string, vscode.Uri[]>();
-	await Promise.all(files.map(async (file) => {
-		let text: string;
-		try {
-			text = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
-		} catch {
-			return;
-		}
-		for (const line of text.split('\n')) {
-			const src = IMPORT.exec(line)?.[1];
-			if (src !== undefined) {
-				const imported = path.resolve(path.dirname(file.fsPath), src);
-				importers.set(imported, [...(importers.get(imported) ?? []), file]);
-			}
-		}
-	}));
-	let deck: vscode.Uri | undefined;
-	const seen = new Set([uri.fsPath]);
-	for (;;) {
-		const found = (importers.get((deck ?? uri).fsPath) ?? [])
-			.filter((file) => !seen.has(file.fsPath))
-			.sort((a, b) => a.fsPath.localeCompare(b.fsPath));
-		if (found.length === 0) {
-			break;
-		}
-		if (found.length > 1) {
-			log.info(`${vscode.workspace.asRelativePath(deck ?? uri)}: imported by ${found.map((file) => vscode.workspace.asRelativePath(file)).join(', ')}, shown as in the first`);
-		}
-		deck = found[0];
-		seen.add(deck.fsPath);
-	}
-	return deck;
 }
 
 /** Opens the page in the integrated browser, or else in the default one. */

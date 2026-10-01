@@ -16,6 +16,8 @@ enum Request {
     Cells { markdown: String },
     /// The markdown file that cells make.
     Markdown { cells: Vec<notebook::Cell> },
+    /// Where the slides of a markdown file break.
+    Slides { markdown: String },
     /// The saved outputs of each code cell of a file.
     Load {
         place: outputs::Place,
@@ -32,6 +34,14 @@ fn respond(request: Request) -> Result<serde_json::Value> {
     Ok(match request {
         Request::Cells { markdown } => serde_json::to_value(notebook::cells(&markdown))?,
         Request::Markdown { cells } => serde_json::to_value(notebook::markdown(&cells))?,
+        Request::Slides { markdown } => {
+            let breaks = slides::markdown::breaks(&markdown);
+            serde_json::json!({
+                "start": breaks.start,
+                "rules": breaks.rules,
+                "imports": breaks.imports,
+            })
+        }
         Request::Load { place, sources } => serde_json::to_value(outputs::load(&place, &sources))?,
         Request::Save { place, cells } => serde_json::to_value(outputs::save(&place, &cells)?)?,
     })

@@ -155,3 +155,26 @@ fn venv(dir: &Path) -> Environment {
     ]);
     Environment { prefix, vars }
 }
+
+/// Prints, as a line of JSON, the environment the cells of `file` run in:
+/// `{"lock": null}` without a lock file, as they run in whatever the deck is
+/// rendered from, or else the lock file, where the environment is installed,
+/// the variables that activate it, and those to remove, as the kernel does.
+pub fn print(file: &Path) -> Result<()> {
+    let Some(lock) = crate::store::lock_file(parent(file)) else {
+        println!("{}", serde_json::json!({ "lock": null }));
+        return Ok(());
+    };
+    let runtime = tokio::runtime::Runtime::new()?;
+    let environment = runtime.block_on(Environment::activate(&lock))?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "lock": lock,
+            "prefix": environment.prefix,
+            "vars": environment.vars,
+            "remove": FOREIGN,
+        })
+    );
+    Ok(())
+}

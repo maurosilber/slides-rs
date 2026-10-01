@@ -72,6 +72,13 @@ enum Command {
         #[arg(short, long, value_enum)]
         kernel: Option<KernelChoice>,
     },
+    /// Prints the environment the cells of a markdown file run in, for the
+    /// VS Code extension, as a line of JSON: the one its lock file pins,
+    /// installed and activated as for its kernel.
+    Environment {
+        /// The markdown file the cells are in.
+        file: PathBuf,
+    },
 }
 
 /// Which kernel to run the cells on.
@@ -107,9 +114,15 @@ fn main() {
         self_contained,
         open,
     } = Cli::parse();
-    if let Some(Command::Kernel { file, kernel }) = command {
-        let kernels = kernel.map_or(notebook::KERNELS, KernelChoice::kernelspecs);
-        if let Err(error) = notebook::serve(&canonical(&file), kernels) {
+    if let Some(command) = command {
+        let done = match command {
+            Command::Kernel { file, kernel } => {
+                let kernels = kernel.map_or(notebook::KERNELS, KernelChoice::kernelspecs);
+                notebook::serve(&canonical(&file), kernels)
+            }
+            Command::Environment { file } => notebook::print_environment(&canonical(&file)),
+        };
+        if let Err(error) = done {
             eprintln!("{error:#}");
             std::process::exit(1);
         }

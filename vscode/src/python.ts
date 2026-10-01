@@ -1,15 +1,48 @@
-// Completes the Python of a deck's code cells in the markdown text editor, as
-// whichever Python language server is installed completes a Python file: the
-// cells are written, in order, as the kernel runs them, to a file of their own,
-// next to the deck, so that the server resolves its imports as the deck's, each
-// line where it is in the markdown and the rest blank. Asked of that file, the
-// server's completions hold for the markdown as they are. A notebook's cells
-// are Python documents already, which the servers complete themselves.
+// Completes the Python of a deck's code cells in the markdown text editor: with the
+// Python language server lsp.ts starts in the environment the cells run in, or, without
+// one, as whichever Python language server VS Code has completes a Python file. For
+// that one, the cells are written, in order, as the kernel runs them, to a file of
+// their own, next to the deck, so that the server resolves its imports as the deck's,
+// each line where it is in the markdown and the rest blank. Asked of that file, the
+// server's completions hold for the markdown as they are. A notebook's cells are
+// Python documents already, which the servers complete themselves.
 
 import * as vscode from 'vscode';
+import { SELECTOR } from './decks';
+import type { PythonServers } from './lsp';
 
-export function registerPython(): vscode.Disposable {
-	return vscode.languages.registerCompletionItemProvider({ language: 'markdown', scheme: 'file' }, { provideCompletionItems }, '.');
+/** Registers the completions, from `servers` where they have a server for the file. */
+export function registerPython(servers: Promise<PythonServers | undefined>): vscode.Disposable {
+	return vscode.languages.registerCompletionItemProvider(
+		SELECTOR.map((filter) => ({ ...filter, scheme: 'file' })),
+		{
+			async provideCompletionItems(document, position, token, context) {
+				const fromServer = await (await servers)?.completion(document, position, token, context);
+				return fromServer ?? provideCompletionItems(document, position, token, context);
+			},
+			async resolveCompletionItem(item, token) {
+				return (await servers)?.resolve(item, token) ?? item;
+			},
+		},
+		'.',
+	);
+}
+
+/** The edits of a completion that are in the cells: an import added at the top of the
+ * file goes at the top of the first cell, and any other edit, where the markdown is, is
+ * left out. */
+export function keepInCells(
+	edits: vscode.TextEdit[] | undefined,
+	shadow: { cells: { start: number; end: number }[] },
+	first: vscode.Position,
+): vscode.TextEdit[] | undefined {
+	return edits?.flatMap((edit) => {
+		if (edit.range.isEmpty && edit.range.start.line === 0) {
+			return [new vscode.TextEdit(new vscode.Range(first, first), edit.newText)];
+		}
+		const inside = shadow.cells.some(({ start, end }) => start <= edit.range.start.line && edit.range.end.line < end);
+		return inside ? [edit] : [];
+	});
 }
 
 /** The lines of each code cell's code, from the one after its opening fence up to its
@@ -68,15 +101,7 @@ async function provideCompletionItems(
 		);
 		const first = new vscode.Position(cells[0].start, 0);
 		for (const item of list.items) {
-			// An import added at the top of the file goes at the top of the first cell,
-			// and any other edit outside the cells, where the markdown is, is left out.
-			item.additionalTextEdits = item.additionalTextEdits?.flatMap((edit) => {
-				if (edit.range.isEmpty && edit.range.start.line === 0) {
-					return [new vscode.TextEdit(new vscode.Range(first, first), edit.newText)];
-				}
-				const inside = cells.some(({ start, end }) => start <= edit.range.start.line && edit.range.end.line < end);
-				return inside ? [edit] : [];
-			});
+			item.additionalTextEdits = keepInCells(item.additionalTextEdits, { cells }, first);
 		}
 		return list;
 	} finally {
