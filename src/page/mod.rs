@@ -11,7 +11,7 @@ use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
 
 use crate::markdown::{NO_STEPS, PageSettings, SECTION};
 use crate::paths::{href, parent};
-use crate::store;
+use crate::{step, store};
 
 const TEMPLATE: &str = include_str!("template.html");
 
@@ -121,7 +121,7 @@ pub fn page(
     let body = body
         .replace(&format!("{SECTION}\n</section>\n"), "")
         .replace(&format!("{NO_STEPS}\n</section>\n"), "");
-    let body = indent(&body);
+    let body = indent(&step::number(&body));
     // The deck's own theme is linked where it is, relative to the deck.
     let own = theme.map(theme_href).filter(|href| bundled(href).is_none());
     if let Some(href) = &own
@@ -477,10 +477,9 @@ fn indent(html: &str) -> String {
     let mut preformatted = false;
     for line in html.lines() {
         if !preformatted {
-            indented.push_str(match line {
-                SECTION | NO_STEPS | "</section>" => "    ",
-                _ => "        ",
-            });
+            // A slide's opening tag says how many steps it has too.
+            let slide = line == "</section>" || line.starts_with("<section") && line.ends_with('>');
+            indented.push_str(if slide { "    " } else { "        " });
         }
         indented.push_str(line);
         indented.push('\n');

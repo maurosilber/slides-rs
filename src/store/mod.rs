@@ -51,6 +51,27 @@ pub fn notebook_mime(extension: &str) -> &'static str {
     }
 }
 
+/// An output saved as `extension` as a notebook shows it: a figure with its
+/// steps numbered, as a slide that holds it alone numbers them, for the
+/// extension's renderer to step through.
+pub fn notebook_data(extension: &str, bytes: Vec<u8>) -> Vec<u8> {
+    match (extension, String::from_utf8(bytes)) {
+        ("svg", Ok(svg)) => crate::step::number_figure(&svg).into_bytes(),
+        (_, Ok(text)) => text.into_bytes(),
+        (_, Err(error)) => error.into_bytes(),
+    }
+}
+
+/// An output as it is saved, from what a notebook shows as `mime`: a figure
+/// as it was before its steps were numbered.
+pub fn saved_data(mime: &str, bytes: Vec<u8>) -> Vec<u8> {
+    match (mime, String::from_utf8(bytes)) {
+        (FIGURE, Ok(svg)) => crate::step::unnumber_figure(&svg).into_bytes(),
+        (_, Ok(text)) => text.into_bytes(),
+        (_, Err(error)) => error.into_bytes(),
+    }
+}
+
 /// Where the outputs of the cells of a file in `dir` are saved: in the
 /// closest outputs directory above it, as the deck that imports it saves them
 /// next to itself, or else next to it, as when it is rendered on its own.

@@ -14,6 +14,10 @@
 
 use std::fmt;
 
+mod html;
+
+pub use html::{number, number_figure, unnumber_figure};
+
 /// How an element marks itself as a step: by the range it shows in, or as
 /// the next step, or along with the latest one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -10,10 +10,11 @@
         import katex from "https://cdn.jsdelivr.net/npm/katex@0.18.7/dist/katex.mjs";
         const options = {
             throwOnError: false,
-            // \htmlData carries the steps out to the page, as the renderer
-            // writes every \step{...} and \also{...}, and is the only
-            // command allowed to write html.
-            trust: (context) => context.command == "\\htmlData",
+            // \htmlStyle and \htmlClass carry the steps out to the page, as
+            // the deck writes every \step{...} and \also{...}, and \htmlData
+            // those of slides whose steps are off. They are the only commands
+            // allowed to write html.
+            trust: (context) => ["\\htmlData", "\\htmlStyle", "\\htmlClass"].includes(context.command),
         };
         // The markdown leaves math as its TeX, in a span of its own.
         for (const math of document.querySelectorAll(".math")) {

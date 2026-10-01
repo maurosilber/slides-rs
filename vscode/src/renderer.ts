@@ -1,17 +1,31 @@
 // Shows a figure in the notebook as a slide shows it, stepping through the
-// parts matplotlib's `gid` marks as steps: the deck's own steps.js numbers
+// parts matplotlib's `gid` marks as steps: the extension numbers them as a
+// slide that holds the figure alone does, and the deck's own steps.js shows
 // them, as it does on the page.
 
 import type { ActivationFunction } from 'vscode-notebook-renderer';
-import { playAnimations, stepsOf } from '../../src/static/steps.js';
+import { countSteps, playAnimations, showSteps } from '../../src/static/steps.js';
 
 /** As slides.css fades the steps in and out, within the figure alone. */
 const STYLE = `
+@property --shown {
+	syntax: "<number>";
+	inherits: true;
+	initial-value: 1;
+}
 .slides-figure .step {
+	--shown: calc(clamp(0, var(--step) - var(--from) + 1, 1) * clamp(0, var(--to, infinity) - var(--step), 1));
+	opacity: var(--shown);
+	visibility: if(style(--shown: 0): hidden);
 	transition: opacity 0.25s ease-out, visibility 0.25s ease-out;
 }
+.slides-figure.steps-off .step {
+	--shown: 1;
+}
+.slides-figure .step-collapse {
+	display: if(style(--shown: 0): none; else: revert);
+}
 .slides-figure .step-hidden {
-	opacity: 0;
 	visibility: hidden;
 }
 .slides-figure .step-collapse.step-hidden {
@@ -68,11 +82,6 @@ interface State {
 	animate: boolean;
 }
 
-interface Steps {
-	count: number;
-	elements: { element: Element; from: number; to: number; collapse: boolean }[];
-}
-
 export const activate: ActivationFunction<State> = (context) => {
 	let animate = context.getState()?.animate ?? true;
 	/** How each figure shown updates, when the checkbox of any of them changes. */
@@ -96,14 +105,9 @@ export const activate: ActivationFunction<State> = (context) => {
 			const figure = document.createElement('div');
 			figure.className = 'slides-figure steps-instant';
 			figure.innerHTML = item.text();
-			// stepsOf reads a slide, which here holds the figure alone.
 			const slide = document.createElement('div');
 			slide.append(figure);
-			const { count, elements } = stepsOf(slide) as Steps;
-			for (const { element, collapse } of elements) {
-				element.classList.add('step');
-				element.classList.toggle('step-collapse', collapse);
-			}
+			const count = countSteps(figure);
 			element.replaceChildren(slide);
 
 			let current = 1;
@@ -126,9 +130,8 @@ export const activate: ActivationFunction<State> = (context) => {
 					return;
 				}
 				current = step;
-				for (const { element, from, to } of elements) {
-					element.classList.toggle('step-hidden', animate && !(from <= step && step < to));
-				}
+				figure.classList.toggle('steps-off', !animate);
+				showSteps(figure, step);
 				playAnimations(figure);
 				checkbox.checked = animate;
 				label.textContent = `Step ${step} of ${count}`;

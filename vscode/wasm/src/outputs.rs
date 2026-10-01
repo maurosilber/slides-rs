@@ -75,6 +75,7 @@ fn read(file: &Path) -> Option<Saved> {
         .ok()?;
     let extension = file.extension().and_then(|extension| extension.to_str());
     let mime = store::notebook_mime(extension.unwrap_or_default());
+    let bytes = store::notebook_data(extension.unwrap_or_default(), bytes);
     Some(Saved {
         name: file.file_name()?.to_str()?.to_string(),
         item: Item {
@@ -170,6 +171,7 @@ fn richest(output: &CellOutput) -> Result<Option<Output>> {
     if item.mime == ERROR {
         bytes = error_text(&bytes).into_bytes();
     }
+    let bytes = store::saved_data(&item.mime, bytes);
     Ok(Some(Output {
         extension: MEDIA_TYPES[rank].1,
         bytes,

@@ -2,13 +2,13 @@
 //!
 //! `\step{...}` appears one step after the latest one, `\also{...}` along
 //! with it, and `\step[3..5]{...}` in the steps its range says. Each becomes
-//! `\htmlData{step=...}{...}` with its range, which KaTeX writes as the
-//! `data-step` the page reads. Starred, as `\step*` or `\also*`, they take no
-//! space while hidden, and are written with a `collapse` too, which KaTeX
-//! writes as `data-collapse`. They are numbered here, in the order they are
-//! written: KaTeX lays out an aligned environment column by column, so by the
-//! time the page sees them, the left side of every row comes before any
-//! right side.
+//! `\htmlData{step=...}{...}` with its range, which src/step/html.rs numbers
+//! among the other steps of the slide, as KaTeX writes them to the page.
+//! Starred, as `\step*` or `\also*`, they take no space while hidden, and are
+//! written with a `collapse` too. Their ranges are numbered here, in the order
+//! they are written, rather than as KaTeX lays them out: an aligned
+//! environment column by column, the left side of every row before any right
+//! side.
 
 use crate::step::Range;
 

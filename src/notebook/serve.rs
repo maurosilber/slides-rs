@@ -67,7 +67,7 @@ struct Item {
 fn item(output: &Output) -> Item {
     Item {
         mime: store::notebook_mime(output.extension),
-        data: BASE64.encode(&output.bytes),
+        data: BASE64.encode(store::notebook_data(output.extension, output.bytes.clone())),
         name: store::name(output),
     }
 }

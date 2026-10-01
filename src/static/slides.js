@@ -19,10 +19,8 @@ function wrapColumns(slide) {
     }
 }
 
-// Math is typeset by a module script, which runs after this one but before
-// DOMContentLoaded, so the steps it marks are only there from then on. The
-// columns are boxed after, as the steps are read off the slide's children.
-let slideSteps = [];
+// The columns are boxed once the page is read, as the deck numbered the
+// steps of the slide's children.
 addEventListener("DOMContentLoaded", () => {
     // Every slide knows where it is in the deck, for slides.css to count them,
     // which CSS counters cannot, as the slides not shown are not displayed.
@@ -30,17 +28,14 @@ addEventListener("DOMContentLoaded", () => {
         slide.dataset.number = i + 1;
         slide.dataset.total = slides.length;
     });
-    slideSteps = [...slides].map(stepsOf);
-    // slides.css shows and hides them, as `step-hidden` says.
-    for (const { elements } of slideSteps) {
-        for (const { element, collapse } of elements) {
-            element.classList.add("step");
-            if (collapse) element.classList.add("step-collapse");
-        }
-    }
     for (const slide of slides) wrapColumns(slide);
     updateSlide(...positionFromHash(), true);
 });
+
+// How many steps a slide has, as the deck counted them.
+function stepCount(i) {
+    return Number(slides[i].dataset.count) || 1;
+}
 
 // The current slide and step are kept in the URL, as `#slide.step`,
 // so that the reload after a rebuild comes back to them instead of to the
@@ -72,7 +67,7 @@ function updateSlide(i, step = 1, finished = false) {
     stopAnimations(slides[currentSlide]);
     slide.style.display = "block";
     currentSlide = i;
-    currentStep = Math.max(1, Math.min(step, slideSteps[i].count));
+    currentStep = Math.max(1, Math.min(step, stepCount(i)));
     showStep(currentStep, finished);
     // Laid out before the transitions come back, so that none of them runs.
     slide.getBoundingClientRect();
@@ -80,19 +75,16 @@ function updateSlide(i, step = 1, finished = false) {
     showPosition();
 }
 
-// Marks each element hidden or shown for the step, which slides.css lays out:
-// hidden, an element keeps its space, so the columns keep their place, unless
-// it collapses, when it takes none, so another can show in its place.
-// Disabled, every element shows, even those whose steps are over.
-// currentStep is tracked even while disabled, so re-enabling resumes here.
+// Shows the slide at the step, as slides.css lays it out: hidden, an element
+// keeps its space, so the columns keep their place, unless it collapses, when
+// it takes none, so another can show in its place. Disabled, every element
+// shows, even those whose steps are over. currentStep is tracked even while
+// disabled, so re-enabling resumes here.
 function showStep(i, finished = false) {
-    const { count, elements } = slideSteps[currentSlide];
-    if (i < 1 || i > count) return false;
+    if (i < 1 || i > stepCount(currentSlide)) return false;
     currentStep = i;
-    for (const { element, from, to } of elements) {
-        const shown = !stepsEnabled || (from <= i && i < to);
-        element.classList.toggle("step-hidden", !shown);
-    }
+    document.documentElement.classList.toggle("steps-off", !stepsEnabled);
+    showSteps(slides[currentSlide], i);
     playAnimations(slides[currentSlide], finished);
     showPosition();
     return true;
@@ -115,8 +107,8 @@ addEventListener("keydown", (event) => {
         }
     } else if (event.code == "ArrowDown") {
         // Alternate: finish this slide, then open the next one.
-        if (stepsEnabled && currentStep < slideSteps[currentSlide].count) {
-            showStep(slideSteps[currentSlide].count);
+        if (stepsEnabled && currentStep < stepCount(currentSlide)) {
+            showStep(stepCount(currentSlide));
         } else if (!rushAnimations(slides[currentSlide])) {
             updateSlide(currentSlide + 1, 1);
         }
