@@ -70,7 +70,8 @@ break, or under the frontmatter for the first slide, buttons move the slide,
 with all its markdown, up, down, or before any other, and add a slide before
 or after it; the rules and blank lines between slides stay where they are.
 **Slides: New Slide Above**, **New Slide Below**, **Move Slide Up**, **Move
-Slide Down** and **Move Slide To…** do the same for the slide the cursor is in.
+Slide Down** and **Move Slide To…** do the same for the slide the cursor is in. The `src` of an `<import-slide>` is a link: Ctrl/Cmd+click it to open the
+imported file.
 
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.

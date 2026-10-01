@@ -70,7 +70,7 @@ const tests = {
 		const frontmatter = '---\ntheme: dark\n---\n';
 		fs.writeFileSync(file, `${frontmatter}# One\n\nfirst\n\n---\n\n# Two\n\n***\n\n# Three\n`);
 		const document = await vscode.workspace.openTextDocument(file);
-		await vscode.window.showTextDocument(document);
+		const editor = await vscode.window.showTextDocument(document);
 		assert.strictEqual(document.languageId, 'slides');
 		const lenses = async () => {
 			const lenses = await vscode.commands.executeCommand('vscode.executeCodeLensProvider', document.uri);
@@ -93,6 +93,14 @@ const tests = {
 		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# Title\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
 		await vscode.commands.executeCommand('slides.newSlideAbove', document.uri, 0);
 		assert.strictEqual(document.getText(), `${frontmatter}# Title\n\n---\n\n# Two\n\n---\n\n# Title\n\n---\n\n# Three\n\n***\n\n# One\n\nfirst\n`);
+		// The src of an import links to the file it imports.
+		const part = path.join(dir, 'part.md');
+		fs.writeFileSync(part, '# Part\n');
+		await editor.edit((edit) => edit.insert(new vscode.Position(document.lineCount, 0), '\n<import-slide src="part.md" />\n'));
+		const links = await vscode.commands.executeCommand('vscode.executeLinkProvider', document.uri);
+		const imported = links.filter((link) => link.target?.fsPath === part);
+		assert.strictEqual(imported.length, 1);
+		assert.strictEqual(document.getText(imported[0].range), 'part.md');
 		// Markdown that is not a deck has no buttons.
 		const readme = await vscode.workspace.openTextDocument({ language: 'markdown', content: '# A\n\n---\n\n# B\n' });
 		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeCodeLensProvider', readme.uri), []);

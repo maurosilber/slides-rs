@@ -2,7 +2,8 @@
 // them alone: a file with what only a deck has, as slides-rs frontmatter, an import or
 // a code cell, and a file another one imports. VS Code reads their paths from the
 // `slides.decks` context key. A file in the slides language, as `*.slides.md` is, is
-// one whatever it holds, which the menus' `when` clauses say themselves.
+// one whatever it holds, which the menus' `when` clauses say themselves. The `src` of
+// an import links to the file it imports.
 
 import * as vscode from 'vscode';
 
@@ -59,6 +60,7 @@ export class Decks implements vscode.Disposable {
 			// A file outside the workspace, which the watcher does not see.
 			vscode.workspace.onDidOpenTextDocument((document) => isSaved(document) && rescan(document.uri)),
 			vscode.workspace.onDidSaveTextDocument((document) => isSaved(document) && rescan(document.uri)),
+			vscode.languages.registerDocumentLinkProvider(SELECTOR, { provideDocumentLinks: (document) => importLinks(document) }),
 		);
 		this.ready = this.scanAll();
 	}
@@ -148,6 +150,27 @@ export class Decks implements vscode.Disposable {
 	dispose() {
 		this.disposables.forEach((disposable) => disposable.dispose());
 	}
+}
+
+/** A link on the `src` of each import of the document, to the file it imports. */
+function importLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
+	if (!isSaved(document)) {
+		return [];
+	}
+	const dir = vscode.Uri.joinPath(document.uri, '..');
+	const links: vscode.DocumentLink[] = [];
+	for (let line = 0; line < document.lineCount; line++) {
+		const match = IMPORT.exec(document.lineAt(line).text);
+		if (match?.[1]) {
+			// The match ends at the quote that closes the src.
+			const end = match[0].length - 1;
+			const range = new vscode.Range(line, end - match[1].length, line, end);
+			const link = new vscode.DocumentLink(range, vscode.Uri.joinPath(dir, match[1]));
+			link.tooltip = 'Open the imported slides';
+			links.push(link);
+		}
+	}
+	return links;
 }
 
 /** Whether the document is markdown saved as a file, rather than a notebook's cell, a
