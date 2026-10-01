@@ -96,7 +96,7 @@ const tests = {
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
 
-	async 'the code cells complete as a Python file of their own would'() {
+	async 'the code cells are completed, hovered and defined as a Python file of their own would be'() {
 		const dir = path.join(process.env.SLIDES_DECK, 'python');
 		fs.mkdirSync(dir, { recursive: true });
 		const file = path.join(dir, 'deck.md');
@@ -141,6 +141,25 @@ const tests = {
 			// Outside the Python cells, it has nothing to say.
 			for (const [line, character] of [[4, 2], [7, 3], [21, 3]]) assert.deepStrictEqual(await items(line, character), []);
 			assert.deepStrictEqual(fs.readdirSync(dir), ['deck.md']);
+			// Its hovers and definitions too, the definitions in the hidden file being in the deck.
+			const hovers = vscode.languages.registerHoverProvider({ language: 'python', scheme: 'file' }, {
+				provideHover: (document, position) => new vscode.Hover(`hover of ${document.getWordRangeAtPosition(position) && document.getText(document.getWordRangeAtPosition(position))}`),
+			});
+			const definitions = vscode.languages.registerDefinitionProvider({ language: 'python', scheme: 'file' }, {
+				provideDefinition: (document) => new vscode.Location(document.uri, new vscode.Position(11, 7)),
+			});
+			try {
+				const [hover] = await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(12, 1));
+				assert.strictEqual(hover.contents[0].value, 'hover of np');
+				const [definition] = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', document.uri, new vscode.Position(12, 1));
+				assert.strictEqual((definition.targetUri ?? definition.uri).toString(), document.uri.toString());
+				assert.strictEqual((definition.targetRange ?? definition.range).start.line, 11);
+				assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(4, 2)), []);
+				assert.deepStrictEqual(fs.readdirSync(dir), ['deck.md']);
+			} finally {
+				hovers.dispose();
+				definitions.dispose();
+			}
 		} finally {
 			server.dispose();
 			await settings.update('pythonServer', undefined, vscode.ConfigurationTarget.Global);

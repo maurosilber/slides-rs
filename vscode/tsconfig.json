@@ -11,7 +11,12 @@
 		"skipLibCheck": true,
 		"noEmit": true,
 		"allowJs": true,
-		"resolveJsonModule": true
+		"resolveJsonModule": true,
+		"types": [
+			"node",
+			"vscode",
+			"vscode-notebook-renderer"
+		]
 	},
 	"include": [
 		"src"

@@ -1,10 +1,14 @@
 // The Python of a deck's code cells, in the markdown text editor, as a Python language
 // server has it: one the extension starts in the environment the cells run in, which
 // `slides-rs environment` activates as for the kernel, so that the server resolves the
-// imports as the cells do when they run. The server is told of a Python file of the
+// imports as the cells do when they run. It is the one the `slides.pythonServer` setting
+// names, or else the one the editor has for Python, as the extension that brings it or
+// the Python extension's `python.languageServer` says, installed in the environment or
+// as that extension bundles it, or else the first of `SERVERS` that is installed. The server is told of a Python file of the
 // cells, in order, each line where it is in the markdown and the rest blank, which is
 // never written to disk, so that its answers hold for the markdown as they are. Without
-// a server, python.ts completes the cells with the one VS Code has instead.
+// a server, as with Pylance, which only its own extension can start, python.ts asks the
+// one VS Code has instead.
 
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
@@ -24,9 +28,11 @@ import {
 	LanguageClient,
 	ReferencesRequest,
 	SignatureHelpRequest,
+	ServerOptions,
 	State,
+	TransportKind,
 } from 'vscode-languageclient/node';
-import { Decks, SELECTOR } from './decks';
+import { Decks } from './decks';
 import { command } from './kernel';
 import { keepInCells, pythonCells } from './python';
 
@@ -36,6 +42,79 @@ const SERVERS: { command: string; args: string[] }[] = [
 	{ command: 'ty', args: ['server'] },
 	{ command: 'pyright-langserver', args: ['--stdio'] },
 ];
+
+/** How to start a server: a command, or a script run on VS Code's own Node, and where it
+ * comes from, for the log. */
+type Launch = ({ command: string; args: string[] } | { module: string }) & { name: string; from: string };
+
+/** A server an extension brings for Python: the command it is installed as, and how the
+ * extension bundles it, if it does. */
+interface EditorServer {
+	command: string;
+	args: string[];
+	bundled(): Launch | undefined;
+}
+
+/** The extensions that bring a Python language server, which a user picks one with, by
+ * their id, most preferred first, with how each bundles its server. */
+const EXTENSIONS: { id: string; server: (extension: vscode.Extension<unknown>) => EditorServer | undefined }[] = [
+	{
+		id: 'astral-sh.ty',
+		server: (extension) => {
+			const ty = vscode.workspace.getConfiguration('ty');
+			if (ty.get<boolean>('disableLanguageServices')) return undefined;
+			return {
+				command: 'ty',
+				args: ['server'],
+				bundled() {
+					const command = [...ty.get<string[]>('path', []), path.join(extension.extensionPath, 'bundled', 'libs', 'bin', exe('ty'))]
+						.find((candidate) => fs.existsSync(candidate));
+					return command ? { command, args: ['server'], name: 'ty', from: 'the ty extension' } : undefined;
+				},
+			};
+		},
+	},
+	{ id: 'detachhead.basedpyright', server: (extension) => pyright(extension, 'basedpyright') },
+	{ id: 'ms-pyright.pyright', server: (extension) => pyright(extension, 'pyright') },
+];
+
+/** The server of pyright's extension, or basedpyright's, which bundles it as a script. */
+function pyright(extension: vscode.Extension<unknown>, name: string): EditorServer {
+	return {
+		command: `${name}-langserver`,
+		args: ['--stdio'],
+		bundled() {
+			const module = path.join(extension.extensionPath, 'dist', 'server.js');
+			return fs.existsSync(module) ? { module, name, from: `the ${name} extension` } : undefined;
+		},
+	};
+}
+
+/** The server the editor has for Python: Jedi, if the Python extension is set to it,
+ * which bundles it as a script its interpreter runs, or else that of the first extension
+ * of `EXTENSIONS` that is enabled, which a disabled one is not as VS Code lists them. */
+function editorServer(python: string | undefined, PATH: string): EditorServer | undefined {
+	if (vscode.workspace.getConfiguration('python').get<string>('languageServer') === 'Jedi') {
+		const extension = vscode.extensions.getExtension('ms-python.python');
+		return {
+			command: 'jedi-language-server',
+			args: [],
+			bundled() {
+				const script = extension && path.join(extension.extensionPath, 'python_files', 'run-jedi-language-server.py');
+				const interpreter = python ?? executable('python3', PATH) ?? executable('python', PATH);
+				return script && interpreter && fs.existsSync(script)
+					? { command: interpreter, args: [script], name: 'jedi-language-server', from: 'the Python extension' }
+					: undefined;
+			},
+		};
+	}
+	for (const { id, server } of EXTENSIONS) {
+		const extension = vscode.extensions.getExtension(id);
+		const found = extension && server(extension);
+		if (found) return found;
+	}
+	return undefined;
+}
 
 /** The environment the cells of a file run in, as `slides-rs environment` prints it. */
 interface Environment {
@@ -49,12 +128,18 @@ interface Environment {
 }
 
 /** A file of the cells of a markdown file, as the server knows it. */
-interface Shadow {
+export interface Shadow {
 	uri: vscode.Uri;
 	version: number;
 	text: string;
 	/** The lines of its cells, which only its answers within are kept of. */
 	cells: { start: number; end: number }[];
+}
+
+/** A server, and the file of a document's cells it was told of. */
+export interface Found {
+	server: Server;
+	shadow: Shadow;
 }
 
 /** A server, for the files whose cells run in one environment. */
@@ -175,7 +260,7 @@ export class PythonServers implements vscode.Disposable {
 	/** The server each markdown file was told to, by its uri. */
 	private readonly assigned = new Map<string, Server>();
 	private readonly diagnostics = vscode.languages.createDiagnosticCollection('slides-python');
-	private readonly output = vscode.window.createOutputChannel('Slides Python Language Server');
+	private readonly output = vscode.window.createOutputChannel('Slides Python Language Server', { log: true });
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly disposables: vscode.Disposable[] = [];
 	/** The completion items each server gave, to resolve them with. */
@@ -186,34 +271,27 @@ export class PythonServers implements vscode.Disposable {
 		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {
-		const selector = SELECTOR.map((filter) => ({ ...filter, scheme: 'file' }));
 		this.disposables.push(
 			this.diagnostics,
 			this.output,
-			vscode.languages.registerHoverProvider(selector, { provideHover: (document, position, token) => this.hover(document, position, token) }),
-			vscode.languages.registerSignatureHelpProvider(
-				selector,
-				{ provideSignatureHelp: (document, position, token, context) => this.signatureHelp(document, position, token, context) },
-				'(',
-				',',
-			),
-			vscode.languages.registerDefinitionProvider(selector, { provideDefinition: (document, position, token) => this.definition(document, position, token) }),
-			vscode.languages.registerReferenceProvider(selector, { provideReferences: (document, position, context, token) => this.references(document, position, context, token) }),
 			vscode.workspace.onDidOpenTextDocument((document) => void this.track(document)),
 			vscode.workspace.onDidChangeTextDocument(({ document }) => this.later(document)),
 			vscode.workspace.onDidCloseTextDocument((document) => this.untrack(document.uri)),
 			this.decks.onDidChange(() => vscode.workspace.textDocuments.forEach((document) => void this.track(document))),
 			vscode.workspace.onDidChangeConfiguration((event) => {
-				if (event.affectsConfiguration('slides.pythonServer')) {
+				const affects = ['slides.pythonServer', 'python.languageServer', 'ty.path', 'ty.disableLanguageServices'];
+				if (affects.some((section) => event.affectsConfiguration(section))) {
 					this.restart();
 				}
 			}),
+			// An extension that brings a server, enabled or disabled.
+			vscode.extensions.onDidChange(() => this.restart()),
 		);
 		vscode.workspace.textDocuments.forEach((document) => void this.track(document));
 	}
 
 	/** The server of the document's cells, if one was found, told of them as they are now. */
-	async serverFor(document: vscode.TextDocument): Promise<{ server: Server; shadow: Shadow } | undefined> {
+	async serverFor(document: vscode.TextDocument): Promise<Found | undefined> {
 		if (document.uri.scheme !== 'file' || !this.decks.isDeck(document)) {
 			return undefined;
 		}
@@ -227,9 +305,7 @@ export class PythonServers implements vscode.Disposable {
 
 	/** Starts the server of a deck as it opens, for its diagnostics. */
 	private async track(document: vscode.TextDocument) {
-		if (vscode.languages.match(SELECTOR, document) > 0) {
-			await this.serverFor(document);
-		}
+		await this.serverFor(document);
 	}
 
 	private untrack(uri: vscode.Uri) {
@@ -310,20 +386,24 @@ export class PythonServers implements vscode.Disposable {
 		for (const name of environment.remove ?? []) delete env[name];
 		Object.assign(env, environment.vars);
 		const where = environment.lock ? vscode.workspace.asRelativePath(environment.lock) : 'the environment VS Code runs in';
-		const found = find(setting, env.PATH ?? '');
+		const python = pythonOf(environment.prefix);
+		const found = choose(setting, env.PATH ?? '', python);
 		if (!found) {
 			this.log.info(
 				setting
 					? `the Python language server \`${setting}\` is not in ${where} nor on the PATH`
-					: `no Python language server in ${where} nor on the PATH, so the cells are completed by the one VS Code has: install basedpyright or ty in it for diagnostics, hovers and definitions too`,
+					: `no Python language server for ${where}, so the cells are asked of the one VS Code has: install the ty or basedpyright extension, or either in the environment, for diagnostics too`,
 			);
 			return undefined;
 		}
-		const python = pythonOf(environment.prefix);
+		const options = { cwd: environment.lock ? path.dirname(environment.lock) : undefined, env };
+		const serverOptions: ServerOptions = 'module' in found
+			? { module: found.module, transport: TransportKind.ipc, options }
+			: { command: found.command, args: found.args, options };
 		const client = new LanguageClient(
 			'slides-python',
 			'Slides Python Language Server',
-			{ command: found.command, args: found.args, options: { cwd: environment.lock ? path.dirname(environment.lock) : undefined, env } },
+			serverOptions,
 			{
 				// Told of the cells' files by hand, rather than of the documents VS Code opens.
 				documentSelector: [],
@@ -345,14 +425,14 @@ export class PythonServers implements vscode.Disposable {
 		try {
 			await client.start();
 		} catch (error) {
-			this.log.error(`could not start the Python language server ${found.command} for ${where}: ${error}`);
+			this.log.error(`could not start ${found.name}, from ${found.from}, for ${where}: ${error}`);
 			return undefined;
 		}
 		// The diagnostics may have changed, as when the server has read the environment.
 		client.onRequest(DiagnosticRefreshRequest.type, () => {
 			server.shadows.forEach((shadow) => void server.pull(shadow));
 		});
-		this.log.info(`started the Python language server ${found.command} for ${where}`);
+		this.log.info(`started ${found.name}, from ${found.from}, for ${where}`);
 		return server;
 	}
 
@@ -381,20 +461,10 @@ export class PythonServers implements vscode.Disposable {
 		}
 	}
 
-	/** Whether the position is in one of the cells. */
-	private inCell(shadow: Shadow, position: vscode.Position): boolean {
-		return shadow.cells.some(({ start, end }) => start <= position.line && position.line < end);
-	}
+	// What the server has to say at a position in the cells of a document, which python.ts
+	// asks it, rather than the one VS Code has, once it finds the document has a server.
 
-	/** The completions of a cell, or nothing outside the cells or without a server. */
-	async completion(
-		document: vscode.TextDocument,
-		position: vscode.Position,
-		token: vscode.CancellationToken,
-		context: vscode.CompletionContext,
-	): Promise<vscode.CompletionList | undefined> {
-		const found = await this.serverFor(document);
-		if (!found || !this.inCell(found.shadow, position)) return undefined;
+	async completion(found: Found, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext): Promise<vscode.CompletionList | undefined> {
 		const { server, shadow } = found;
 		const { client } = server;
 		const result = await client.sendRequest(
@@ -429,17 +499,13 @@ export class PythonServers implements vscode.Disposable {
 		return converted;
 	}
 
-	private async hover(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken) {
-		const found = await this.serverFor(document);
-		if (!found || !this.inCell(found.shadow, position)) return undefined;
+	async hover(found: Found, position: vscode.Position, token: vscode.CancellationToken) {
 		const { client } = found.server;
 		const result = await client.sendRequest(HoverRequest.type, this.at(found, position), token);
 		return client.protocol2CodeConverter.asHover(result);
 	}
 
-	private async signatureHelp(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.SignatureHelpContext) {
-		const found = await this.serverFor(document);
-		if (!found || !this.inCell(found.shadow, position)) return undefined;
+	async signatureHelp(found: Found, position: vscode.Position, token: vscode.CancellationToken, context: vscode.SignatureHelpContext) {
 		const { client } = found.server;
 		const result = await client.sendRequest(
 			SignatureHelpRequest.type,
@@ -453,9 +519,7 @@ export class PythonServers implements vscode.Disposable {
 		return client.protocol2CodeConverter.asSignatureHelp(result, token);
 	}
 
-	private async definition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken) {
-		const found = await this.serverFor(document);
-		if (!found || !this.inCell(found.shadow, position)) return undefined;
+	async definition(found: Found, document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken) {
 		const { client } = found.server;
 		const result = await client.sendRequest(DefinitionRequest.type, this.at(found, position), token);
 		const converted = await client.protocol2CodeConverter.asDefinitionResult(result, token);
@@ -469,9 +533,7 @@ export class PythonServers implements vscode.Disposable {
 		return new vscode.Location(fix(converted.uri), converted.range);
 	}
 
-	private async references(document: vscode.TextDocument, position: vscode.Position, context: vscode.ReferenceContext, token: vscode.CancellationToken) {
-		const found = await this.serverFor(document);
-		if (!found || !this.inCell(found.shadow, position)) return undefined;
+	async references(found: Found, document: vscode.TextDocument, position: vscode.Position, context: vscode.ReferenceContext, token: vscode.CancellationToken) {
 		const { client } = found.server;
 		const result = await client.sendRequest(ReferencesRequest.type, { ...this.at(found, position), context }, token);
 		const locations = await client.protocol2CodeConverter.asReferences(result, token);
@@ -480,7 +542,7 @@ export class PythonServers implements vscode.Disposable {
 	}
 
 	/** Where a request is about, in the cells' file. */
-	private at(found: { server: Server; shadow: Shadow }, position: vscode.Position) {
+	private at(found: Found, position: vscode.Position) {
 		return {
 			textDocument: { uri: found.shadow.uri.toString() },
 			position: found.server.client.code2ProtocolConverter.asPosition(position),
@@ -496,31 +558,46 @@ export class PythonServers implements vscode.Disposable {
 	}
 }
 
-/** The command that starts the server the setting names, a command or a path, or else
- * the first of `SERVERS` on the `PATH`, with the arguments it takes. */
-function find(setting: string, PATH: string): { command: string; args: string[] } | undefined {
-	const executable = (name: string): string | undefined => {
-		const names = process.platform === 'win32' ? [`${name}.exe`, `${name}.cmd`, name] : [name];
-		if (path.isAbsolute(name)) return fs.existsSync(name) ? name : undefined;
-		for (const dir of PATH.split(path.delimiter).filter(Boolean)) {
-			for (const candidate of names) {
-				const full = path.join(dir, candidate);
-				if (fs.existsSync(full)) return full;
-			}
-		}
-		return undefined;
-	};
+/** The server to start: the one the setting names, a command or a path, or else the one
+ * the editor has for Python, installed on the `PATH`, which the environment's comes first
+ * on, or else as its extension bundles it, or else the first of `SERVERS` on the `PATH`. */
+function choose(setting: string, PATH: string, python: string | undefined): Launch | undefined {
 	if (setting) {
-		const command = executable(setting);
+		const command = executable(setting, PATH);
 		if (!command) return undefined;
-		const known = SERVERS.find((server) => path.basename(setting).replace(/\.(exe|cmd)$/, '') === server.command);
-		return { command, args: known?.args ?? ['--stdio'] };
+		const name = path.basename(setting).replace(/\.(exe|cmd)$/, '');
+		const known = SERVERS.find((server) => server.command === name);
+		return { command, args: known?.args ?? ['--stdio'], name, from: 'the slides.pythonServer setting' };
+	}
+	const editor = editorServer(python, PATH);
+	if (editor) {
+		const command = executable(editor.command, PATH);
+		const launch = command ? { command, args: editor.args, name: editor.command, from: path.dirname(command) } : editor.bundled();
+		if (launch) return launch;
 	}
 	for (const server of SERVERS) {
-		const command = executable(server.command);
-		if (command) return { command, args: server.args };
+		const command = executable(server.command, PATH);
+		if (command) return { command, args: server.args, name: server.command, from: path.dirname(command) };
 	}
 	return undefined;
+}
+
+/** The path of the command `name`, on the `PATH`, unless it is a path itself. */
+function executable(name: string, PATH: string): string | undefined {
+	if (path.isAbsolute(name)) return fs.existsSync(name) ? name : undefined;
+	const names = process.platform === 'win32' ? [`${name}.exe`, `${name}.cmd`, name] : [name];
+	for (const dir of PATH.split(path.delimiter).filter(Boolean)) {
+		for (const candidate of names) {
+			const full = path.join(dir, candidate);
+			if (fs.existsSync(full)) return full;
+		}
+	}
+	return undefined;
+}
+
+/** The name of an executable file, as the platform has it. */
+function exe(name: string): string {
+	return process.platform === 'win32' ? `${name}.exe` : name;
 }
 
 /** The Python of the environment installed at `prefix`, by conda or pixi, or by uv. */

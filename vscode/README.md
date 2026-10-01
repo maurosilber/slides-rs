@@ -38,19 +38,26 @@ describes it. Both come from the deck's
 In the text editor, the Python cells have the diagnostics, hovers, signature
 help, definitions, references and completions of a Python language server that
 the extension starts in the environment the cells run in, so that it resolves
-their imports as the kernel does: the first of `basedpyright-langserver`, `ty`
-and `pyright-langserver` in the environment the deck's lock file pins, which
-`slides-rs environment` activates, or else on the `PATH`. The
-`slides.pythonServer` setting names another, or is `off`. The server is told
+their imports as the kernel does, in the environment the deck's lock file
+pins, which `slides-rs environment` activates. It is the one the editor has
+for Python: that of the ty, basedpyright or Pyright extension that is enabled,
+or Jedi if `python.languageServer` is `Jedi`, as installed in that environment
+or on the `PATH`, or else as its extension bundles it, which needs nothing
+installed. Its settings, as `ty.*` or `basedpyright.analysis.*`, hold for it.
+Without one, it is the first of `basedpyright-langserver`, `ty` and
+`pyright-langserver` installed. The `slides.pythonServer` setting names
+another, or is `off`. The server is told
 of the file's Python cells, in order, as the cells before each one run, each
 line where it is in the deck and the rest blank, as a file that is never
 written. An expression left unused at the end of a cell is not reported, as
 the kernel shows it. Its log is the *Slides Python Language Server* output.
 
-Without such a server, a cell is completed by the Python language server VS
-Code has, such as Pylance, after a `.` or with *Trigger Suggest*: it is asked
-of a hidden file next to the deck, `.<deck>.md.<id>.py`, which holds the
-file's Python cells and is deleted once it answers. In a notebook, its cells
+Without such a server, as with Pylance, which only its own extension can
+start, a cell's completions, after a `.` or with *Trigger Suggest*, hovers,
+signature help, definitions and references are those of the Python language
+server VS Code has, but not its diagnostics: it is asked of a hidden file next
+to the deck, `.<deck>.md.<id>.py`, which holds the file's Python cells and is
+deleted once it answers. In a notebook, its cells
 are Python documents the server completes itself.
 
 In the text editor, the line where each slide begins, its `---` or an
