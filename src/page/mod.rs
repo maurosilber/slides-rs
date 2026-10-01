@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn a_page_in_the_outputs_links_as_from_there() {
         let dir = Path::new("/deck");
-        let body = "<section>\n<img src=\"_outputs/figure.png\">\n<img src=\"photo.jpg?v=1\">\n<a href=\"#3\">back</a>\n<a href=\"https://example.com\">site</a>\n</section>\n";
+        let body = "<section>\n<p><img src=\"_outputs/figure.png\">\n<img src=\"photo.jpg?v=1\">\n<a href=\"#3\">back</a>\n<a href=\"https://example.com\">site</a></p>\n</section>\n";
         let settings = settings(Some("custom/talk.css"), None);
         let output = dir.join(store::DIR).join("index.html");
         let html = page(body, &settings, dir, store::DIR, &output, false);

@@ -1,21 +1,34 @@
 //! The steps of the slides, numbered in their html, for slides.css to show
 //! and hide as the page says which step it is at.
 //!
-//! A slide is revealed in steps, numbered from 1, the step it opens with.
-//! Each h2 and h3 starts a column, a step of its own. After each column, and
-//! before the first one, come the steps of the elements it marks: every list
-//! item, the elements with a `step`, an `also` or a `data-step`, as raw html
-//! and an SVG's are, and the steps of its math, as `\step{...}` writes them.
-//! Every number the column's ranges start or end at is a step, in order, and
-//! an element shows from the step its range starts at, or its column's, up
-//! to the one it ends at. The first step is what the slide opens with: the
-//! first column, unless a marked element comes before it.
+//! A slide is revealed in steps, numbered from 1, the step it opens with,
+//! which shows its first element, usually its title. Each element after it,
+//! a heading, a paragraph, a code block, is a step of its own, in order, but
+//! one marked as a step itself, which joins the element before it. After
+//! each element, and with the first one, come the steps of the elements it
+//! marks: every list item, the elements with a `step`, an `also` or a
+//! `data-step`, as raw html and an SVG's are, and the steps of its math, as
+//! `\step{...}` writes them. A list shows with its first item, rather than
+//! a step before it. Every number an element's ranges start or end
+//! at is a step, in order, and an element shows from the step its range
+//! starts at, or its own, up to the one it ends at. A `<style>` or a
+//! `<script>` shows nothing, and is no step.
 //!
 //! A heading with `steps="false"`, as `{ steps=false }` writes, shows
-//! everything under it at once, up to the next heading of its level or above:
-//! the elements it marks, and the columns it holds, which join the step before
-//! them. `steps="true"` steps through them again. Outside every such heading,
-//! the slide's `data-steps` decides, from its file's frontmatter.
+//! everything under it along with it, up to the next heading of its level or
+//! above: the elements it marks, and those after it, which join its step.
+//! `steps="true"` steps through them again. Outside every such heading, the
+//! slide's `data-steps` decides, from its file's frontmatter.
+//!
+//! With `steps="parallel"` or `steps="interleave"`, a heading's columns, each
+//! started by a heading under it of the level of the first one, step each on
+//! its own, and are merged: in parallel, the first step of each at the same
+//! step, then the second of each, and so on; interleaved, taking turns, the
+//! first step of each column, one after another, then the second of each.
+//! Their headings show along with the step they join. In a column, the
+//! numbers of a range are the column's steps, its heading's 0, for them to
+//! line up with the other columns', and the steps after it go on as if it
+//! were not there.
 //!
 //! Each element that steps is given the class `step`, and `step-collapse` if
 //! it takes no space while hidden, with the steps it shows in as
@@ -163,6 +176,120 @@ enum Target {
     },
 }
 
+/// How the columns under a heading step: together, each column's first step
+/// at the same step, or taking turns, first one step of each, in order, then
+/// the next of each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Parallel,
+    Interleave,
+}
+
+/// What a part of the slide is made of, in order.
+enum Item {
+    /// An element, with whether it may be a step of its own, and whether the
+    /// steps it marks step.
+    Element {
+        index: usize,
+        step: bool,
+        marks: bool,
+    },
+    /// The columns under a heading, which step as its mode says.
+    Columns { mode: Mode, columns: Vec<Vec<Item>> },
+}
+
+/// A heading whose columns step as its mode says, as they are read.
+struct Frame {
+    level: u8,
+    mode: Mode,
+    /// The level of the headings that start its columns, the level of the
+    /// first one under it.
+    column: Option<u8>,
+    columns: Vec<Vec<Item>>,
+}
+
+/// The items of a slide made of `children`, stepping through them as `steps`
+/// says outside every heading that says otherwise.
+fn items(html: &str, elements: &[Element], children: &[usize], steps: bool) -> Vec<Item> {
+    // Where the next item goes: the column it is in, or the slide.
+    fn target<'a>(slide: &'a mut Vec<Item>, frames: &'a mut [Frame]) -> &'a mut Vec<Item> {
+        match frames.iter_mut().rev().find(|frame| !frame.columns.is_empty()) {
+            Some(frame) => frame.columns.last_mut().unwrap(),
+            None => slide,
+        }
+    }
+    fn close(slide: &mut Vec<Item>, frames: &mut Vec<Frame>) {
+        let frame = frames.pop().unwrap();
+        if !frame.columns.is_empty() {
+            target(slide, frames).push(Item::Columns {
+                mode: frame.mode,
+                columns: frame.columns,
+            });
+        }
+    }
+
+    let mut slide = Vec::new();
+    let mut frames: Vec<Frame> = Vec::new();
+    // The headings whose part of the slide the current child is in, by level,
+    // each with whether steps are on there.
+    let mut scopes: Vec<(u8, bool)> = Vec::new();
+    let on = |scopes: &[(u8, bool)]| scopes.last().map_or(steps, |&(_, on)| on);
+    for &child in children {
+        let element = &elements[child];
+        if UNSHOWN.contains(&element.name.as_str()) {
+            continue;
+        }
+        let level = heading_level(&element.name);
+        let mut mode = None;
+        if let Some(level) = level {
+            while scopes.last().is_some_and(|&(scope, _)| scope >= level) {
+                scopes.pop();
+            }
+            while frames.last().is_some_and(|frame| frame.level >= level) {
+                close(&mut slide, &mut frames);
+            }
+            if let Some(frame) = frames.last_mut()
+                && frame.column.is_none_or(|column| level <= column)
+            {
+                frame.column.get_or_insert(level);
+                frame.columns.push(Vec::new());
+            }
+            mode = match element.attribute(html, "steps") {
+                Some("parallel") => Some(Mode::Parallel),
+                Some("interleave") => Some(Mode::Interleave),
+                _ => None,
+            };
+        }
+        // Whether an element is a step of its own is up to the part of the
+        // slide it is in, and what a heading holds is up to the heading.
+        let step = on(&scopes);
+        if let Some(level) = level {
+            let here = match element.attribute(html, "steps") {
+                Some(value) => value != "false",
+                None => on(&scopes),
+            };
+            scopes.push((level, here));
+        }
+        target(&mut slide, &mut frames).push(Item::Element {
+            index: child,
+            step,
+            marks: on(&scopes),
+        });
+        if let (Some(level), Some(mode)) = (level, mode) {
+            frames.push(Frame {
+                level,
+                mode,
+                column: None,
+                columns: Vec::new(),
+            });
+        }
+    }
+    while !frames.is_empty() {
+        close(&mut slide, &mut frames);
+    }
+    slide
+}
+
 /// Numbers the steps of a slide made of `children`, stepping through them as
 /// `steps` says outside every heading that says otherwise. Returns how many
 /// steps it has.
@@ -173,111 +300,26 @@ fn number_slide(
     steps: bool,
     edits: &mut Vec<Edit>,
 ) -> u32 {
-    struct Group {
-        step: bool,
-        children: Vec<(usize, bool)>,
-    }
-    // The headings whose part of the slide the current child is in, by level,
-    // each with whether steps are on there.
-    let mut scopes: Vec<(u8, bool)> = Vec::new();
-    let on = |scopes: &[(u8, bool)]| scopes.last().map_or(steps, |&(_, on)| on);
-    let mut groups = vec![Group {
-        step: true,
-        children: Vec::new(),
-    }];
-    for &child in children {
-        let element = &elements[child];
-        if let Some(level) = heading_level(&element.name) {
-            while scopes.last().is_some_and(|&(scope, _)| scope >= level) {
-                scopes.pop();
-            }
-            // Whether a column is a step of its own is up to the part of
-            // the slide it is in, and what it holds is up to its heading.
-            if level == 2 || level == 3 {
-                groups.push(Group {
-                    step: on(&scopes),
-                    children: Vec::new(),
-                });
-            }
-            let here = match element.attribute(html, "steps") {
-                Some(value) => value != "false",
-                None => on(&scopes),
-            };
-            scopes.push((level, here));
-        }
-        groups
-            .last_mut()
-            .unwrap()
-            .children
-            .push((child, on(&scopes)));
-    }
-
-    // Later entries win, as an element's own range wins over its column's.
-    let mut shown: Vec<(Target, Shown)> = Vec::new();
-    let mut count = 1;
-    for (i, group) in groups.iter().enumerate() {
-        // What comes before the first heading is always shown.
-        let mut column = 1;
-        if i > 0 {
-            if !((i == 1 && count == 1) || !group.step) {
-                count += 1;
-            }
-            column = count;
-            for &(child, _) in &group.children {
-                let column = Shown {
-                    from: column,
-                    to: None,
-                    collapse: false,
-                };
-                shown.push((Target::Element(child), column));
-            }
-        }
-        let mut parts = Vec::new();
-        let mut latest = 0;
-        for &(child, on) in &group.children {
-            // Unmarked, the element's parts show along with it.
-            if !on {
-                continue;
-            }
-            for (target, mark) in parts_of(html, elements, child) {
-                let range = match mark.step {
-                    Step::Range(range) => range,
-                    Step::Next => Range {
-                        start: Some(latest + 1),
-                        end: None,
-                    },
-                    Step::Also => Range {
-                        start: Some(latest.max(1)),
-                        end: None,
-                    },
-                };
-                if let Some(start) = range.start {
-                    latest = latest.max(start);
-                }
-                parts.push((target, range, mark.collapse));
-            }
-        }
-        let mut bounds: Vec<u32> = parts
-            .iter()
-            .flat_map(|(_, range, _)| [range.start, range.end])
-            .flatten()
-            .collect();
-        bounds.sort_unstable();
-        bounds.dedup();
-        let step = |bound: u32| count + 1 + bounds.binary_search(&bound).unwrap() as u32;
-        for (target, range, collapse) in parts {
-            let from = range.start.map_or(column, step);
-            let to = range.end.map(step);
-            shown.push((target, Shown { from, to, collapse }));
-        }
-        count += bounds.len() as u32;
-    }
-
+    let items = items(html, elements, children, steps);
+    let (shown, count) = number_items(html, elements, &items, false);
+    // The slide counts from the step it opens with, 1.
+    let shown = shown.into_iter().map(|(target, shown)| {
+        let shown = Shown {
+            from: shown.from + 1,
+            to: shown.to.map(|to| to + 1),
+            ..shown
+        };
+        (target, shown)
+    });
     let mut targets: HashMap<Target, Shown> = HashMap::new();
     for (target, steps) in shown {
         targets.insert(target, steps);
     }
     for (target, shown) in targets {
+        // What shows from the start, all along, needs no step.
+        if shown.from == 1 && shown.to.is_none() {
+            continue;
+        }
         let classes = if shown.collapse {
             "step step-collapse"
         } else {
@@ -301,7 +343,220 @@ fn number_slide(
             }
         }
     }
-    count
+    count + 1
+}
+
+/// Numbers the steps of `items`, from 0, the step they open with, and returns
+/// how many come after it. In a column, the numbers of a range are the
+/// column's steps, for them to line up with the other columns', and the
+/// steps after it go on as if it were not there; elsewhere, they are the
+/// steps the element they are in marks, in order, after its own.
+fn number_items(
+    html: &str,
+    elements: &[Element],
+    items: &[Item],
+    column: bool,
+) -> (Vec<(Target, Shown)>, u32) {
+    // The elements of each step, and the columns that open along with it.
+    // The first is the first element, and what joins it.
+    struct Group<'a> {
+        elements: Vec<(usize, bool)>,
+        columns: Vec<(Mode, &'a [Vec<Item>])>,
+    }
+    let new = || Group {
+        elements: Vec::new(),
+        columns: Vec::new(),
+    };
+    let mut groups = vec![new()];
+    let mut first = true;
+    for item in items {
+        match item {
+            &Item::Element { index, step, marks } => {
+                let element = &elements[index];
+                let step = step
+                    && !first
+                    && !matches!(element.name.as_str(), "br" | "wbr")
+                    && element_mark(html, element).is_none();
+                if step {
+                    groups.push(new());
+                }
+                groups.last_mut().unwrap().elements.push((index, marks));
+            }
+            Item::Columns { mode, columns } => {
+                groups.last_mut().unwrap().columns.push((*mode, columns));
+            }
+        }
+        first = false;
+    }
+
+    // Later entries win, as an element's own range wins over its step's.
+    let mut shown: Vec<(Target, Shown)> = Vec::new();
+    let mut count = 0;
+    // In a column, the latest step that is not a range's.
+    let mut cursor = 0;
+    for (i, group) in groups.iter().enumerate() {
+        let marks: Vec<(Target, Mark)> = group
+            .elements
+            .iter()
+            // Unmarked, the element's parts show along with it.
+            .filter(|&&(_, marks)| marks)
+            .flat_map(|&(child, _)| parts_of(html, elements, child))
+            .collect();
+        // A list is shown along with its first item, at the step that item
+        // is, rather than a step before it.
+        let list = i > 0
+            && group
+                .elements
+                .first()
+                .is_some_and(|&(child, _)| matches!(elements[child].name.as_str(), "ul" | "ol"));
+        let own;
+        let parts;
+        if column {
+            own = if i == 0 { 0 } else { cursor + 1 };
+            let latest;
+            (parts, latest) = ranges(&marks, if list { own - 1 } else { own }, false);
+            cursor = latest.max(own);
+            let bounds = parts
+                .iter()
+                .flat_map(|(_, range, _)| [range.start, range.end])
+                .flatten();
+            count = bounds.fold(count.max(cursor), u32::max);
+            // Before its marks, which win over it.
+            for &(child, _) in &group.elements {
+                let own = Shown {
+                    from: own,
+                    to: None,
+                    collapse: false,
+                };
+                shown.push((Target::Element(child), own));
+            }
+            for (target, range, collapse) in parts {
+                let from = range.start.unwrap_or(own);
+                shown.push((target, Shown { from, to: range.end, collapse }));
+            }
+        } else {
+            (parts, _) = ranges(&marks, 0, true);
+            let mut bounds: Vec<u32> = parts
+                .iter()
+                .flat_map(|(_, range, _)| [range.start, range.end])
+                .flatten()
+                .collect();
+            bounds.sort_unstable();
+            bounds.dedup();
+            own = if i == 0 {
+                0
+            } else if list && !bounds.is_empty() {
+                count + 1
+            } else {
+                count += 1;
+                count
+            };
+            // Before its marks, which win over it.
+            for &(child, _) in &group.elements {
+                let own = Shown {
+                    from: own,
+                    to: None,
+                    collapse: false,
+                };
+                shown.push((Target::Element(child), own));
+            }
+            let step = |bound: u32| count + 1 + bounds.binary_search(&bound).unwrap() as u32;
+            for (target, range, collapse) in parts {
+                let from = range.start.map_or(own, step);
+                let to = range.end.map(step);
+                shown.push((target, Shown { from, to, collapse }));
+            }
+            count += bounds.len() as u32;
+        }
+        for &(mode, columns) in &group.columns {
+            let (merged, length) = merge(html, elements, mode, columns);
+            // The columns open with the step they join, and step after it.
+            let at = |step: u32| if step == 0 { own } else { count + step };
+            for (target, merged) in merged {
+                let from = at(merged.from);
+                let to = merged.to.map(at);
+                shown.push((target, Shown { from, to, ..merged }));
+            }
+            count += length;
+        }
+    }
+    (shown, count)
+}
+
+/// The ranges of `marks`, after the step `latest`: one with none comes one
+/// after the latest one so far, and an `also` along with it, and the latest.
+/// Where a range's start is not one of the steps, as in a column, it does not
+/// count as the latest.
+fn ranges(
+    marks: &[(Target, Mark)],
+    mut latest: u32,
+    ranges_count: bool,
+) -> (Vec<(Target, Range, bool)>, u32) {
+    let start = latest;
+    let mut ranges = Vec::new();
+    for (target, mark) in marks {
+        let range = match mark.step {
+            Step::Range(range) => range,
+            Step::Next => Range {
+                start: Some(latest + 1),
+                end: None,
+            },
+            Step::Also => Range {
+                start: Some(latest.max(start + 1)),
+                end: None,
+            },
+        };
+        if let Some(start) = range.start
+            && (ranges_count || !matches!(mark.step, Step::Range(_)))
+        {
+            latest = latest.max(start);
+        }
+        ranges.push((target.clone(), range, mark.collapse));
+    }
+    (ranges, latest)
+}
+
+/// The steps of columns, numbered each on its own and merged as `mode` says,
+/// from 0, the step they open with, and how many come after it.
+fn merge(
+    html: &str,
+    elements: &[Element],
+    mode: Mode,
+    columns: &[Vec<Item>],
+) -> (Vec<(Target, Shown)>, u32) {
+    let numbered: Vec<_> = columns
+        .iter()
+        .map(|column| number_items(html, elements, column, true))
+        .collect();
+    let lengths: Vec<u32> = numbered.iter().map(|&(_, length)| length).collect();
+    // The step that the `step`th of a column is merged at.
+    let at = |column: usize, step: u32| match mode {
+        Mode::Parallel => step,
+        Mode::Interleave if step == 0 => 0,
+        // After every turn before this one, and those of the columns before
+        // it in this one.
+        Mode::Interleave => {
+            let before: u32 = lengths.iter().map(|&length| length.min(step - 1)).sum();
+            let beside = lengths[..column]
+                .iter()
+                .filter(|&&length| length >= step)
+                .count() as u32;
+            before + beside + 1
+        }
+    };
+    let length = match mode {
+        Mode::Parallel => lengths.iter().copied().max().unwrap_or(0),
+        Mode::Interleave => lengths.iter().sum(),
+    };
+    let mut merged = Vec::new();
+    for (column, (shown, _)) in numbered.into_iter().enumerate() {
+        for (target, shown) in shown {
+            let from = at(column, shown.from);
+            let to = shown.to.map(|to| at(column, to));
+            merged.push((target, Shown { from, to, ..shown }));
+        }
+    }
+    (merged, length)
 }
 
 /// Appends `value` to an attribute of `element`, after `separator`, or adds
@@ -402,8 +657,13 @@ fn math_marks(html: &str, text: Span<usize>) -> Vec<(Target, Mark)> {
             Some(range) => (range, true),
             None => (written, false),
         };
-        let Some(range) = Range::parse(range) else {
-            continue;
+        let step = match range {
+            "next" => Step::Next,
+            "also" => Step::Also,
+            range => match Range::parse(range) {
+                Some(range) => Step::Range(range),
+                None => continue,
+            },
         };
         at += close + 1;
         let (argument, end) = tex_argument(html, at..text.end);
@@ -412,10 +672,7 @@ fn math_marks(html: &str, text: Span<usize>) -> Vec<(Target, Mark)> {
                 span: start..end,
                 argument,
             },
-            Mark {
-                step: Step::Range(range),
-                collapse,
-            },
+            Mark { step, collapse },
         ));
         at = end;
     }
@@ -515,6 +772,9 @@ impl Element {
             .is_some_and(|classes| classes.split_ascii_whitespace().any(|name| name == class))
     }
 }
+
+/// Elements that show nothing on a slide.
+const UNSHOWN: &[&str] = &["link", "meta", "script", "style", "template"];
 
 /// Elements that are never closed.
 const VOID: &[&str] = &[
@@ -727,35 +987,44 @@ mod tests {
     #[test]
     fn list_items_step_one_after_another() {
         let html = "<section>\n<h1>Title</h1>\n<ul>\n<li>a</li>\n<li>b</li>\n</ul>\n</section>\n";
-        assert_eq!(steps(html), ["count 3", "li --from:2", "li --from:3"]);
+        assert_eq!(
+            steps(html),
+            ["count 3", "ul --from:2", "li --from:2", "li --from:3"]
+        );
         assert_eq!(
             number(html),
-            "<section data-count=\"3\">\n<h1>Title</h1>\n<ul>\n<li class=\"step\" style=\"--from:2\">a</li>\n<li class=\"step\" style=\"--from:3\">b</li>\n</ul>\n</section>\n"
+            "<section data-count=\"3\">\n<h1>Title</h1>\n<ul class=\"step\" style=\"--from:2\">\n<li class=\"step\" style=\"--from:2\">a</li>\n<li class=\"step\" style=\"--from:3\">b</li>\n</ul>\n</section>\n"
         );
     }
 
     #[test]
-    fn each_column_is_a_step_followed_by_its_own() {
-        let html = "<section><h1>T</h1><h2>A</h2><ul><li>a</li></ul><h2>B</h2><p>b</p></section>";
+    fn each_element_after_the_first_is_a_step_followed_by_its_own() {
+        let html = "<section><style>p {}</style><h1>T</h1><h3>A</h3><ul><li>a</li></ul><p>b <span step>c</span></p><h3>B</h3></section>";
         assert_eq!(
             steps(html),
             [
-                "count 3",
-                "h2 --from:1",
-                "ul --from:1",
-                "li --from:2",
-                "h2 --from:3",
-                "p --from:3",
+                "count 6",
+                "h3 --from:2",
+                "ul --from:3",
+                "li --from:3",
+                "p --from:4",
+                "span --from:5",
+                "h3 --from:6",
             ]
         );
     }
 
     #[test]
-    fn a_marked_element_before_the_first_column_comes_first() {
-        let html = "<section><p step>a</p><h3>A</h3><p>b</p></section>";
+    fn a_marked_element_joins_the_step_before_it() {
+        let html = "<section><h1>T</h1><p>a</p><p step=\"..2\" collapse>b</p><p step=\"2\" collapse>c</p></section>";
         assert_eq!(
             steps(html),
-            ["count 3", "p --from:2", "h3 --from:3", "p --from:3"]
+            [
+                "count 3",
+                "p --from:2",
+                "p* --from:2;--to:3",
+                "p* --from:3",
+            ]
         );
     }
 
@@ -779,12 +1048,67 @@ mod tests {
     #[test]
     fn steps_can_be_turned_off_by_a_heading_or_the_slide() {
         let html = "<section><h1 steps=\"false\">T</h1><ul><li>a</li></ul><h2>A</h2><ul><li>b</li></ul></section>";
-        assert_eq!(steps(html), ["count 1", "h2 --from:1", "ul --from:1"]);
-        let html = "<section data-steps=\"false\"><ul><li>a</li></ul><h2 steps=\"true\">A</h2><ul><li>b</li></ul></section>";
+        assert_eq!(steps(html), ["count 1"]);
+        let html = "<section><h1>T</h1><h3 steps=\"false\">A</h3><p>a</p><ul><li>b</li></ul><h3>B</h3></section>";
         assert_eq!(
             steps(html),
-            ["count 2", "h2 --from:1", "ul --from:1", "li --from:2"]
+            ["count 3", "h3 --from:2", "p --from:2", "ul --from:2", "h3 --from:3"]
         );
+        let html = "<section data-steps=\"false\"><ul><li>a</li></ul><h2 steps=\"true\">A</h2><ul><li>b</li></ul><p>c</p></section>";
+        assert_eq!(
+            steps(html),
+            ["count 3", "ul --from:2", "li --from:2", "p --from:3"]
+        );
+    }
+
+    #[test]
+    fn parallel_columns_step_together() {
+        let html = "<section><h1 steps=\"parallel\">T</h1><h3>A</h3><ul><li>a</li><li>b</li></ul><h3>B</h3><p>c</p></section>";
+        assert_eq!(
+            steps(html),
+            ["count 3", "ul --from:2", "li --from:2", "li --from:3", "p --from:2"]
+        );
+    }
+
+    #[test]
+    fn interleaved_columns_take_turns() {
+        let html = "<section><h1 steps=\"interleave\">T</h1><h3>A</h3><ul><li>a</li><li>b</li></ul><h3>B</h3><ul><li>c</li></ul><h3>C</h3><p>d</p><p>e</p></section>";
+        assert_eq!(
+            steps(html),
+            [
+                "count 6",
+                "ul --from:2",
+                "li --from:2",
+                "li --from:5",
+                "ul --from:3",
+                "li --from:3",
+                "p --from:4",
+                "p --from:6",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_range_in_a_column_is_a_step_of_the_column() {
+        // `3` is the column's third step, as `c` is the other's.
+        let html = "<section><h1>T</h1><h2 steps=\"parallel\">S</h2><h3>A</h3><ul><li>a</li><li>b</li><li>c</li></ul><h3>B</h3><p step=\"3\">d</p><p><span class=\"math\">x \\htmlData{step=..2}{y}\\htmlData{step=next}{z}</span></p><h2>U</h2></section>";
+        assert_eq!(
+            steps(html),
+            [
+                "count 6",
+                "h2 --from:2",
+                "h3 --from:2",
+                "ul --from:3",
+                "li --from:3",
+                "li --from:4",
+                "li --from:5",
+                "h3 --from:2",
+                "p --from:5",
+                "p --from:3",
+                "h2 --from:6",
+            ]
+        );
+        assert!(number(html).contains("x \\htmlStyle{--from:3;--to:4}{\\htmlClass{step}{y}}\\htmlStyle{--from:4}{\\htmlClass{step}{z}}"));
     }
 
     #[test]
@@ -797,10 +1121,10 @@ mod tests {
     }
 
     #[test]
-    fn math_steps_count_as_steps_of_their_column() {
+    fn math_steps_count_as_steps_of_their_element() {
         let html = "<section><ul><li>a</li></ul><p><span class=\"math\">\\htmlData{step=3}{x}</span></p></section>";
-        assert_eq!(steps(html), ["count 3", "li --from:2"]);
-        assert!(number(html).contains("\\htmlStyle{--from:3}{\\htmlClass{step}{x}}"));
+        assert_eq!(steps(html), ["count 4", "li --from:2", "p --from:3"]);
+        assert!(number(html).contains("\\htmlStyle{--from:4}{\\htmlClass{step}{x}}"));
     }
 
     #[test]
@@ -828,7 +1152,10 @@ mod tests {
     #[test]
     fn markup_that_is_not_an_element_is_passed_over() {
         let html = "<section><!-- <li> --><pre><code>&lt;li&gt;</code></pre><script>if (a <li) {}</script><br><img src=x><ul><li>a</ul></section>";
-        assert_eq!(steps(html), ["count 2", "li --from:2"]);
+        assert_eq!(
+            steps(html),
+            ["count 3", "img --from:2", "ul --from:3", "li --from:3"]
+        );
     }
 
     #[test]

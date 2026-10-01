@@ -59,7 +59,7 @@ Plain CommonMark: **bold**, *italic*, `code`, [links](https://example.com), > qu
   other keys, such as a title or author, are ignored.
 - `#` is the slide title. `##` is a full-width subtitle, which counts as a
   step. Each `###` starts a column, and consecutive `###` columns sit side by
-  side. Content before the first `##`/`###` shows at once.
+  side.
 - Headings take attributes: `# Title { #some-id .some-class }`, and
   `{ steps=false }` turns stepping off for that heading's content.
 - `<import-slide src="sections/intro.md" />` inlines another markdown file's
@@ -71,13 +71,24 @@ Plain CommonMark: **bold**, *italic*, `code`, [links](https://example.com), > qu
 
 By default, reveals happen in document order:
 
-- Each list item (nested ones too) is one step.
-- Each `##` subtitle and `###` column is a step, and its list items follow.
-- Any HTML element with a `step` attribute steps: `<span step>`. `also`
-  shows it together with the previous step: `<span also>`.
+- The slide opens with its first element, usually the `#` title.
+- Each element after it (heading, paragraph, code block, figure, quote) is
+  one step, in order.
+- A list is not a step itself: each of its items (nested ones too) is one.
+- Any HTML element with a `step` attribute steps: `<span step>`, one step
+  after the element it is in. `also` shows it together with the previous
+  step: `<span also>`. An element with a `step` of its own joins the step
+  before it, instead of being a step itself.
 - Explicit ranges use Rust syntax: `step="2..4"` shows from step 2 up to
   (not including) 4, `step="..3"` until 3, and `step="3.."` or `step="3"`
-  from 3 on.
+  from 3 on. They count from the step of the element they are in (or join),
+  in order: `1` is the first step after it shows.
+- `{ steps=parallel }` on a heading makes the `###` columns under it step
+  together: the first step of each column at once, then the second of each.
+  `{ steps=interleave }` makes them take turns: the first step of each
+  column, one after another, then the second of each. Inside such a column,
+  range numbers are that column's steps (its heading is 0), so
+  `step="3"` or `\step[3..]{...}` shows with the other columns' third step.
 - `collapse` makes a hidden element take no space. Use it to swap content in
   place:
 

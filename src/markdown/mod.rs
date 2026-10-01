@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use pulldown_cmark::{
-    CodeBlockKind, Event, HeadingLevel, OffsetIter, Options, Parser, Tag, TagEnd, html,
+    CodeBlockKind, Event, OffsetIter, Options, Parser, Tag, TagEnd, html,
 };
 
 use crate::aspect::{self, AspectRatio};
@@ -71,7 +71,6 @@ pub fn render(markdown: &str, path: &Path) -> File {
     let mut metadata = false;
     let mut frontmatter = String::new();
     let mut code: Option<String> = None;
-    let mut steps = math::Steps::default();
     let mut cells = Vec::new();
     // The events are consumed by the time the cells are needed again.
     let cell_codes = &mut cells;
@@ -112,7 +111,6 @@ pub fn render(markdown: &str, path: &Path) -> File {
             for line in raw.lines() {
                 match import_src(line) {
                     Some(src) => {
-                        steps.reset();
                         let path = canonical(&dir.join(src));
                         html.push_str("</section>\n");
                         html.push(IMPORT);
@@ -129,19 +127,10 @@ pub fn render(markdown: &str, path: &Path) -> File {
         }
         // Every other rule delimits two slides.
         Event::Rule => {
-            steps.reset();
             Some(Event::Html("</section>\n<section>\n".into()))
         }
-        // Each h2 and h3 starts a column, which counts its steps from one.
-        event @ Event::Start(Tag::Heading {
-            level: HeadingLevel::H2 | HeadingLevel::H3,
-            ..
-        }) => {
-            steps.reset();
-            Some(event)
-        }
-        Event::InlineMath(tex) => Some(Event::InlineMath(steps.number(&tex).into())),
-        Event::DisplayMath(tex) => Some(Event::DisplayMath(steps.number(&tex).into())),
+        Event::InlineMath(tex) => Some(Event::InlineMath(math::number(&tex).into())),
+        Event::DisplayMath(tex) => Some(Event::DisplayMath(math::number(&tex).into())),
         event => Some(event),
     });
 

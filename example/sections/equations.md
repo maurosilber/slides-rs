@@ -13,7 +13,7 @@ $$
 
 ---
 
-# Rewriting an equation
+# Rewriting an equation { steps=parallel }
 
 ### `\step`: hidden, it keeps its space
 

@@ -23,7 +23,7 @@ A `#` heading is the slide's title, a `##` a subtitle, and each `###` a column.
 
 # Columns
 
-Before the first heading, everything shows at once.
+After the title, each element is a step: this paragraph, each heading, each item.
 
 ### Left
 
@@ -64,6 +64,34 @@ Before the first heading, everything shows at once.
 - every item
 - shows with its heading,
 - as `{ steps=false }` says.
+
+---
+
+# Columns in parallel { steps=parallel }
+
+### Plain
+
+- With `{ steps=parallel }`,
+- the columns under a heading
+- step together.
+
+### Ranged
+
+<p step="3">A range in a column is a step of the column: this is its third.</p>
+
+---
+
+# Columns taking turns { steps=interleave }
+
+### Question
+
+- What steps?
+- In which order?
+
+### Answer
+
+- Every element, in turn,
+- one column after the other.
 
 ---
 
