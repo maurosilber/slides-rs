@@ -46,7 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	if (canRunCells()) {
 		const kernels = new Kernels(NOTEBOOK, context.extensionUri, log);
-		const previews = new Previews(context.extensionUri, decks, log);
+		const previews = new Previews(context.extensionUri, module, decks, log);
 		context.subscriptions.push(
 			kernels,
 			previews,

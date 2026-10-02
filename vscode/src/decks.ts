@@ -14,7 +14,7 @@ export const LANGUAGE = 'slides';
 export const SELECTOR: vscode.DocumentFilter[] = [{ language: 'markdown' }, { language: LANGUAGE }];
 
 /** An import, as a line of the markdown writes it, which src/markdown/mod.rs reads the same way. */
-const IMPORT = /^\s*<import-slide\s*src="([^"]*)"/;
+export const IMPORT = /^\s*<import-slide\s*src="([^"]*)"/;
 
 /** A tilde fence, which opens a code cell. */
 const CELL = /^ {0,3}~~~/m;
