@@ -56,7 +56,12 @@ export class Previews implements vscode.Disposable {
 			watch = started;
 		}
 		try {
-			await open(await watch.page);
+			// Where the cursor is, if the file is in a text editor, which a tab that shows the
+			// page already goes to rather than back to the first slide.
+			const at = this.cursor(uri);
+			const page = await watch.page;
+			const fragment = await at.then(({ slide, step }) => `${slide}.${step}`, () => undefined);
+			await open(page, fragment);
 		} catch (error) {
 			const message = `Could not render ${vscode.workspace.asRelativePath(uri)}: ${error instanceof Error ? error.message : error}`;
 			this.log.error(message);
@@ -68,19 +73,33 @@ export class Previews implements vscode.Disposable {
 	 * the browser shows, which only the integrated browser can be told to. */
 	private async saved(document: vscode.TextDocument) {
 		const watches = [...this.watches.values()].filter((watch) => watch.uri.toString() === document.uri.toString());
-		const editor = [vscode.window.activeTextEditor, ...vscode.window.visibleTextEditors].find((editor) => editor?.document === document);
-		if (watches.length === 0 || !editor || !(await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER)) {
+		if (watches.length === 0 || !(await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER)) {
 			return;
 		}
 		// Found as the save has it, before the render that follows it is done.
-		const line = editor.selection.active.line;
-		const at = position(this.module, document.uri, document.getText(), line);
-		at.catch((error) => this.log.error(`${vscode.workspace.asRelativePath(document.uri)}: could not find the slide at line ${line + 1}: ${error}`));
+		const at = this.cursor(document.uri);
+		at.catch(() => {});
 		for (const watch of watches) {
 			watch.nextRender(async (page) => {
 				const { slide, step } = await at;
 				await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page, `${slide}.${step}`));
 			});
+		}
+	}
+
+	/** Where the cursor of the text editor of the file at `uri` is on the page, which
+	 * fails if no text editor shows the file. */
+	private async cursor(uri: vscode.Uri): Promise<{ slide: number; step: number }> {
+		const editor = [vscode.window.activeTextEditor, ...vscode.window.visibleTextEditors].find((editor) => editor?.document.uri.toString() === uri.toString());
+		if (!editor) {
+			throw new Error('no text editor shows it');
+		}
+		const line = editor.selection.active.line;
+		try {
+			return await position(this.module, uri, editor.document.getText(), line);
+		} catch (error) {
+			this.log.error(`${vscode.workspace.asRelativePath(uri)}: could not find the slide at line ${line + 1}: ${error}`);
+			throw error;
 		}
 	}
 
@@ -173,13 +192,13 @@ class Watch implements vscode.Disposable {
 	}
 }
 
-/** Opens the page in the integrated browser, in the tab that shows it already if one
- * does, or else in the default browser. */
-async function open(page: string) {
+/** Opens the page in the integrated browser, at `#slide.step` if given, in the tab that
+ * shows it already if one does, or else in the default browser. */
+async function open(page: string, fragment?: string) {
 	const uri = vscode.Uri.file(page);
 	const commands = await vscode.commands.getCommands(true);
 	if (commands.includes(INTEGRATED_BROWSER)) {
-		await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page));
+		await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page, fragment));
 	} else {
 		await vscode.env.openExternal(uri);
 	}
