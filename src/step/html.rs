@@ -11,7 +11,8 @@
 //! `\step{...}` writes them. A list shows with its first item, rather than
 //! a step before it. The numbers of a range are the slide's steps, wherever
 //! the element is, and an element shows from the step its range starts at,
-//! or its own, up to the one it ends at. A `<style>` or a
+//! or its own, up to the one it ends at, but from the earliest step of what
+//! it holds, if earlier, as an SVG does with its elements. A `<style>` or a
 //! `<script>` shows nothing, and is no step.
 //!
 //! A heading with `steps="false"`, as `{ steps=false }` writes, shows
@@ -213,7 +214,9 @@ type Edit = (Span<usize>, String);
 
 /// The html with each edit made, none of which overlap.
 fn apply(html: &str, mut edits: Vec<Edit>) -> String {
-    edits.sort_by_key(|(span, _)| span.start);
+    // Where one ends where another begins, the one that ends there goes
+    // first, as a step of math within another ends before it.
+    edits.sort_by_key(|(span, _)| (span.start, span.end));
     let mut edited = String::with_capacity(html.len() + edits.len() * 24);
     let mut at = 0;
     for (span, text) in edits {
@@ -414,11 +417,12 @@ fn number_slide(
                 append(html, element, "class", " ", classes, edits);
                 append(html, element, "style", ";", &vars, edits);
             }
+            // Written around its argument, rather than over it, for the
+            // steps within it to be written too.
             Target::Math { span, argument } => {
-                let argument = &html[argument];
-                let tex =
-                    format!("\\htmlStyle{{{vars}}}{{\\htmlClass{{{classes}}}{{{argument}}}}}");
-                edits.push((span, tex));
+                let open = format!("\\htmlStyle{{{vars}}}{{\\htmlClass{{{classes}}}{{");
+                edits.push((span.start..argument.start, open));
+                edits.push((argument.end..span.end, "}}".to_string()));
             }
         }
     }
@@ -498,6 +502,35 @@ fn resolve_slide(
                 .as_ref()
                 .and_then(|to| resolve(to, &named, &targets, 0));
             (target.clone(), from, to, shown.collapse)
+        })
+        .collect();
+    // An element shows from the earliest step of what it holds, if earlier
+    // than its own, as a hidden one hides all it holds: an SVG, from the
+    // first of its elements that step, and a step of math, from the first of
+    // those within it.
+    let starts: Vec<(usize, u32)> = resolved
+        .iter()
+        .map(|(target, from, _, _)| {
+            let at = match target {
+                Target::Element(index) => elements[*index].start,
+                Target::Math { span, .. } => span.start,
+            };
+            (at, *from)
+        })
+        .collect();
+    let resolved: Vec<Resolved> = resolved
+        .into_iter()
+        .map(|(target, from, to, collapse)| {
+            let inside = match &target {
+                Target::Element(index) => elements[*index].text.clone().unwrap_or_default(),
+                Target::Math { argument, .. } => argument.clone(),
+            };
+            let from = starts
+                .iter()
+                .filter(|(at, _)| inside.contains(at))
+                .map(|&(_, start)| start)
+                .fold(from, u32::min);
+            (target, from, to, collapse)
         })
         .collect();
     let count = resolved
@@ -851,7 +884,7 @@ fn math_marks(html: &str, text: Span<usize>) -> Vec<(Target, Mark)> {
             },
             Mark { step, collapse },
         ));
-        at = end;
+        // It goes on within its argument, which may hold steps of its own.
     }
     marks
 }
@@ -1231,10 +1264,18 @@ mod tests {
                 "p --from:2",
                 "p --from:3",
                 "p --from:4",
-                "svg --from:5",
+                "svg --from:3",
                 "g --from:3"
             ]
         );
+    }
+
+    #[test]
+    fn an_element_shows_from_the_earliest_step_it_holds() {
+        // As matplotlib's figure, with `fig.set_gid("step=1")`, shows from
+        // the start, and a line in it at a step of its own.
+        let html = "<section><h1>T</h1><p>a</p><svg><g step=\"1\"><g step=\"3\"></g></g></svg></section>";
+        assert_eq!(steps(html), ["count 3", "p --from:2", "g --from:3"]);
     }
 
     #[test]
@@ -1374,6 +1415,23 @@ mod tests {
         let html = "<section><ul><li>a</li></ul><p><span class=\"math\">\\htmlData{step=4}{x}</span></p></section>";
         assert_eq!(steps(html), ["count 4", "li --from:2", "p --from:3"]);
         assert!(number(html).contains("\\htmlStyle{--from:4}{\\htmlClass{step}{x}}"));
+    }
+
+    #[test]
+    fn math_steps_within_math_steps_are_written_too() {
+        let html = "<section><h1>T</h1><p><span class=\"math\">\\htmlData{step=3}{x \\htmlData{step=4} y}</span></p></section>";
+        assert_eq!(
+            number(html),
+            "<section data-count=\"4\"><h1>T</h1><p class=\"step\" style=\"--from:2\"><span class=\"math\">\\htmlStyle{--from:3}{\\htmlClass{step}{x \\htmlStyle{--from:4}{\\htmlClass{step}{y}}}}</span></p></section>"
+        );
+    }
+
+    #[test]
+    fn a_math_step_shows_from_the_earliest_step_it_holds() {
+        let html = "<section><h1>T</h1><p>a</p><p>b</p><p><span class=\"math\">\\htmlData{step=next}{x \\htmlData{step=2}{y}}</span></p></section>";
+        assert!(number(html).contains(
+            "\\htmlStyle{--from:2}{\\htmlClass{step}{x \\htmlStyle{--from:2}{\\htmlClass{step}{y}}}}"
+        ));
     }
 
     #[test]
