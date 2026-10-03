@@ -44,9 +44,9 @@ XLINK = "http://www.w3.org/1999/xlink"
 ET.register_namespace("", SVG)
 ET.register_namespace("xlink", XLINK)
 
-#: An id that marks a step, as src/step.rs reads it: ``step=2..4``, ``step``,
-#: ``also``, starred if it collapses.
-STEP = re.compile(r"^(step|also)(\*)?(?:=(.*))?$")
+#: An id that marks a step, as src/step.rs reads it: ``step=2..4`` or
+#: ``step``, starred if it collapses.
+STEP = re.compile(r"^step(\*)?(?:=(.*))?$")
 
 #: The parts of a slider :meth:`Slider.style` styles, by the element each is.
 PARTS = {
@@ -503,8 +503,8 @@ def _rename(root: ET.Element, ids: dict[str, int], prefix: str) -> ET.Element:
                 path.set("id", rename(name))
         mark = STEP.match(value.strip())
         if mark:
-            kind, collapse, steps = mark.groups()
-            element.set(kind, steps or "")
+            collapse, steps = mark.groups()
+            element.set("step", steps or "")
             if collapse:
                 element.set("collapse", "")
         elif value.strip() in ids and "id" not in element.attrib:

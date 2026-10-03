@@ -75,26 +75,35 @@ By default, reveals happen in document order:
 - Each element after it (heading, paragraph, code block, figure, quote) is
   one step, in order.
 - A list is not a step itself: each of its items (nested ones too) is one.
-- Any HTML element with a `step` attribute steps: `<span step>`, one step
-  after the element it is in. `also` shows it together with the previous
-  step: `<span also>`. An element with a `step` of its own joins the step
-  before it, instead of being a step itself.
+- `step` is the only attribute that controls steps. Any HTML element with a
+  `step` attribute steps: `<span step>` is one step after the latest. An
+  element with a `step` of its own joins the step before it, instead of
+  being a step itself.
 - Explicit ranges use Rust syntax: `step="2..4"` shows from step 2 up to
   (not including) 4, `step="..3"` until 3, and `step="3.."` or `step="3"`
   from 3 on. They are the slide's steps, wherever the element is: `1` is
-  the step the slide opens with. For steps relative to an element, name it
-  and count from its name, as `@a+1` (see below).
+  the step the slide opens with.
+- Signed numbers are relative: `step="+1"`, `+0` or `-1` count from the
+  step of the previous sibling that steps, or, if there is none, from the
+  element it is inside: `<li step="+0">` shows with the item before it,
+  `<span step="+1">` one step after its paragraph. They work in ranges too,
+  as `step="+0..+2"`, and inside a column they count in that column's
+  steps. To count from an element elsewhere, name it and count from its
+  name, as `a+1` (see below).
 - `{ steps=parallel }` on a heading makes the `###` columns under it step
   together: the first step of each column at once, then the second of each.
   `{ steps=interleave }` makes them take turns: the first step of each
   column, one after another, then the second of each. Inside such a column,
   range numbers are that column's steps (its heading is 0), so
   `step="3"` or `\step[3..]{...}` shows with the other columns' third step.
-- Name a step to sync with it from anywhere on the slide: `label="a"` names
-  the step an element shows at (on a heading, `### Method { label=a }`), and
-  `step="a"` (or `\step[a]{...}`, or `gid="step=a"`) marks the next step and
-  names it. A range bound can then be `@a`, `@a+1` or `@a-1`:
-  `<p step="@a+1">`, `\step[@a..@b]{...}`, or `Step("@a", "@a+2")` in Python.
+- Name a step to sync with it from anywhere on the slide: `step="a"` (on a
+  heading, `### Method { step=a }`, in math `\step[a]{...}`, in a figure
+  `gid="step=a"`) is a step of its own, as an unmarked element would be,
+  named `a`. Refer to it with the name and a signed offset: `a+0` is the same
+  step, `a+1` one after, `a-1` one before, as `<p step="a+0">`,
+  `\step[a+0..b+0]{...}`, or `Step("a+0", "a+2")` in Python. Use `step="a"`
+  only once per slide: a repeated name stays with the first step, and the
+  renderer and the VS Code extension warn, suggesting `a+0`.
 - `collapse` makes a hidden element take no space. Use it to swap content in
   place:
 
@@ -107,9 +116,10 @@ By default, reveals happen in document order:
 
 Use `$inline$` and `$$display$$`. Parts of an equation can step:
 
-- `\step{...}` appears one step after the latest, and `\also{...}` appears
-  along with it.
-- `\step[2..4]{...}` takes an explicit range, as above.
+- `\step{...}` appears one step after the latest.
+- `\step[2..4]{...}` takes an explicit range, as above, and `\step[+1]{...}`
+  counts from the step of the `\step` before it, or the one it is inside:
+  `\step{x + 1} &\step[+0]{= \pm 2}` shows both sides together.
 - A hidden `\step{}` keeps its space, while `\step*{}` takes none. Use
   `\step*` to rewrite an expression in place:
 
@@ -164,10 +174,14 @@ matplotlib writes an artist's `gid` into the SVG, and slides-rs reads it as
 that artist's step:
 
 ```python
-plt.plot(x, np.sin(x), gid="step")                           # next step
-plt.plot(x, np.cos(x), gid="step")                           # the one after
-plt.fill_between(x, np.sin(x), np.cos(x), alpha=.2, gid="also")  # with the previous
+plt.plot(x, np.sin(x), gid="step")                               # next step
+plt.plot(x, np.cos(x), gid="step=cos")                           # the one after, named
+plt.fill_between(x, np.sin(x), np.cos(x), alpha=.2, gid="step=cos+0")  # with the cosine
 ```
+
+Relative steps (`step=+0`) follow the SVG's order, which is matplotlib's
+drawing order (by `zorder`: patches and fills before lines), not the order of
+the code. To show an artist with another one, name it as above.
 
 `slides_rs.Step` builds range gids. It is a `str` subclass, so it can be
 passed directly as `gid=`:
@@ -180,6 +194,7 @@ Step(3)                    # "step=3.."   from 3 on
 Step(stop=3)               # "step=..3"   until 3
 Step()                     # "step=.."    always
 Step(1, 3, collapse=True)  # "step*=1..3" collapse variant
+Step("+0", "+2")           # "step=+0..+2" from the previous stepping artist's step
 
 step = Step(1, 2)
 for i, phase in enumerate(phases):

@@ -17,7 +17,9 @@ ROOT = pathlib.Path(__file__).parents[2]
         (Step(stop=3), "step=..3"),
         (Step(), "step=.."),
         (Step(1, 3, collapse=True), "step*=1..3"),
-        (Step("@a", "@b-1"), "step=@a..@b-1"),
+        (Step("a+0", "b-1"), "step=a+0..b-1"),
+        (Step("+0", "+2"), "step=+0..+2"),
+        (Step("-1"), "step=-1.."),
     ],
 )
 def test_it_is_written_as_the_deck_reads_it(step, text):
@@ -82,11 +84,22 @@ def test_a_figure_steps_on_its_slide(slides_rs, tmp_path):
 
 
 def test_a_bound_from_a_name_moves_along():
-    assert Step("@a").next(2) == Step("@a+2")
-    assert Step("@a+1", 4).previous() == Step("@a", 3)
-    assert Step(stop="@a").previous(2) == Step(stop="@a-2")
+    assert Step("a+0").next(2) == Step("a+2")
+    assert Step("a+1", 4).previous() == Step("a+0", 3)
+    assert Step(stop="a+0").previous(2) == Step(stop="a-2")
 
 
 def test_a_bound_that_is_no_name_is_refused():
     with pytest.raises(ValueError):
         Step("a")
+    with pytest.raises(ValueError):
+        Step("")
+    with pytest.raises(ValueError):
+        Step("1")
+    with pytest.raises(ValueError):
+        Step("@a+1")
+
+
+def test_a_bound_from_the_one_before_moves_along():
+    assert Step("+0", "+2").next() == Step("+1", "+3")
+    assert Step("+1").previous(2) == Step("-1")

@@ -71,6 +71,8 @@ export interface SlideSteps {
 	count: number;
 	/** What steps in it, in order, but what shows from the start all along. */
 	steps: { line: number; from: number; to: number | null; collapse: boolean }[];
+	/** What is wrong with how it steps, by line. */
+	warnings: { line: number; message: string }[];
 }
 
 export class Module {

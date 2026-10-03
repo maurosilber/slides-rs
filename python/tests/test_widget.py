@@ -132,4 +132,4 @@ def test_a_motion_of_another_figure_is_refused(figure):
 
 def test_the_slider_is_no_step_of_the_deck(figure):
     (input,) = re.findall(r"<input[^>]*>", Slider(*figure)._repr_html_())
-    assert not re.search(r"\s(step|also|data-step)=", input)
+    assert not re.search(r"\s(step|data-step)=", input)

@@ -118,6 +118,22 @@ const tests = {
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
 
+	async 'a step named again is warned of on its line, with the name to show along with it'() {
+		const dir = path.join(process.env.SLIDES_DECK, 'names');
+		fs.mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, 'talk.slides.md');
+		fs.writeFileSync(file, '# One\n\n<p step="a">a</p>\n\n<p step="a">b</p>\n');
+		const document = await vscode.workspace.openTextDocument(file);
+		await vscode.window.showTextDocument(document);
+		const [warning] = await until(() => {
+			const diagnostics = vscode.languages.getDiagnostics(document.uri).filter((diagnostic) => diagnostic.source === 'slides');
+			return diagnostics.length > 0 && diagnostics;
+		});
+		assert.strictEqual(warning.range.start.line, 4);
+		assert.strictEqual(warning.severity, vscode.DiagnosticSeverity.Warning);
+		assert.match(warning.message, /`a\+0`/);
+	},
+
 	async 'the code cells are completed, hovered and defined as a Python file of their own would be'() {
 		const dir = path.join(process.env.SLIDES_DECK, 'python');
 		fs.mkdirSync(dir, { recursive: true });

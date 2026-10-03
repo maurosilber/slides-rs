@@ -97,7 +97,7 @@ After the title, each element is a step: this paragraph, each heading, each item
 
 # Named steps
 
-### Method { label=method }
+### Method { step=method }
 
 - expand
 - complete the square
@@ -108,8 +108,8 @@ $$
 x^2 + 2x - 3 = \step[square]{(x + 1)^2 - 4}
 $$
 
-<p step="@method+1">A <code>label</code> names a step, and <code>@method+1</code> shows one after it.</p>
-<p step="@square">This shows with the square, named by <code>\step[square]</code>.</p>
+<p step="method+1">A <code>step</code> names a step, and <code>method+1</code> shows one after it.</p>
+<p step="square+0">This shows with the square, named by <code>\step[square]</code>.</p>
 
 ---
 
@@ -123,7 +123,7 @@ A heading takes an id and classes, as `{ #raw-html .accent }` does here,
 which a `<style>` on the slide can dress.
 
 Any element with a `step` attribute steps: <span step>like this</span>,
-<span also>and this along with it</span>.
+<span step="+0">and this along with it</span>.
 
 <p step="..3" collapse>With <code>collapse</code>, this sentence…</p>
 <p step="3" collapse>…is replaced by this one, in its place.</p>

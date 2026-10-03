@@ -71,6 +71,13 @@ pub fn render(markdown: &str, path: &Path) -> File {
     // Split at the markers, so every file is cached apart from the ones it
     // imports, and apart from the outputs of its cells, which may come later.
     let frontmatter = Frontmatter::parse(&frontmatter, path);
+    let (marked, _, _) = html_of(markdown, parent(path), true);
+    for slide in steps_of(markdown, marked, frontmatter.steps) {
+        for warning in slide.warnings {
+            let line = warning.line + 1;
+            eprintln!("{}:{line}: {}", path.display(), warning.message);
+        }
+    }
     let dir = parent(path);
     let lock = store::lock_file(dir);
     let hashes = store::hashes(dir, &store::environment(lock.as_deref()), &cells);
@@ -219,6 +226,15 @@ pub struct SlideSteps {
     pub count: u32,
     /// What steps in it, in order, but what shows from the start all along.
     pub steps: Vec<LineStep>,
+    /// What is wrong with how it steps, by line, in order.
+    pub warnings: Vec<LineWarning>,
+}
+
+/// What is wrong with how a slide steps, on the line it is about.
+#[derive(Debug, PartialEq)]
+pub struct LineWarning {
+    pub line: usize,
+    pub message: String,
 }
 
 /// What steps in a slide, by the line it begins at, and the steps it shows
@@ -237,6 +253,13 @@ pub struct LineStep {
 /// when the file is the deck rather than imported.
 pub fn steps(markdown: &str) -> Vec<SlideSteps> {
     let (html, frontmatter, _) = html_of(markdown, Path::new(""), true);
+    let steps = Frontmatter::parse(&frontmatter, Path::new("slides.md")).steps;
+    steps_of(markdown, html, steps)
+}
+
+/// The steps of a file's slides, as `steps` finds them in `html`, the
+/// file's as `html_of` marks it, with `steps` its frontmatter's.
+fn steps_of(markdown: &str, html: String, steps: Option<bool>) -> Vec<SlideSteps> {
     let mut html = html.replace(&format!("{CELL}\n"), "<div></div>\n");
     while let Some(start) = html.find(IMPORT) {
         let end = html[start..]
@@ -244,7 +267,7 @@ pub fn steps(markdown: &str) -> Vec<SlideSteps> {
             .map_or(html.len(), |end| start + end + 1);
         html.replace_range(start..end, "");
     }
-    if Frontmatter::parse(&frontmatter, Path::new("slides.md")).steps == Some(false) {
+    if steps == Some(false) {
         html = html.replace(SECTION, NO_STEPS);
     }
 
@@ -291,6 +314,14 @@ pub fn steps(markdown: &str) -> Vec<SlideSteps> {
                     }
                     steps
                 }),
+            warnings: slide
+                .warnings
+                .into_iter()
+                .map(|warning| LineWarning {
+                    line: line(warning.at),
+                    message: warning.message,
+                })
+                .collect(),
         })
         .collect()
 }
@@ -592,6 +623,17 @@ mod tests {
                 "24 3..",
             ]
         );
+    }
+
+    #[test]
+    fn a_name_given_again_is_warned_of_on_its_line() {
+        let markdown = "# One\n\n### A { step=a }\n\n$$\n\\step[a]{x}\n$$\n";
+        let warnings: Vec<usize> = steps(markdown)
+            .into_iter()
+            .flat_map(|slide| slide.warnings)
+            .map(|warning| warning.line)
+            .collect();
+        assert_eq!(warnings, [5]);
     }
 
     #[test]

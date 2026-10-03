@@ -67,7 +67,19 @@ fn respond(request: Request) -> Result<serde_json::Value> {
                                 })
                             })
                             .collect();
-                        serde_json::json!({ "line": slide.line, "count": slide.count, "steps": steps })
+                        let warnings: Vec<_> = slide
+                            .warnings
+                            .into_iter()
+                            .map(|warning| {
+                                serde_json::json!({ "line": warning.line, "message": warning.message })
+                            })
+                            .collect();
+                        serde_json::json!({
+                            "line": slide.line,
+                            "count": slide.count,
+                            "steps": steps,
+                            "warnings": warnings,
+                        })
                     })
                     .collect(),
             )

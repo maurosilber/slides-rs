@@ -13,13 +13,14 @@ plt.rcParams["svg.fonttype"] = "none"
 x = np.linspace(-np.pi, np.pi, 300)
 ~~~
 
-A figure's artists step as their `gid` says: `step`, `also`, or a range.
+A figure's artists step as their `gid` says: `step`, a name, or a range, as
+`step=cos+0`, which matplotlib draws first, but shows with the cosine.
 
 ~~~python
 plt.figure(figsize=(6, 3))
 plt.plot(x, np.sin(x), gid="step")
-plt.plot(x, np.cos(x), gid="step")
-plt.fill_between(x, np.sin(x), np.cos(x), alpha=0.2, gid="also")
+plt.plot(x, np.cos(x), gid="step=cos")
+plt.fill_between(x, np.sin(x), np.cos(x), alpha=0.2, gid="step=cos+0")
 None
 ~~~
 

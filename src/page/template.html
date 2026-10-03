@@ -11,7 +11,7 @@
         const options = {
             throwOnError: false,
             // \htmlStyle and \htmlClass carry the steps out to the page, as
-            // the deck writes every \step{...} and \also{...}, and \htmlData
+            // the deck writes every \step{...}, and \htmlData
             // those of slides whose steps are off. They are the only commands
             // allowed to write html.
             trust: (context) => ["\\htmlData", "\\htmlStyle", "\\htmlClass"].includes(context.command),

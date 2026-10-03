@@ -11,12 +11,12 @@ use quick_xml::name::QName;
 use quick_xml::{Reader, Writer};
 use sha2::{Digest, Sha256};
 
-use crate::step::{Mark, Step};
+use crate::step::Mark;
 
 /// The SVG as markup for an html document, with every id that marks a step,
-/// as matplotlib's `gid="step=2..4"`, `gid="step"` or `gid="also"` gives an
-/// artist's group, turned into `step="2..4"`, `step=""` or `also=""` for the
-/// slides to step through, along with `collapse=""` if it is starred.
+/// as matplotlib's `gid="step=2..4"`, `gid="step=+0"` or `gid="step"` gives
+/// an artist's group, turned into `step="2..4"`, `step="+0"` or `step=""` for
+/// the slides to step through, along with `collapse=""` if it is starred.
 ///
 /// An id can also name its artist's path, after its step if it has one, as
 /// `gid="step=2.. #line"` does, for an `<mpath href="#line">` to follow it:
@@ -160,10 +160,9 @@ fn element<'a>(
                 _ => (value.as_ref(), false),
             };
             if let Some(mark) = Mark::parse(value) {
-                let key = if mark.step == Step::Also { "also" } else { "step" };
                 let value = mark.step.value().unwrap_or_default();
                 rewritten.push_attribute(Attribute {
-                    key: QName(key),
+                    key: QName("step"),
                     value: Cow::Owned(value),
                 });
                 if mark.collapse {
@@ -238,20 +237,29 @@ mod tests {
     }
 
     #[test]
-    fn a_step_id_can_be_the_next_step_or_along_with_the_latest() {
-        let svg = r#"<svg><g id="step"/><g id="also"/></svg>"#;
+    fn a_step_id_can_be_the_next_step_or_from_the_one_before() {
+        let svg = r#"<svg><g id="step"/><g id="step=+0"/></svg>"#;
         assert_eq!(
             inline(svg).unwrap(),
-            r#"<svg><g step=""/><g also=""/></svg>"#
+            r#"<svg><g step=""/><g step="+0"/></svg>"#
+        );
+    }
+
+    #[test]
+    fn a_step_id_can_be_from_a_name() {
+        let svg = r#"<svg><g id="step=cos"/><g id="step=cos+0"/></svg>"#;
+        assert_eq!(
+            inline(svg).unwrap(),
+            r#"<svg><g step="cos"/><g step="cos+0"/></svg>"#
         );
     }
 
     #[test]
     fn a_starred_step_id_collapses() {
-        let svg = r#"<svg><g id="step*=1..3"/><g id="also*"/></svg>"#;
+        let svg = r#"<svg><g id="step*=1..3"/><g id="step*"/></svg>"#;
         assert_eq!(
             inline(svg).unwrap(),
-            r#"<svg><g step="1..3" collapse=""/><g also="" collapse=""/></svg>"#
+            r#"<svg><g step="1..3" collapse=""/><g step="" collapse=""/></svg>"#
         );
     }
 

@@ -1,17 +1,16 @@
 //! Steps of a slide, written inside math.
 //!
-//! `\step{...}` appears one step after the latest one, `\also{...}` along
-//! with it, and `\step[3..5]{...}` in the steps its range says. Each becomes
-//! `\htmlData{step=...}{...}`, with `next`, `also` or its range, which
-//! src/step/html.rs numbers among the other steps of the slide, in the order
-//! they are written, rather than as KaTeX lays them out: an aligned
-//! environment column by column, the left side of every row before any right
-//! side. Starred, as `\step*` or `\also*`, they take no space while hidden,
-//! and are written with a `collapse` too.
+//! `\step{...}` appears one step after the latest one, and `\step[3..5]{...}`
+//! or `\step[+0]{...}` in the steps its range says. Each becomes
+//! `\htmlData{step=...}{...}`, with `next` or its range, which src/step/html.rs numbers among the other steps of the
+//! slide, in the order they are written, rather than as KaTeX lays them out:
+//! an aligned environment column by column, the left side of every row
+//! before any right side. Starred, as `\step*`, they take no space
+//! while hidden, and are written with a `collapse` too.
 
 use crate::step::Step;
 
-/// The TeX, with every `\step` and `\also` written as `\htmlData`.
+/// The TeX, with every `\step` written as `\htmlData`.
 pub fn number(tex: &str) -> String {
     let mut numbered = String::with_capacity(tex.len());
     let mut rest = tex;
@@ -29,7 +28,7 @@ pub fn number(tex: &str) -> String {
             continue;
         }
         let (name, mut after) = command.split_at(name_len);
-        let starred = matches!(name, "step" | "also") && after.starts_with('*');
+        let starred = name == "step" && after.starts_with('*');
         if starred {
             after = &after[1..];
         }
@@ -41,7 +40,6 @@ pub fn number(tex: &str) -> String {
                 }
                 None => Some("next".to_string()),
             },
-            "also" => Some("also".to_string()),
             _ => None,
         };
         match step {
@@ -76,24 +74,32 @@ mod tests {
     #[test]
     fn steps_are_written_in_the_order_they_are_written() {
         assert_eq!(
-            number(r"a \step{b} &\also{= c} \step[2..4]{d}"),
-            r"a \htmlData{step=next}{b} &\htmlData{step=also}{= c} \htmlData{step=2..4}{d}"
+            number(r"a \step{b} &\step[+0]{= c} \step[2..4]{d} \also{e}"),
+            r"a \htmlData{step=next}{b} &\htmlData{step=+0}{= c} \htmlData{step=2..4}{d} \also{e}"
         );
     }
 
     #[test]
     fn a_step_can_be_named_or_from_a_name() {
         assert_eq!(
-            number(r"\step[a]{x} \step[@a+1..]{y}"),
-            r"\htmlData{step=a}{x} \htmlData{step=@a+1}{y}"
+            number(r"\step[a]{x} \step[a+1..]{y}"),
+            r"\htmlData{step=a}{x} \htmlData{step=a+1}{y}"
+        );
+    }
+
+    #[test]
+    fn a_step_can_be_from_the_one_before_it() {
+        assert_eq!(
+            number(r"\step[+0]{x} \step*[-1..+1]{y}"),
+            r"\htmlData{step=+0}{x} \htmlData{step=-1..+1,collapse=true}{y}"
         );
     }
 
     #[test]
     fn a_starred_step_collapses() {
         assert_eq!(
-            number(r"\step*[..2]{a} \also*{b} \step*{c}"),
-            r"\htmlData{step=..2,collapse=true}{a} \htmlData{step=also,collapse=true}{b} \htmlData{step=next,collapse=true}{c}"
+            number(r"\step*[..2]{a} \step*{c}"),
+            r"\htmlData{step=..2,collapse=true}{a} \htmlData{step=next,collapse=true}{c}"
         );
     }
 
