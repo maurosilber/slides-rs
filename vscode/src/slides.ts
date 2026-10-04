@@ -216,7 +216,7 @@ export class SlideEditor implements vscode.Disposable {
 			const next = layout.slides.findIndex((slide) => slide.first > line);
 			return mark(line, next < 0 ? 'end' : `slide ${next + 1}: ${layout.slides[next].title}`);
 		});
-		const imports = layout.breaks.imports.map((line) => mark(line, 'its slides, imported'));
+		const imports = layout.breaks.imports.map(({ line }) => mark(line, 'its slides, imported'));
 		editor.setDecorations(this.decoration, [...rules, ...imports]);
 		const show = shown(document);
 		editor.setDecorations(this.shade, show.alternateSlides

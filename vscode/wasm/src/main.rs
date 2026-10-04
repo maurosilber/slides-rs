@@ -39,9 +39,13 @@ fn respond(request: Request) -> Result<serde_json::Value> {
         Request::Slides { markdown } => {
             let breaks = slides::markdown::breaks(&markdown);
             serde_json::json!({
+                "deck": breaks.deck,
                 "start": breaks.start,
                 "rules": breaks.rules,
-                "imports": breaks.imports,
+                "imports": breaks.imports.iter().map(|import| serde_json::json!({
+                    "line": import.line,
+                    "src": import.src,
+                })).collect::<Vec<_>>(),
                 "headings": breaks.headings.iter().map(|heading| serde_json::json!({
                     "line": heading.line,
                     "last": heading.last,

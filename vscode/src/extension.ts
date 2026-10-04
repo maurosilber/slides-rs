@@ -17,7 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('Slides Notebook', { log: true });
 	const module = new Module(context.extensionUri, context.globalStorageUri, log);
 	const outputs = new Outputs(module, log);
-	const decks = new Decks();
+	const decks = new Decks(module);
 	// The language servers start processes, which needs VS Code on the desktop, as
 	// does the client of them, loaded only there.
 	const servers = canRunCells()

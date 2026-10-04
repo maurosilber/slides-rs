@@ -6,6 +6,7 @@
 // an import links to the file it imports.
 
 import * as vscode from 'vscode';
+import { Breaks, Module } from './wasm';
 
 /** The language of a file named `*.slides.md`, which is markdown to the deck. */
 export const LANGUAGE = 'slides';
@@ -13,17 +14,9 @@ export const LANGUAGE = 'slides';
 /** The languages a deck is written in. */
 export const SELECTOR: vscode.DocumentFilter[] = [{ language: 'markdown' }, { language: LANGUAGE }];
 
-/** An import, as a line of the markdown writes it, which src/markdown/mod.rs reads the same way. */
-export const IMPORT = /^\s*<import-slide\s*src="([^"]*)"/;
-
-/** A tilde fence, which opens a code cell. */
-const CELL = /^ {0,3}~~~/m;
-
-/** The frontmatter, between the `---` that opens the file and the next. */
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\s*$/m;
-
-/** A key of the frontmatter that only a deck reads, as src/frontmatter.schema.json has them. */
-const KEY = /^(theme|aspect-ratio|steps|figures)\s*:/m;
+/** What a file must hold to be a deck, which the module then says whether it is: a
+ * frontmatter, an import or a tilde fence. It spares asking about every other file. */
+const MAYBE_DECK = /^---|<import-slide|~~~/;
 
 /** What a file holds, as far as telling decks apart goes. */
 interface Scanned {
@@ -44,7 +37,7 @@ export class Decks implements vscode.Disposable {
 	private readonly ready: Promise<void>;
 	private readonly disposables: vscode.Disposable[] = [];
 
-	constructor() {
+	constructor(private readonly module: Module) {
 		const watcher = vscode.workspace.createFileSystemWatcher('**/*.md');
 		const rescan = (uri: vscode.Uri) => void this.rescan(uri);
 		this.disposables.push(
@@ -60,7 +53,7 @@ export class Decks implements vscode.Disposable {
 			// A file outside the workspace, which the watcher does not see.
 			vscode.workspace.onDidOpenTextDocument((document) => isSaved(document) && rescan(document.uri)),
 			vscode.workspace.onDidSaveTextDocument((document) => isSaved(document) && rescan(document.uri)),
-			vscode.languages.registerDocumentLinkProvider(SELECTOR, { provideDocumentLinks: (document) => importLinks(document) }),
+			vscode.languages.registerDocumentLinkProvider(SELECTOR, { provideDocumentLinks: (document) => this.importLinks(document) }),
 		);
 		this.ready = this.scanAll();
 	}
@@ -86,15 +79,40 @@ export class Decks implements vscode.Disposable {
 			this.files.delete(uri.toString());
 			return;
 		}
+		if (!MAYBE_DECK.test(text)) {
+			this.files.set(uri.toString(), { deck: false, imports: [] });
+			return;
+		}
+		let breaks: Breaks;
+		try {
+			breaks = await this.module.slides(text);
+		} catch {
+			this.files.delete(uri.toString());
+			return;
+		}
 		const dir = vscode.Uri.joinPath(uri, '..');
-		const imports = text
-			.split('\n')
-			.map((line) => IMPORT.exec(line)?.[1])
-			.filter((src) => src !== undefined)
-			.map((src) => vscode.Uri.joinPath(dir, src).toString());
-		const frontmatter = FRONTMATTER.exec(text);
-		const deck = imports.length > 0 || CELL.test(text) || (frontmatter?.index === 0 && KEY.test(frontmatter[1]));
-		this.files.set(uri.toString(), { deck, imports });
+		const imports = breaks.imports.map(({ src }) => vscode.Uri.joinPath(dir, src).toString());
+		this.files.set(uri.toString(), { deck: breaks.deck, imports });
+	}
+
+	/** A link on the `src` of each import of the document, to the file it imports. */
+	private async importLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
+		const text = document.getText();
+		if (!isSaved(document) || !MAYBE_DECK.test(text)) {
+			return [];
+		}
+		const dir = vscode.Uri.joinPath(document.uri, '..');
+		const { imports } = await this.module.slides(text);
+		return imports.flatMap(({ line, src }) => {
+			// Within the quotes of the `src`.
+			const start = document.lineAt(line).text.indexOf(`"${src}"`) + 1;
+			if (start === 0) {
+				return [];
+			}
+			const link = new vscode.DocumentLink(new vscode.Range(line, start, line, start + src.length), vscode.Uri.joinPath(dir, src));
+			link.tooltip = 'Open the imported slides';
+			return [link];
+		});
 	}
 
 	/** Tells VS Code which files are decks. */
@@ -150,27 +168,6 @@ export class Decks implements vscode.Disposable {
 	dispose() {
 		this.disposables.forEach((disposable) => disposable.dispose());
 	}
-}
-
-/** A link on the `src` of each import of the document, to the file it imports. */
-function importLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
-	if (!isSaved(document)) {
-		return [];
-	}
-	const dir = vscode.Uri.joinPath(document.uri, '..');
-	const links: vscode.DocumentLink[] = [];
-	for (let line = 0; line < document.lineCount; line++) {
-		const match = IMPORT.exec(document.lineAt(line).text);
-		if (match?.[1]) {
-			// The match ends at the quote that closes the src.
-			const end = match[0].length - 1;
-			const range = new vscode.Range(line, end - match[1].length, line, end);
-			const link = new vscode.DocumentLink(range, vscode.Uri.joinPath(dir, match[1]));
-			link.tooltip = 'Open the imported slides';
-			links.push(link);
-		}
-	}
-	return links;
 }
 
 /** Whether the document is markdown saved as a file, rather than a notebook's cell, a

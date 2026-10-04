@@ -57,10 +57,14 @@ export interface Breaks {
 	start: number;
 	/** The lines of the rules between two slides. */
 	rules: number[];
-	/** The lines of the imports, which bring slides of their own. */
-	imports: number[];
+	/** The imports, which bring slides of their own, by line, with the file each imports,
+	 * relative to the importing one. */
+	imports: { line: number; src: string }[];
 	/** The headings of the slides, by their first and last lines, and their level, from 1. */
 	headings: { line: number; last: number; level: number }[];
+	/** Whether it has what only a deck, or a part of one, has: frontmatter the deck reads,
+	 * an import or a code cell. */
+	deck: boolean;
 }
 
 /** The steps of a slide, as the deck numbers them, by line, counted from zero. */

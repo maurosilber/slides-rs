@@ -6,7 +6,7 @@ mod math;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use pulldown_cmark::{CodeBlockKind, Event, OffsetIter, Options, Parser, Tag, TagEnd, html};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
 use crate::aspect::{self, AspectRatio};
 use crate::paths::{canonical, parent};
@@ -126,7 +126,7 @@ fn html_of(markdown: &str, dir: &Path, at: bool) -> (String, String, Vec<String>
     // The events are consumed by the time the cells are needed again.
     let cell_codes = &mut cells;
     let yaml = &mut frontmatter;
-    let events = parse(markdown).flat_map(|(event, range)| {
+    let events = parse(markdown).flat_map(|(event, range, top)| {
         let marked = at
             && matches!(
                 event,
@@ -148,11 +148,12 @@ fn html_of(markdown: &str, dir: &Path, at: bool) -> (String, String, Vec<String>
             (
                 Event::Html(format!("{AT}{}-->\n", range.start).into()),
                 range.clone(),
+                top,
             )
         });
-        marker.into_iter().chain(std::iter::once((event, range)))
+        marker.into_iter().chain(std::iter::once((event, range, top)))
     });
-    let events = events.filter_map(move |(event, range)| match event {
+    let events = events.filter_map(move |(event, range, top)| match event {
         // The frontmatter is metadata, not content.
         Event::Start(Tag::MetadataBlock(_)) => {
             metadata = true;
@@ -183,7 +184,7 @@ fn html_of(markdown: &str, dir: &Path, at: bool) -> (String, String, Vec<String>
             Some(Event::Html(format!("{CELL}\n").into()))
         }
         // An imported file brings its own slides, so it breaks out of this one.
-        Event::Html(raw) if raw.contains("<import-slide") => {
+        Event::Html(raw) if top && raw.contains("<import-slide") => {
             let mut html = String::new();
             for line in raw.lines() {
                 match import_src(line) {
@@ -202,8 +203,9 @@ fn html_of(markdown: &str, dir: &Path, at: bool) -> (String, String, Vec<String>
             }
             Some(Event::Html(html.into()))
         }
-        // Every other rule delimits two slides.
-        Event::Rule => Some(Event::Html("</section>\n<section>\n".into())),
+        // Every other rule delimits two slides, but within a list or a quote,
+        // where it is a rule.
+        Event::Rule if top => Some(Event::Html("</section>\n<section>\n".into())),
         Event::InlineMath(tex) => Some(Event::InlineMath(math::number(&tex).into())),
         Event::DisplayMath(tex) => Some(Event::DisplayMath(math::number(&tex).into())),
         event => Some(event),
@@ -356,7 +358,7 @@ pub fn code(source: &str) -> String {
 pub fn code_cells(markdown: &str) -> Vec<CodeCell> {
     let mut cells: Vec<CodeCell> = Vec::new();
     let mut open = false;
-    for (event, range) in parse(markdown) {
+    for (event, range, _) in parse(markdown) {
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))
                 if is_tilde_fenced(markdown, range.start) =>
@@ -376,8 +378,11 @@ pub fn code_cells(markdown: &str) -> Vec<CodeCell> {
     cells
 }
 
-/// The events of a file's markdown, each with where it is in the source.
-fn parse(markdown: &str) -> OffsetIter<'_> {
+/// The events of a file's markdown, each with where it is in the source,
+/// and whether it is outside every list, quote and footnote, where a rule or
+/// an import breaks the slide, and a heading is the slide's own.
+fn parse(markdown: &str) -> impl Iterator<Item = (Event<'_>, Range<usize>, bool)> {
+    let mut depth = 0usize;
     Parser::new_ext(
         markdown,
         Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
@@ -386,6 +391,18 @@ fn parse(markdown: &str) -> OffsetIter<'_> {
             | Options::ENABLE_TABLES,
     )
     .into_offset_iter()
+    .map(move |(event, range)| {
+        match &event {
+            Event::Start(Tag::List(_) | Tag::BlockQuote(_) | Tag::FootnoteDefinition(_)) => {
+                depth += 1
+            }
+            Event::End(TagEnd::List(_) | TagEnd::BlockQuote(_) | TagEnd::FootnoteDefinition) => {
+                depth -= 1
+            }
+            _ => {}
+        }
+        (event, range, depth == 0)
+    })
 }
 
 /// What a file's frontmatter sets for the whole page, rather than for its own
@@ -459,6 +476,20 @@ impl Frontmatter {
         })
     }
 
+    /// Whether it sets anything the deck reads.
+    fn is_read(&self) -> bool {
+        let Frontmatter {
+            theme,
+            aspect_ratio,
+            steps,
+            figures,
+        } = self;
+        theme.is_some()
+            || aspect_ratio.is_some()
+            || steps.is_some()
+            || *figures != FigureSettings::default()
+    }
+
     /// The shape the slides keep, if it says one, which is reported and left
     /// out if it is not a ratio.
     fn aspect_ratio(&self, path: &Path) -> Option<AspectRatio> {
@@ -498,11 +529,14 @@ pub struct Breaks {
     pub start: usize,
     /// The lines of the rules between two slides.
     pub rules: Vec<usize>,
-    /// The lines of the imports.
-    pub imports: Vec<usize>,
+    /// The imports, by line.
+    pub imports: Vec<Import>,
     /// The headings of the slides, which slides.js makes columns of, rather
     /// than those in a list or a quote.
     pub headings: Vec<Heading>,
+    /// Whether it has what only a deck, or a part of one, has: frontmatter
+    /// the deck reads, an import or a code cell.
+    pub deck: bool,
 }
 
 /// A heading of a slide, by its first and last lines, two for one
@@ -514,6 +548,14 @@ pub struct Heading {
     pub level: u8,
 }
 
+/// An import of a file's slides, by its line, and the file it imports, as
+/// its `src` says, relative to the importing file.
+#[derive(Debug, PartialEq)]
+pub struct Import {
+    pub line: usize,
+    pub src: String,
+}
+
 /// Where the slides of a file's markdown break.
 pub fn breaks(markdown: &str) -> Breaks {
     let starts: Vec<usize> = std::iter::once(0)
@@ -521,17 +563,24 @@ pub fn breaks(markdown: &str) -> Breaks {
         .collect();
     let line = |offset: usize| starts.partition_point(|&start| start <= offset) - 1;
     let mut breaks = Breaks::default();
-    // How many lists and quotes the events are in.
-    let mut depth = 0;
-    for (event, range) in parse(markdown) {
+    let mut yaml = String::new();
+    let mut metadata = false;
+    for (event, range, top) in parse(markdown) {
+        match &event {
+            Event::Start(Tag::MetadataBlock(_)) => metadata = true,
+            Event::Text(text) if metadata => yaml.push_str(text),
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_)))
+                if is_tilde_fenced(markdown, range.start) =>
+            {
+                breaks.deck = true
+            }
+            _ => {}
+        }
+        if !top {
+            continue;
+        }
         match event {
-            Event::Start(Tag::List(_) | Tag::BlockQuote(_) | Tag::FootnoteDefinition(_)) => {
-                depth += 1
-            }
-            Event::End(TagEnd::List(_) | TagEnd::BlockQuote(_) | TagEnd::FootnoteDefinition) => {
-                depth -= 1
-            }
-            Event::Start(Tag::Heading { level, .. }) if depth == 0 => {
+            Event::Start(Tag::Heading { level, .. }) => {
                 breaks.headings.push(Heading {
                     line: line(range.start),
                     last: line(range.end.saturating_sub(1)),
@@ -539,6 +588,7 @@ pub fn breaks(markdown: &str) -> Breaks {
                 })
             }
             Event::End(TagEnd::MetadataBlock(_)) => {
+                metadata = false;
                 // The block ends with its closing fence, or just after it.
                 breaks.start = line(range.end.saturating_sub(1)) + 1;
             }
@@ -546,14 +596,19 @@ pub fn breaks(markdown: &str) -> Breaks {
             Event::Html(raw) if raw.contains("<import-slide") => {
                 let first = line(range.start);
                 for (i, text) in raw.lines().enumerate() {
-                    if import_src(text).is_some() {
-                        breaks.imports.push(first + i);
+                    if let Some(src) = import_src(text) {
+                        breaks.imports.push(Import {
+                            line: first + i,
+                            src: src.to_string(),
+                        });
                     }
                 }
             }
             _ => {}
         }
     }
+    breaks.deck |= !breaks.imports.is_empty()
+        || Frontmatter::parse(&yaml, Path::new("slides.md")).is_read();
     breaks
 }
 
@@ -583,11 +638,37 @@ mod tests {
             Breaks {
                 start: 3,
                 rules: vec![5, 14],
-                imports: vec![15],
+                imports: vec![Import {
+                    line: 15,
+                    src: "part.md".into()
+                }],
                 headings: vec![heading(3, 3, 1), heading(7, 8, 2)],
+                deck: true,
             }
         );
         assert_eq!(breaks("# One\n").start, 0);
+    }
+
+    #[test]
+    fn a_deck_has_frontmatter_it_reads_an_import_or_a_code_cell() {
+        assert!(!breaks("---\ntitle: Notes\n---\n# One\n\n```python\nx\n```\n").deck);
+        assert!(breaks("---\nsteps: false\n---\n# One\n").deck);
+        assert!(breaks("# One\n\n- a\n\n  ~~~python\n  x\n  ~~~\n").deck);
+        assert!(breaks("<import-slide src=\"part.md\" />\n").deck);
+        assert!(!breaks("```\n<import-slide src=\"part.md\" />\n```\n").deck);
+    }
+
+    #[test]
+    fn a_rule_or_an_import_in_a_list_or_a_quote_is_no_break() {
+        let markdown = "# One\n\n> a\n>\n> ***\n\n- b\n\n  ---\n\n  <import-slide src=\"part.md\" />\n";
+        let breaks = breaks(markdown);
+        assert_eq!((breaks.rules, breaks.imports), (vec![], vec![]));
+        let html = render(markdown, Path::new("/deck/slides.md"));
+        let [Part::Html(html)] = html.parts.as_slice() else {
+            panic!("{:?}", html.parts.len());
+        };
+        assert_eq!(html.matches("<section>").count(), 1, "{html}");
+        assert!(html.contains("<hr />"), "{html}");
     }
 
     /// Each slide's line and count, and each step, as `line from..to`.

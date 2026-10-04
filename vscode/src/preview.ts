@@ -7,7 +7,7 @@
 import * as vscode from 'vscode';
 import type { ChildProcess } from 'node:child_process';
 import { command } from './kernel';
-import { IMPORT, type Decks } from './decks';
+import type { Decks } from './decks';
 import type { Module } from './wasm';
 
 /** The integrated browser's command, which older versions of VS Code do not have. */
@@ -216,22 +216,24 @@ function browserTab(page: string, fragment?: string) {
 async function position(module: Module, uri: vscode.Uri, text: string, line: number): Promise<{ slide: number; step: number }> {
 	const lines = text.split(/\r?\n/);
 	const breaks = await module.slides(text);
+	const imports = new Map(breaks.imports.map(({ line, src }) => [line, src]));
 	let slide = 0;
 	let start = breaks.start;
-	for (const end of [...breaks.rules, ...breaks.imports].sort((a, b) => a - b)) {
+	for (const end of [...breaks.rules, ...imports.keys()].sort((a, b) => a - b)) {
 		if (end >= line) {
 			break;
 		}
 		if (!isEmpty(lines, start, end)) {
 			slide++;
 		}
-		if (breaks.imports.includes(end)) {
-			slide += await slideCount(module, imported(uri, lines[end]), new Set([uri.toString()]));
+		const src = imports.get(end);
+		if (src !== undefined) {
+			slide += await slideCount(module, vscode.Uri.joinPath(uri, '..', src), new Set([uri.toString()]));
 		}
 		start = end + 1;
 	}
 	// On the line of an import, it is at the first of the slides it brings.
-	if (breaks.imports.includes(line)) {
+	if (imports.has(line)) {
 		return { slide: slide + 1, step: 1 };
 	}
 	// What steps at or before the line, in its slide, shows it.
@@ -258,23 +260,20 @@ async function slideCount(module: Module, uri: vscode.Uri, importing: Set<string
 	const lines = text.split(/\r?\n/);
 	const breaks = await module.slides(text);
 	const within = new Set([...importing, uri.toString()]);
+	const imports = new Map(breaks.imports.map(({ line, src }) => [line, src]));
 	let count = 0;
 	let start = breaks.start;
-	for (const end of [...breaks.rules, ...breaks.imports, lines.length].sort((a, b) => a - b)) {
+	for (const end of [...breaks.rules, ...imports.keys(), lines.length].sort((a, b) => a - b)) {
 		if (!isEmpty(lines, start, end)) {
 			count++;
 		}
-		if (breaks.imports.includes(end)) {
-			count += await slideCount(module, imported(uri, lines[end]), within);
+		const src = imports.get(end);
+		if (src !== undefined) {
+			count += await slideCount(module, vscode.Uri.joinPath(uri, '..', src), within);
 		}
 		start = end + 1;
 	}
 	return count;
-}
-
-/** The file an import's line imports, relative to the file it is in. */
-function imported(uri: vscode.Uri, line: string): vscode.Uri {
-	return vscode.Uri.joinPath(uri, '..', IMPORT.exec(line)?.[1] ?? '');
 }
 
 /** Whether the lines from `start` up to `end`, excluded, are all blank. */
