@@ -74,7 +74,17 @@ function moveToStep(i) {
     return stepsEnabled && showStep(i);
 }
 
+// Whether a key pressed is the page's to step with: not one held with a
+// modifier, as the browser's own shortcuts are, as Alt+Left goes back, nor one
+// pressed in what takes text or arrows itself, as a widget's input does.
+function forSlides(event) {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return false;
+    const target = event.composedPath()[0];
+    return !(target instanceof Element && target.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])"));
+}
+
 addEventListener("keydown", (event) => {
+    if (!forSlides(event)) return;
     if (event.code == "ArrowRight") {
         if (!moveToStep(currentStep + 1) && !rushAnimations(slides[currentSlide])) {
             updateSlide(currentSlide + 1);
