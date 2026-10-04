@@ -244,7 +244,11 @@ impl Deck {
         if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
             return false;
         }
-        fs::write(output, html).unwrap();
+        if let Err(error) = fs::write(output, html) {
+            // Reported rather than ending a watch, which writes it again.
+            eprintln!("{}: {error}", output.display());
+            return false;
+        }
         true
     }
 }

@@ -136,7 +136,15 @@ fn main() {
     // The outputs are saved where the extension saves them for the same file.
     let outputs = store::root(parent(&root));
     let output = match output {
-        Some(output) => canonical(&output),
+        Some(output) => {
+            // Made first, for the path to be canonical, as links are written
+            // from where the page is.
+            if let Err(error) = std::fs::create_dir_all(parent(&output)) {
+                eprintln!("{}: {error}", parent(&output).display());
+                std::process::exit(1);
+            }
+            canonical(&output)
+        }
         None => outputs.join(input.with_extension("html").file_name().unwrap()),
     };
     // Naming a kernel narrows the search to that one, so asking for a kernel
