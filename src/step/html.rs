@@ -1052,8 +1052,9 @@ fn math_marks(html: &str, element: usize, text: Span<usize>) -> Vec<(Target, Mar
             Some(range) => (range, true),
             None => (written, false),
         };
+        // Nothing, as a bare `step` attribute, is the next step.
         let step = match range {
-            "next" => Step::Next,
+            "" => Step::Next,
             range => match Step::parse(range) {
                 Some(step) => step,
                 None => continue,
@@ -1522,7 +1523,7 @@ mod tests {
     #[test]
     fn a_range_in_a_column_is_a_step_of_the_column() {
         // `3` is the column's third step, as `c` is the other's.
-        let html = "<section><h1>T</h1><h2 steps=\"parallel\">S</h2><h3>A</h3><ul><li>a</li><li>b</li><li>c</li></ul><h3>B</h3><p step=\"3\">d</p><p><span class=\"math\">x \\htmlData{step=..2}{y}\\htmlData{step=next}{z}</span></p><h2>U</h2></section>";
+        let html = "<section><h1>T</h1><h2 steps=\"parallel\">S</h2><h3>A</h3><ul><li>a</li><li>b</li><li>c</li></ul><h3>B</h3><p step=\"3\">d</p><p><span class=\"math\">x \\htmlData{step=..2}{y}\\htmlData{step=}{z}</span></p><h2>U</h2></section>";
         assert_eq!(
             steps(html),
             [
@@ -1716,8 +1717,14 @@ mod tests {
     }
 
     #[test]
+    fn a_math_step_can_be_named_next() {
+        let html = "<section><h1>T</h1><p>a</p><p><span class=\"math\">\\htmlData{step=next}{b}</span></p><p step=\"next+0\">c</p></section>";
+        assert_eq!(steps(html), ["count 4", "p --from:2", "p --from:3", "p --from:4"]);
+    }
+
+    #[test]
     fn math_steps_can_be_named() {
-        let html = "<section><h1>T</h1><p><span class=\"math\">\\htmlData{step=s}{a} \\htmlData{step=next}{b}</span></p><p step=\"s+0\">c</p></section>";
+        let html = "<section><h1>T</h1><p><span class=\"math\">\\htmlData{step=s}{a} \\htmlData{step=}{b}</span></p><p step=\"s+0\">c</p></section>";
         assert_eq!(steps(html), ["count 4", "p --from:2", "p --from:3"]);
     }
 
@@ -1748,7 +1755,7 @@ mod tests {
 
     #[test]
     fn a_math_step_shows_from_the_earliest_step_it_holds() {
-        let html = "<section><h1>T</h1><p>a</p><p>b</p><p><span class=\"math\">\\htmlData{step=next}{x \\htmlData{step=2}{y}}</span></p></section>";
+        let html = "<section><h1>T</h1><p>a</p><p>b</p><p><span class=\"math\">\\htmlData{step=}{x \\htmlData{step=2}{y}}</span></p></section>";
         assert!(number(html).contains(
             "\\htmlStyle{--from:2}{\\htmlClass{step}{x \\htmlStyle{--from:2}{\\htmlClass{step}{y}}}}"
         ));

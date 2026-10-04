@@ -2,7 +2,9 @@
 //!
 //! `\step{...}` appears one step after the latest one, and `\step[3..5]{...}`
 //! or `\step[+0]{...}` in the steps its range says. Each becomes
-//! `\htmlData{step=...}{...}`, with `next` or its range, which src/step/html.rs numbers among the other steps of the
+//! `\htmlData{step=...}{...}`, with its range or its name, or nothing for
+//! the next step, as a bare `step` attribute is, which src/step/html.rs
+//! numbers among the other steps of the
 //! slide, in the order they are written, rather than as KaTeX lays them out:
 //! an aligned environment column by column, the left side of every row
 //! before any right side. Starred, as `\step*`, they take no space
@@ -36,9 +38,9 @@ pub fn number(tex: &str) -> String {
             "step" => match range_argument(after) {
                 Some((step, argument_len)) => {
                     after = &after[argument_len..];
-                    step.value()
+                    Some(step.value().unwrap_or_default())
                 }
-                None => Some("next".to_string()),
+                None => Some(String::new()),
             },
             _ => None,
         };
@@ -75,7 +77,7 @@ mod tests {
     fn steps_are_written_in_the_order_they_are_written() {
         assert_eq!(
             number(r"a \step{b} &\step[+0]{= c} \step[2..4]{d} \also{e}"),
-            r"a \htmlData{step=next}{b} &\htmlData{step=+0}{= c} \htmlData{step=2..4}{d} \also{e}"
+            r"a \htmlData{step=}{b} &\htmlData{step=+0}{= c} \htmlData{step=2..4}{d} \also{e}"
         );
     }
 
@@ -85,6 +87,11 @@ mod tests {
             number(r"\step[a]{x} \step[a+1..]{y}"),
             r"\htmlData{step=a}{x} \htmlData{step=a+1}{y}"
         );
+    }
+
+    #[test]
+    fn any_name_can_be_given() {
+        assert_eq!(number(r"\step[next]{x}"), r"\htmlData{step=next}{x}");
     }
 
     #[test]
@@ -99,13 +106,13 @@ mod tests {
     fn a_starred_step_collapses() {
         assert_eq!(
             number(r"\step*[..2]{a} \step*{c}"),
-            r"\htmlData{step=..2,collapse=true}{a} \htmlData{step=next,collapse=true}{c}"
+            r"\htmlData{step=..2,collapse=true}{a} \htmlData{step=,collapse=true}{c}"
         );
     }
 
     #[test]
     fn a_range_that_is_not_one_is_left_to_show() {
-        assert_eq!(number(r"\step[1..x]{a}"), r"\htmlData{step=next}[1..x]{a}");
+        assert_eq!(number(r"\step[1..x]{a}"), r"\htmlData{step=}[1..x]{a}");
     }
 
     #[test]
