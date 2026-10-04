@@ -1,12 +1,7 @@
-import os
-import pathlib
 import re
-import subprocess
 
 import pytest
 from slides_rs import Step
-
-ROOT = pathlib.Path(__file__).parents[2]
 
 
 @pytest.mark.parametrize(
@@ -65,7 +60,7 @@ def test_the_step_shown_throughout_does_not_move():
         Step().previous()
 
 
-def test_a_figure_steps_on_its_slide(slides_rs, tmp_path):
+def test_a_figure_steps_on_its_slide(render, tmp_path):
     slide = tmp_path / "slide.md"
     slide.write_text(
         "~~~python\n"
@@ -77,9 +72,7 @@ def test_a_figure_steps_on_its_slide(slides_rs, tmp_path):
         "    step = step.next()\n"
         "~~~\n"
     )
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "python" / "src")}
-    subprocess.run([slides_rs, str(slide)], check=True, env=env, capture_output=True)
-    html = slide.with_suffix(".html").read_text()
+    html = render(slide)
     assert re.findall(r'step="([^"]*)"', html) == ["1..2", "2..3", "3..4"]
 
 

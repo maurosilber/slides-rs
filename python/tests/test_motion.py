@@ -1,8 +1,5 @@
 import io
-import os
-import pathlib
 import re
-import subprocess
 import xml.etree.ElementTree as ET
 
 import matplotlib
@@ -14,7 +11,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from slides_rs import Motion, Step  # noqa: E402
 
-ROOT = pathlib.Path(__file__).parents[2]
 SVG = "{http://www.w3.org/2000/svg}"
 XLINK = "{http://www.w3.org/1999/xlink}"
 
@@ -369,7 +365,7 @@ def test_removed_it_is_drawn_where_it_is(figure):
     assert not any("#" in (g.get("id") or "") for g in root.iter(f"{SVG}g"))
 
 
-def test_a_slide_moves_it_when_its_step_shows(slides_rs, tmp_path):
+def test_a_slide_moves_it_when_its_step_shows(render, tmp_path):
     slide = tmp_path / "slide.md"
     slide.write_text(
         "~~~python\n"
@@ -380,15 +376,13 @@ def test_a_slide_moves_it_when_its_step_shows(slides_rs, tmp_path):
         "Motion(dot, along=line).starts(Step(3)).timing([0, 1, 2])\n"
         "~~~\n"
     )
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "python" / "src")}
-    subprocess.run([slides_rs, str(slide)], check=True, env=env, capture_output=True)
-    html = slide.with_suffix(".html").read_text()
+    html = render(slide)
     # The dot shows in its step, and moves in the next, what it moves named for the
     # animation to move it.
-    (moving,) = re.findall(r'<g step="2">\s*<g id="([^"]+)">', html)
+    (moving,) = re.findall(r'<g step="2"[^>]*>\s*<g id="([^"]+)">', html)
     (path,) = re.findall(
-        rf'<g step="3">\s*<animateMotion xlink:href="#{moving}" [^>]*begin="indefinite"[^>]*>\s*<mpath xlink:href="#([^"]+)"',
+        rf'<g step="3"[^>]*>\s*<animateMotion xlink:href="#{moving}" [^>]*begin="indefinite"[^>]*>\s*<mpath xlink:href="#([^"]+)"',
         html,
     )
     # The line keeps its step, and its path is named for the motion to follow.
-    assert re.search(rf'<g step="1">\s*<path [^>]*id="{path}"', html)
+    assert re.search(rf'<g step="1"[^>]*>\s*<path [^>]*id="{path}"', html)
