@@ -4,7 +4,7 @@
 // them, as it does on the page.
 
 import type { ActivationFunction } from 'vscode-notebook-renderer';
-import { countSteps, playAnimations, showSteps } from '../../src/static/steps.js';
+import { playAnimations, showSteps } from '../../src/static/steps.js';
 
 /** As slides.css fades the steps in and out, within the figure alone. */
 const STYLE = `
@@ -107,7 +107,8 @@ export const activate: ActivationFunction<State> = (context) => {
 			figure.innerHTML = item.text();
 			const slide = document.createElement('div');
 			slide.append(figure);
-			const count = countSteps(figure);
+			// As the extension counted them, numbering the figure.
+			const count = Number(figure.querySelector('[data-count]')?.getAttribute('data-count')) || 1;
 			element.replaceChildren(slide);
 
 			let current = 1;

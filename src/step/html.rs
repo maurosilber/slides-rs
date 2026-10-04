@@ -68,7 +68,7 @@ pub fn number(html: &str) -> String {
     for (index, children, steps) in sections(html, &elements) {
         let count = number_slide(html, &elements, &children, steps, &mut edits);
         let close = elements[index].close;
-        edits.push((close..close, format!(" data-count=\"{count}\"")));
+        edits.push((close..close, format!(" {COUNT}=\"{count}\"")));
     }
     apply(html, edits)
 }
@@ -152,22 +152,37 @@ fn sections(html: &str, elements: &[Element]) -> Vec<(usize, Vec<usize>, bool)> 
 }
 
 /// A figure with its steps numbered, as a slide that holds it alone numbers
-/// them, as a notebook shows it.
+/// them, as a notebook shows it, with how many steps it has as its
+/// `data-count`, as a slide has.
 pub fn number_figure(svg: &str) -> String {
     let elements = elements(svg);
     let children: Vec<usize> = (0..elements.len())
         .filter(|&child| elements[child].parent.is_none())
         .collect();
     let mut edits = Vec::new();
-    number_slide(svg, &elements, &children, true, &mut edits);
+    let count = number_slide(svg, &elements, &children, true, &mut edits);
+    if let Some(&first) = children.first() {
+        let close = elements[first].close;
+        edits.push((close..close, format!(" {COUNT}=\"{count}\"")));
+    }
     apply(svg, edits)
 }
+
+/// The attribute that says how many steps a slide, or a figure, has.
+const COUNT: &str = "data-count";
 
 /// A figure as it was before `number_figure` numbered it, as it is saved.
 pub fn unnumber_figure(svg: &str) -> String {
     let elements = elements(svg);
     let mut edits = Vec::new();
     for element in &elements {
+        if element.parent.is_none()
+            && let Some(count) = element.find(COUNT)
+            && let Some(value) = count.value.clone()
+        {
+            // Added with a space before it, and quoted.
+            edits.push((count.name.start - 1..value.end + 1, String::new()));
+        }
         if element_mark(svg, element).is_none() {
             continue;
         }
@@ -607,9 +622,11 @@ fn resolve_slide(
         ),
     }));
     warnings.sort_by_key(|warning| warning.at);
+    // As many steps as the latest any shows from, or is hidden again at.
     let count = resolved
         .iter()
-        .map(|&(_, from, _, _)| from)
+        .flat_map(|&(_, from, to, _)| [Some(from), to])
+        .flatten()
         .fold(count + 1, u32::max);
     // What shows from the start, all along, needs no step.
     let resolved = resolved
@@ -1703,6 +1720,12 @@ mod tests {
     }
 
     #[test]
+    fn a_slide_has_the_step_its_last_step_is_hidden_again_at() {
+        let html = "<section><h1>T</h1><p step=\"a\">a</p><p step=\"..a+2\">b</p></section>";
+        assert_eq!(steps(html), ["count 4", "p --from:2", "p --from:2;--to:4"]);
+    }
+
+    #[test]
     fn a_step_hidden_again_before_it_shows_is_warned_of() {
         let html = "<section><h1>T</h1><p>a</p><p>b</p><p step=\"..2\">c</p><p step=\"..4\">d</p></section>";
         let slide = slides(html).remove(0);
@@ -1798,7 +1821,7 @@ mod tests {
         let numbered = number_figure(svg);
         assert_eq!(
             numbered,
-            "<svg viewBox=\"0 0 1 1\"><g step=\"\" class=\"step\" style=\"--from:2\"><path d=\"M0\"/></g><g step=\"+0\" class=\" step\" style=\"--from:2\"/><g step=\"2..3\" collapse=\"\" style=\"fill:red;;--from:2;--to:3\" class=\"step step-collapse\"></g><title>a <g step></title></svg>"
+            "<svg viewBox=\"0 0 1 1\" data-count=\"3\"><g step=\"\" class=\"step\" style=\"--from:2\"><path d=\"M0\"/></g><g step=\"+0\" class=\" step\" style=\"--from:2\"/><g step=\"2..3\" collapse=\"\" style=\"fill:red;;--from:2;--to:3\" class=\"step step-collapse\"></g><title>a <g step></title></svg>"
         );
         assert_eq!(unnumber_figure(&numbered), svg);
     }

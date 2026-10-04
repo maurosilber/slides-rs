@@ -5,7 +5,8 @@
 // The deck numbers the steps of each slide, as src/step/html.rs says: each
 // element that steps has the class `step`, and the steps it shows in as its
 // `--from` and `--to`, and slides.css shows it as the `--step` of what it is
-// in says. A slide says how many steps it has as its `data-count`.
+// in says. A slide, or a figure, says how many steps it has as its
+// `data-count`.
 
 // Whether CSS can hide a step by itself, with `if()`. Where it cannot, each
 // step hidden is marked `step-hidden`, as slides.css computes `--shown`.
@@ -18,19 +19,6 @@ function showSteps(container, step) {
     for (const element of container.querySelectorAll(".step")) {
         element.classList.toggle("step-hidden", hidesItself(element));
     }
-}
-
-// How many steps the steps in `container` make, as many as the highest one
-// any shows from, or is hidden again at.
-function countSteps(container) {
-    let count = 1;
-    for (const element of container.querySelectorAll(".step")) {
-        for (const name of ["--from", "--to"]) {
-            const step = Number(element.style.getPropertyValue(name));
-            if (Number.isInteger(step)) count = Math.max(count, step);
-        }
-    }
-    return count;
 }
 
 // Whether a step is hidden at the step it is at, as slides.css says.
@@ -288,4 +276,4 @@ function backward(animation) {
 }
 
 // The renderer bundles this file as a module, which a page never loads it as.
-if (typeof module == "object") module.exports = { showSteps, countSteps, playAnimations };
+if (typeof module == "object") module.exports = { showSteps, playAnimations };
