@@ -42,7 +42,19 @@ pub struct Kernel {
     session_id: String,
     /// Whether it is interrupted by a message, rather than by a signal.
     interrupted_by_message: bool,
-    connection_file: PathBuf,
+    /// Held for as long as the kernel, which reads it as it starts.
+    _connection_file: ConnectionFile,
+}
+
+/// The file a kernel is told where to listen by, removed once it is no longer
+/// needed, however the kernel ends: shut down, failing to start, or dropped
+/// as a notebook fails.
+struct ConnectionFile(PathBuf);
+
+impl Drop for ConnectionFile {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.0).ok();
+    }
 }
 
 /// A cell that ran, as a notebook shows it.
@@ -181,8 +193,9 @@ impl Kernel {
         tokio::fs::write(&connection_file, serde_json::to_vec(&connection_info)?)
             .await
             .with_context(|| format!("could not write {}", connection_file.display()))?;
+        let connection_file = ConnectionFile(connection_file);
 
-        let mut command = kernelspec.command(&connection_file, None, None)?;
+        let mut command = kernelspec.command(&connection_file.0, None, None)?;
         if let Some(environment) = environment {
             for name in FOREIGN {
                 command.env_remove(name);
@@ -227,7 +240,7 @@ impl Kernel {
             connection_info,
             session_id,
             interrupted_by_message,
-            connection_file,
+            _connection_file: connection_file,
         };
         // The setup belongs to no cell, so it is left out of the count, and
         // what it prints is not kept.
@@ -348,7 +361,6 @@ impl Kernel {
     pub async fn shutdown(mut self) -> Result<()> {
         self.process.start_kill()?;
         self.process.wait().await?;
-        tokio::fs::remove_file(&self.connection_file).await.ok();
         Ok(())
     }
 }
