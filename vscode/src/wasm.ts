@@ -77,6 +77,9 @@ export interface SlideSteps {
 	steps: { line: number; from: number; to: number | null; collapse: boolean }[];
 	/** What is wrong with how it steps, by line. */
 	warnings: { line: number; message: string }[];
+	/** Its columns, as the deck boxes them, from the line of the heading that starts each
+	 * to the last of what it holds, and which of the columns side by side each is, from 0. */
+	columns: { line: number; last: number; index: number }[];
 }
 
 export class Module {

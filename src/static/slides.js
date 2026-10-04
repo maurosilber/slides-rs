@@ -1,26 +1,5 @@
 const slides = document.getElementsByTagName("section");
 
-// Puts each run of h3 columns in a box of its own, as many columns wide as it
-// has h3s, from its first h3 up to the next h1 or h2, which stay outside, as
-// slides.css lays out.
-function wrapColumns(slide) {
-    let columns = null;
-    for (const child of [...slide.children]) {
-        if (child.tagName == "H1" || child.tagName == "H2") {
-            columns = null;
-        } else if (child.tagName == "H3" && !columns) {
-            columns = document.createElement("div");
-            columns.className = "columns";
-            child.before(columns);
-        }
-        if (!columns) continue;
-        columns.append(child);
-        columns.style.setProperty("--cols", columns.querySelectorAll(":scope > h3").length);
-    }
-}
-
-// The columns are boxed once the page is read, as the deck numbered the
-// steps of the slide's children.
 addEventListener("DOMContentLoaded", () => {
     // Every slide knows where it is in the deck, for slides.css to count them,
     // which CSS counters cannot, as the slides not shown are not displayed.
@@ -28,7 +7,6 @@ addEventListener("DOMContentLoaded", () => {
         slide.dataset.number = i + 1;
         slide.dataset.total = slides.length;
     });
-    for (const slide of slides) wrapColumns(slide);
     updateSlide(...positionFromHash(), true);
 });
 

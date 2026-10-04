@@ -31,6 +31,11 @@
 //! line up with the other columns', and the steps after it go on as if it
 //! were not there.
 //!
+//! A run of `<h3>`s, up to the next heading above them, are columns too,
+//! which step one after another, as anything else does. Every run of
+//! columns is boxed in a `<div class="columns">`, for slides.css to lay them
+//! out side by side, and the editor to mark.
+//!
 //! A bound written with its sign, as `+1`, `+0` or `-1`, is a number of
 //! steps from the step of the latest element that steps before it, among
 //! those it is beside, or else of the element it is in, or that holds it,
@@ -61,7 +66,10 @@ use std::ops::Range as Span;
 
 use super::{Bound, Mark, Range, Step};
 
-/// The html with the steps of every `<section>` numbered.
+/// The html with the steps of every `<section>` numbered, and its columns
+/// boxed, as slides.css lays them out: each run of them in a
+/// `<div class="columns">`, with how many it has as its `--cols`, and the
+/// heading that starts each marked `data-column`.
 pub fn number(html: &str) -> String {
     let elements = elements(html);
     let mut edits = Vec::new();
@@ -69,8 +77,59 @@ pub fn number(html: &str) -> String {
         let count = number_slide(html, &elements, &children, steps, &mut edits);
         let close = elements[index].close;
         edits.push((close..close, format!(" {COUNT}=\"{count}\"")));
+        let items = items(html, &elements, &children, steps);
+        for run in runs(&items) {
+            let first = &elements[run[0][0]];
+            let last = &elements[*run.last().unwrap().last().unwrap()];
+            let open = format!("<div class=\"columns\" style=\"--cols:{}\">", run.len());
+            edits.push((first.start..first.start, open));
+            let end = last.outer_end(html);
+            edits.push((end..end, "</div>".to_string()));
+            for column in &run {
+                let close = elements[column[0]].close;
+                edits.push((close..close, " data-column".to_string()));
+            }
+        }
     }
     apply(html, edits)
+}
+
+/// A column of a slide, by where the heading that starts it begins and where
+/// what it holds ends, and which of the columns side by side it is, from 0.
+#[derive(Debug, PartialEq)]
+pub struct Column {
+    pub at: usize,
+    pub end: usize,
+    pub index: usize,
+}
+
+/// The runs of columns of a slide made of `items`, each with the elements
+/// of each of its columns, in order, the heading that starts it first, and
+/// the runs within a column after the run it is in.
+fn runs(items: &[Item]) -> Vec<Vec<Vec<usize>>> {
+    let mut found = Vec::new();
+    for item in items {
+        if let Item::Columns { columns, .. } = item {
+            found.push(columns.iter().map(|column| elements_of(column)).collect());
+            for column in columns {
+                found.extend(runs(column));
+            }
+        }
+    }
+    found
+}
+
+/// The elements of `items`, those in their columns too, in order.
+fn elements_of(items: &[Item]) -> Vec<usize> {
+    items
+        .iter()
+        .flat_map(|item| match item {
+            &Item::Element { index, .. } => vec![index],
+            Item::Columns { columns, .. } => {
+                columns.iter().flat_map(|column| elements_of(column)).collect()
+            }
+        })
+        .collect()
 }
 
 /// A slide's steps, as `number` numbers them, by where they are in the html.
@@ -84,6 +143,8 @@ pub struct Slide {
     pub steps: Vec<Stepped>,
     /// What is wrong with how it steps, in order.
     pub warnings: Vec<Warning>,
+    /// Its columns, in order.
+    pub columns: Vec<Column>,
 }
 
 /// What is wrong with how a slide steps, by where in the html.
@@ -109,8 +170,9 @@ pub fn slides(html: &str) -> Vec<Slide> {
     let elements = elements(html);
     sections(html, &elements)
         .into_iter()
-        .map(|(index, children, steps)| {
-            let (resolved, count, warnings) = resolve_slide(html, &elements, &children, steps);
+        .map(|(index, children, steps_on)| {
+            let (resolved, count, warnings) =
+                resolve_slide(html, &elements, &children, steps_on);
             let mut steps: Vec<Stepped> = resolved
                 .into_iter()
                 .map(|(target, from, to, collapse)| Stepped {
@@ -124,11 +186,23 @@ pub fn slides(html: &str) -> Vec<Slide> {
                 })
                 .collect();
             steps.sort_by_key(|stepped| stepped.at);
+            let items = items(html, &elements, &children, steps_on);
+            let columns = runs(&items)
+                .into_iter()
+                .flat_map(|run| {
+                    run.into_iter().enumerate().map(|(index, column)| Column {
+                        at: elements[column[0]].start,
+                        end: elements[*column.last().unwrap()].content_end(html),
+                        index,
+                    })
+                })
+                .collect();
             Slide {
                 at: elements[index].start,
                 count,
                 steps,
                 warnings,
+                columns,
             }
         })
         .collect()
@@ -332,6 +406,11 @@ enum Mode {
     Interleave,
 }
 
+/// The level of the headings that start columns, unless a heading says
+/// otherwise by stepping them as a mode says, when they are the first under
+/// it.
+const COLUMN: u8 = 3;
+
 /// What a part of the slide is made of, in order.
 enum Item {
     /// An element, with whether it may be a step of its own, and whether the
@@ -341,14 +420,18 @@ enum Item {
         step: bool,
         marks: bool,
     },
-    /// The columns under a heading, which step as its mode says.
-    Columns { mode: Mode, columns: Vec<Vec<Item>> },
+    /// The columns under a heading, which step as its mode says, or one
+    /// after another, as a run of `<h3>`s does that says nothing.
+    Columns {
+        mode: Option<Mode>,
+        columns: Vec<Vec<Item>>,
+    },
 }
 
 /// A heading whose columns step as its mode says, as they are read.
 struct Frame {
     level: u8,
-    mode: Mode,
+    mode: Option<Mode>,
     /// The level of the headings that start its columns, the level of the
     /// first one under it.
     column: Option<u8>,
@@ -404,6 +487,15 @@ fn items(html: &str, elements: &[Element], children: &[usize], steps: bool) -> V
             {
                 frame.column.get_or_insert(level);
                 frame.columns.push(Vec::new());
+            } else if level == COLUMN {
+                // A run of them, up to the next heading above them, are
+                // columns, which step one after another.
+                frames.push(Frame {
+                    level: COLUMN - 1,
+                    mode: None,
+                    column: Some(COLUMN),
+                    columns: vec![Vec::new()],
+                });
             }
             mode = match element.attribute(html, "steps") {
                 Some("parallel") => Some(Mode::Parallel),
@@ -429,7 +521,7 @@ fn items(html: &str, elements: &[Element], children: &[usize], steps: bool) -> V
         if let (Some(level), Some(mode)) = (level, mode) {
             frames.push(Frame {
                 level,
-                mode,
+                mode: Some(mode),
                 column: None,
                 columns: Vec::new(),
             });
@@ -661,7 +753,7 @@ fn number_items(
     };
     let mut groups = vec![new()];
     let mut first = true;
-    for item in items {
+    for item in in_order(items) {
         match item {
             &Item::Element { index, step, marks } => {
                 let element = &elements[index];
@@ -684,11 +776,15 @@ fn number_items(
                 }
                 groups.last_mut().unwrap().elements.push((index, marks));
             }
-            Item::Columns { mode, columns } => {
+            Item::Columns {
+                mode: Some(mode),
+                columns,
+            } => {
                 let group = groups.last_mut().unwrap();
                 let before = group.elements.len();
                 group.columns.push((*mode, columns, before));
             }
+            Item::Columns { mode: None, .. } => unreachable!("taken in order"),
         }
         first = false;
     }
@@ -793,6 +889,21 @@ fn number_items(
         }
     }
     (shown, count)
+}
+
+/// The items, with the columns that step one after another taken in the
+/// order they come in, as if they were not columns.
+fn in_order(items: &[Item]) -> Vec<&Item> {
+    items
+        .iter()
+        .flat_map(|item| match item {
+            Item::Columns {
+                mode: None,
+                columns,
+            } => columns.iter().flat_map(|column| in_order(column)).collect(),
+            item => vec![item],
+        })
+        .collect()
 }
 
 /// The mark with the numbers of its range counted from 0, the step a slide
@@ -1180,6 +1291,27 @@ impl Element {
             .find(name)
             .and_then(|attribute| attribute.value.clone());
         value.is_some_and(|value| matches!(html.as_bytes().get(value.end), Some(b'"' | b'\'')))
+    }
+
+    /// Where it ends, after its end tag, if it has one.
+    fn outer_end(&self, html: &str) -> usize {
+        let end = self.text.as_ref().map_or(self.close, |text| text.end);
+        let rest = &html[end..];
+        let closes = rest.starts_with("</")
+            && rest[2..]
+                .get(..self.name.len())
+                .is_some_and(|name| name.eq_ignore_ascii_case(&self.name));
+        match rest.find('>') {
+            Some(close) if closes => end + close + 1,
+            _ => end,
+        }
+    }
+
+    /// Where what it shows ends: its last character but whitespace, before
+    /// its end tag, or its start tag's.
+    fn content_end(&self, html: &str) -> usize {
+        let end = self.text.as_ref().map_or(self.close, |text| text.end);
+        html[..end].trim_end().len()
     }
 
     fn has_class(&self, html: &str, class: &str) -> bool {
@@ -1715,6 +1847,38 @@ mod tests {
             [
                 (html.find("<p step=\"x").unwrap(), message.to_string()),
                 (html.find("<p step=\"..").unwrap(), message.to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_of_h3s_is_boxed_as_columns_up_to_the_next_heading_above_them() {
+        let html = "<section><h1>T</h1><h3>A</h3><p>a</p><h3>B</h3><ul><li>b</li></ul><h2>S</h2><p>c</p></section>";
+        assert_eq!(
+            number(html),
+            "<section data-count=\"7\"><h1>T</h1><div class=\"columns\" style=\"--cols:2\"><h3 class=\"step\" style=\"--from:2\" data-column>A</h3><p class=\"step\" style=\"--from:3\">a</p><h3 class=\"step\" style=\"--from:4\" data-column>B</h3><ul class=\"step\" style=\"--from:5\"><li class=\"step\" style=\"--from:5\">b</li></ul></div><h2 class=\"step\" style=\"--from:6\">S</h2><p class=\"step\" style=\"--from:7\">c</p></section>"
+        );
+    }
+
+    #[test]
+    fn the_columns_a_heading_steps_are_boxed_whatever_their_level() {
+        let html = "<section><h1 steps=\"parallel\">T</h1><h2>A</h2><h3>x</h3><h3>y</h3><h2>B</h2><p>b</p></section>";
+        let numbered = number(html);
+        assert_eq!(numbered.matches("<div class=\"columns\" style=\"--cols:2\">").count(), 2, "{numbered}");
+        assert!(numbered.contains("<p class=\"step\" style=\"--from:2\">b</p></div></section>"), "{numbered}");
+        let columns: Vec<_> = slides(html)
+            .remove(0)
+            .columns
+            .into_iter()
+            .map(|column| (&html[column.at..column.end], column.index))
+            .collect();
+        assert_eq!(
+            columns,
+            [
+                ("<h2>A</h2><h3>x</h3><h3>y", 0),
+                ("<h2>B</h2><p>b", 1),
+                ("<h3>x", 0),
+                ("<h3>y", 1),
             ]
         );
     }

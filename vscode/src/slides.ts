@@ -3,7 +3,7 @@
 // its headings by their level, its columns, the step each part shows in, and buttons
 // under the break, or under the frontmatter for the first, to move it, with all its
 // markdown, before another one, or to add one before or after it. Where they break,
-// and how they step, is the deck's own reading of the markdown, which the module
+// their columns and how they step, is the deck's own reading of the markdown, which the module
 // answers, along with what is wrong with how they step, as warnings on their lines. The
 // `slides.editor` settings turn each of the marks off.
 
@@ -55,9 +55,6 @@ function shown(document: vscode.TextDocument): Shown {
 		steps: settings.get('steps', true),
 	};
 }
-
-/** The level of the headings that start the columns, as slides.js boxes them. */
-const COLUMN = 3;
 
 export class SlideEditor implements vscode.Disposable {
 	/** The layout of the last version asked for of each document, by uri. */
@@ -244,7 +241,7 @@ export class SlideEditor implements vscode.Disposable {
 		this.headings.forEach((type, i) => editor.setDecorations(type, headings
 			.filter((heading) => heading.level === i + 1)
 			.map((heading) => new vscode.Range(heading.line, 0, heading.last, 0))));
-		const columns = show.columns ? columnsOf(document, layout) : [];
+		const columns = show.columns ? columnsOf(layout) : [];
 		const steps = show.steps ? stepMarks(layout.steps) : undefined;
 		editor.setDecorations(this.gutter, gutterOf(document.lineCount, columns, steps, this.collapsed));
 		this.diagnostics.set(document.uri, layout.steps
@@ -392,33 +389,19 @@ export class SlideEditor implements vscode.Disposable {
 	}
 }
 
-/** A column of a slide, from its heading to the last line before the next heading of its
- * level or above, and which of the columns side by side it is, from 0. */
+/** A column of a slide, from its heading to the last line of what it holds, and which of
+ * the columns side by side it is, from 0. */
 interface Column {
 	range: vscode.Range;
 	index: number;
 }
 
-/** The columns of the slides, as slides.js boxes them: from each heading of their level
- * up to the next one, or to one above it, which ends the row, as the slide's end does. */
-function columnsOf(document: vscode.TextDocument, layout: Layout): Column[] {
-	const columns: Column[] = [];
-	for (const slide of layout.slides) {
-		// A heading under the columns' level is in one, rather than its end.
-		const headings = layout.breaks.headings.filter((heading) =>
-			heading.level <= COLUMN && slide.first <= heading.line && heading.line <= slide.last);
-		let index = 0;
-		headings.forEach((heading, i) => {
-			if (heading.level !== COLUMN) {
-				index = 0;
-				return;
-			}
-			let last = (headings[i + 1]?.line ?? slide.last + 1) - 1;
-			while (last > heading.last && document.lineAt(last).isEmptyOrWhitespace) last--;
-			columns.push({ range: new vscode.Range(heading.line, 0, last, 0), index: index++ });
-		});
-	}
-	return columns;
+/** The columns of the slides, as the deck boxes them, a run of them within another's
+ * column after it. */
+function columnsOf(layout: Layout): Column[] {
+	return layout.steps
+		.flatMap((slide) => slide.columns)
+		.map(({ line, last, index }) => ({ range: new vscode.Range(line, 0, last, 0), index }));
 }
 
 /** The steps written for each line that steps, by line: `3` from the third step on,

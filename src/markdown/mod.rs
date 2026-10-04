@@ -229,6 +229,18 @@ pub struct SlideSteps {
     /// Whether it holds nothing, as a break at either end of a file, or two
     /// in a row, leave, which the deck leaves out.
     pub empty: bool,
+    /// Its columns, as the deck boxes them, in order.
+    pub columns: Vec<LineColumn>,
+}
+
+/// A column of a slide, from the line of the heading that starts it to the
+/// last line of what it holds, and which of the columns side by side it is,
+/// from 0.
+#[derive(Debug, PartialEq)]
+pub struct LineColumn {
+    pub line: usize,
+    pub last: usize,
+    pub index: usize,
 }
 
 /// What is wrong with how a slide steps, on the line it is about.
@@ -345,6 +357,15 @@ fn steps_of(
                 .map(|warning| LineWarning {
                     line: line(warning.at),
                     message: warning.message,
+                })
+                .collect(),
+            columns: slide
+                .columns
+                .into_iter()
+                .map(|column| LineColumn {
+                    line: line(column.at),
+                    last: line(column.end),
+                    index: column.index,
                 })
                 .collect(),
         })
@@ -694,8 +715,7 @@ pub struct Breaks {
     pub rules: Vec<usize>,
     /// The imports, by line.
     pub imports: Vec<Import>,
-    /// The headings of the slides, which slides.js makes columns of, rather
-    /// than those in a list or a quote.
+    /// The headings of the slides, rather than those in a list or a quote.
     pub headings: Vec<Heading>,
     /// Whether it has what only a deck, or a part of one, has: frontmatter
     /// the deck reads, an import or a code cell.
@@ -959,6 +979,17 @@ mod tests {
         assert_eq!(at(6), position(4, 1));
         // The empty slide between two rules is left out.
         assert_eq!(at(12), position(5, 1));
+    }
+
+    #[test]
+    fn the_columns_are_found_by_their_lines() {
+        let markdown = "# One\n\n### A\n\n- a\n- b\n\n### B\n\ntext\non two lines\n\n## Below\n";
+        let columns: Vec<_> = steps(markdown, |_| Vec::new())
+            .into_iter()
+            .flat_map(|slide| slide.columns)
+            .map(|column| (column.line, column.last, column.index))
+            .collect();
+        assert_eq!(columns, [(2, 5, 0), (7, 10, 1)]);
     }
 
     #[test]

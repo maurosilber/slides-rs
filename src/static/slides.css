@@ -43,15 +43,17 @@ section::after {
     bottom: 2cqmin;
 }
 
-/* Each run of H3 sections is a row of columns, one per H3, which slides.js
-   puts in a box of its own. Headings above the H3 stay out of it: Safari
-   misplaces the columns of a box that holds an element spanning them. */
+/* Each run of columns is a row of them, one per heading that starts one,
+   which the deck puts in a box of its own, as src/step/html.rs says: the
+   H3s, or the headings a heading steps through as its columns. Headings
+   above them stay out of it: Safari misplaces the columns of a box that
+   holds an element spanning them. */
 .columns {
     column-count: var(--cols, 1);
     /* The theme sets the gap on the slide. */
     column-gap: inherit;
 
-    &>h3:not(:first-of-type) {
+    &>[data-column]:not(:first-child) {
         break-before: column;
     }
 }

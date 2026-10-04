@@ -94,11 +94,23 @@ fn respond(request: Request) -> Result<serde_json::Value> {
                                 serde_json::json!({ "line": warning.line, "message": warning.message })
                             })
                             .collect();
+                        let columns: Vec<_> = slide
+                            .columns
+                            .into_iter()
+                            .map(|column| {
+                                serde_json::json!({
+                                    "line": column.line,
+                                    "last": column.last,
+                                    "index": column.index,
+                                })
+                            })
+                            .collect();
                         serde_json::json!({
                             "line": slide.line,
                             "count": slide.count,
                             "steps": steps,
                             "warnings": warnings,
+                            "columns": columns,
                         })
                     })
                     .collect(),
