@@ -15,14 +15,15 @@ async function open(file) {
 	return until(() => vscode.workspace.notebookDocuments.find((notebook) => notebook.uri.fsPath === uri.fsPath));
 }
 
-/** One of the example's slides of figures, copied and rendered with the extension's
- * slides-rs, so that its outputs are saved as the deck saves them. */
-function renderedSlide(name = 'slide2.md') {
+/** The slides of figures next to the tests, copied and rendered with the extension's
+ * slides-rs, so that its outputs are saved as the deck saves them. They are the tests'
+ * own, rather than the example's, which changes as it shows more. */
+function renderedSlide() {
 	const deck = path.join(process.env.SLIDES_DECK, 'rendered');
-	const file = path.join(deck, name);
+	const file = path.join(deck, 'figures.md');
 	if (!fs.existsSync(file)) {
 		fs.mkdirSync(deck, { recursive: true });
-		fs.copyFileSync(path.join(repo, 'example', 'sections', name), file);
+		fs.copyFileSync(path.join(repo, 'vscode', 'test', 'figures.md'), file);
 		const slidesRs = path.join(repo, 'vscode', 'dist', 'slides-rs');
 		const render = spawnSync(slidesRs, [file], { encoding: 'utf8' });
 		assert.strictEqual(render.status, 0, render.stderr);
