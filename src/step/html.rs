@@ -125,9 +125,10 @@ fn elements_of(items: &[Item]) -> Vec<usize> {
         .iter()
         .flat_map(|item| match item {
             &Item::Element { index, .. } => vec![index],
-            Item::Columns { columns, .. } => {
-                columns.iter().flat_map(|column| elements_of(column)).collect()
-            }
+            Item::Columns { columns, .. } => columns
+                .iter()
+                .flat_map(|column| elements_of(column))
+                .collect(),
         })
         .collect()
 }
@@ -171,8 +172,7 @@ pub fn slides(html: &str) -> Vec<Slide> {
     sections(html, &elements)
         .into_iter()
         .map(|(index, children, steps_on)| {
-            let (resolved, count, warnings) =
-                resolve_slide(html, &elements, &children, steps_on);
+            let (resolved, count, warnings) = resolve_slide(html, &elements, &children, steps_on);
             let mut steps: Vec<Stepped> = resolved
                 .into_iter()
                 .map(|(target, from, to, collapse)| Stepped {
@@ -661,9 +661,7 @@ fn resolve_slide(
     unnamed.dedup();
     warnings.extend(unnamed.into_iter().map(|(at, name)| Warning {
         at,
-        message: format!(
-            "no step of the slide is named `{name}`: name one with `step=\"{name}\"`"
-        ),
+        message: format!("no step of the slide is named `{name}`: name one with `step=\"{name}\"`"),
     }));
     let resolved: Vec<Resolved> = targets
         .iter()
@@ -1864,8 +1862,17 @@ mod tests {
     fn the_columns_a_heading_steps_are_boxed_whatever_their_level() {
         let html = "<section><h1 steps=\"parallel\">T</h1><h2>A</h2><h3>x</h3><h3>y</h3><h2>B</h2><p>b</p></section>";
         let numbered = number(html);
-        assert_eq!(numbered.matches("<div class=\"columns\" style=\"--cols:2\">").count(), 2, "{numbered}");
-        assert!(numbered.contains("<p class=\"step\" style=\"--from:2\">b</p></div></section>"), "{numbered}");
+        assert_eq!(
+            numbered
+                .matches("<div class=\"columns\" style=\"--cols:2\">")
+                .count(),
+            2,
+            "{numbered}"
+        );
+        assert!(
+            numbered.contains("<p class=\"step\" style=\"--from:2\">b</p></div></section>"),
+            "{numbered}"
+        );
         let columns: Vec<_> = slides(html)
             .remove(0)
             .columns
@@ -1906,7 +1913,10 @@ mod tests {
     #[test]
     fn a_math_step_can_be_named_next() {
         let html = "<section><h1>T</h1><p>a</p><p><span class=\"math\">\\htmlData{step=next}{b}</span></p><p step=\"next+0\">c</p></section>";
-        assert_eq!(steps(html), ["count 4", "p --from:2", "p --from:3", "p --from:4"]);
+        assert_eq!(
+            steps(html),
+            ["count 4", "p --from:2", "p --from:3", "p --from:4"]
+        );
     }
 
     #[test]

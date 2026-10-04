@@ -238,7 +238,13 @@ impl Deck {
         let dir = parent(deck);
         let outputs = href(dir, &self.outputs);
         let mut body = String::new();
-        self.body(slides, steps, &outputs, &mut Importing::default(), &mut body);
+        self.body(
+            slides,
+            steps,
+            &outputs,
+            &mut Importing::default(),
+            &mut body,
+        );
         let settings = &self.files[deck].page;
         let html = page::page(&body, settings, dir, &outputs, output, self.self_contained);
         if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
@@ -277,7 +283,13 @@ mod tests {
         }
         let mut body = String::new();
         let mut importing = Importing::default();
-        deck.body(Path::new("/deck/index.md"), true, store::DIR, &mut importing, &mut body);
+        deck.body(
+            Path::new("/deck/index.md"),
+            true,
+            store::DIR,
+            &mut importing,
+            &mut body,
+        );
         let opening = |title: &str| {
             let heading = body.find(&format!(">{title}</h1>")).unwrap();
             let section = body[..heading].rfind("<section").unwrap();
@@ -303,7 +315,13 @@ mod tests {
         }
         let mut body = String::new();
         let mut importing = Importing::default();
-        deck.body(Path::new("/deck/a.md"), true, store::DIR, &mut importing, &mut body);
+        deck.body(
+            Path::new("/deck/a.md"),
+            true,
+            store::DIR,
+            &mut importing,
+            &mut body,
+        );
         assert_eq!(body.matches("<h1>").count(), 2, "{body}");
     }
 
@@ -325,9 +343,8 @@ mod tests {
                 markdown::render(markdown, Path::new(path)),
             );
         }
-        let steps = |target: &str| {
-            deck.steps_in(Path::new("/deck/index.md"), Path::new(target), true)
-        };
+        let steps =
+            |target: &str| deck.steps_in(Path::new("/deck/index.md"), Path::new(target), true);
         assert_eq!(steps("/deck/index.md"), Some(true));
         assert_eq!(steps("/deck/same.md"), Some(false));
         assert_eq!(steps("/deck/other.md"), None);

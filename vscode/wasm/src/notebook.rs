@@ -10,7 +10,11 @@ const PYTHON: &str = "python";
 
 /// The language a notebook shows a code cell in, given the one its fence names.
 fn shown(language: &str) -> &str {
-    if language.is_empty() { PYTHON } else { language }
+    if language.is_empty() {
+        PYTHON
+    } else {
+        language
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
@@ -233,7 +237,6 @@ fn longest_tildes(code: &str) -> usize {
 mod tests {
     use super::*;
 
-
     const SLIDES: &str = "---\ntheme: dark\n---\n\n# Title\n\n~~~python\nx = 1\n~~~\n\n~~~python {.hidden}\n\nx\n~~~\n\n---\n\n    indented\n\n~~~\n~~~\n";
 
     #[test]
@@ -266,21 +269,29 @@ mod tests {
 
     #[test]
     fn a_fence_that_names_no_language_is_shown_in_python() {
-        let mut cells = cells("~~~
+        let mut cells = cells(
+            "~~~
 a
 ~~~
-");
+",
+        );
         assert_eq!(cells[0].language, "python");
         cells[0].source = "b".to_string();
-        assert_eq!(markdown(&cells), "~~~
+        assert_eq!(
+            markdown(&cells),
+            "~~~
 b
 ~~~
-");
+"
+        );
         cells[0].language = "bash".to_string();
-        assert_eq!(markdown(&cells), "~~~bash
+        assert_eq!(
+            markdown(&cells),
+            "~~~bash
 b
 ~~~
-");
+"
+        );
     }
 
     #[test]

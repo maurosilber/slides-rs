@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use jupyter_protocol::connection_info::Transport;
 use jupyter_protocol::{
-    ConnectionInfo, ExecuteReply, ExecuteRequest, ExecutionState, InterruptRequest,
-    JupyterMessage, JupyterMessageContent, ReplyStatus,
+    ConnectionInfo, ExecuteReply, ExecuteRequest, ExecutionState, InterruptRequest, JupyterMessage,
+    JupyterMessageContent, ReplyStatus,
 };
 use jupyter_zmq_client::{
     ClientControlConnection, ClientIoPubConnection, ClientShellConnection, KernelspecDir,

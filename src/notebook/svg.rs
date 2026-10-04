@@ -121,7 +121,10 @@ fn write(svg: &str, ids: &HashMap<String, usize>, prefix: &str) -> Result<Vec<u8
             }
         } else if tag == "path"
             && defs.is_none()
-            && !rewritten.attributes().flatten().any(|a| a.key.as_ref() == "id")
+            && !rewritten
+                .attributes()
+                .flatten()
+                .any(|a| a.key.as_ref() == "id")
             && let Some((name, _)) = named.take()
         {
             // The path a group names is the first one it draws, not one it defines.
