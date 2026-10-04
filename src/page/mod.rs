@@ -9,7 +9,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::markdown::{self, PageSettings};
-use crate::paths::{href, parent};
+use crate::paths::{href, parent, unescape};
 use crate::{step, store};
 
 const TEMPLATE: &str = include_str!("template.html");
@@ -321,7 +321,7 @@ fn rebase(src: &str, dir: &Path, page_dir: &Path) -> Option<String> {
     }
     let end = src.find(['?', '#']).unwrap_or(src.len());
     let (path, rest) = src.split_at(end);
-    let href = href(page_dir, &dir.join(path));
+    let href = href(page_dir, &dir.join(unescape(path)));
     Some(if href.is_empty() {
         format!(".{rest}")
     } else {
@@ -368,31 +368,6 @@ fn data_url(dir: &Path, src: &str) -> Option<String> {
             None
         }
     }
-}
-
-/// A path as an attribute holds it: with its ampersands escaped, and
-/// whatever else a URL cannot hold percent-encoded.
-fn unescape(src: &str) -> String {
-    let src = src.replace("&amp;", "&");
-    let mut bytes = Vec::with_capacity(src.len());
-    let mut rest = src.as_bytes();
-    while let Some((&byte, after)) = rest.split_first() {
-        let hex = after
-            .get(..2)
-            .and_then(|hex| std::str::from_utf8(hex).ok())
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        match (byte, hex) {
-            (b'%', Some(decoded)) => {
-                bytes.push(decoded);
-                rest = &after[2..];
-            }
-            _ => {
-                bytes.push(byte);
-                rest = after;
-            }
-        }
-    }
-    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// The stylesheet a theme names, relative to the html: one of the

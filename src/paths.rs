@@ -33,13 +33,54 @@ pub fn read(path: &Path) -> String {
 }
 
 /// How a page in `dir` links `path`, as a URL relative to it, with `/` for
-/// every separator; nothing for `dir` itself. Both are canonical.
+/// every separator, and whatever else a URL's path cannot hold
+/// percent-encoded, as a space, `#` or `%`; nothing for `dir` itself. Both
+/// are canonical. `unescape` reads it back.
 pub fn href(dir: &Path, path: &Path) -> String {
     relative(dir, path)
         .components()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .map(|component| {
+            let name = component.as_os_str().to_string_lossy();
+            let mut encoded = String::with_capacity(name.len());
+            for &byte in name.as_bytes() {
+                // Unreserved, or a delimiter that means nothing in a path but
+                // `&`, which html reads as a reference, and `:`, which in the
+                // first name reads as a scheme.
+                if byte.is_ascii_alphanumeric() || b"-._~!$'()*+,;=@".contains(&byte) {
+                    encoded.push(byte as char);
+                } else {
+                    encoded.push_str(&format!("%{byte:02X}"));
+                }
+            }
+            encoded
+        })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// A path as an attribute holds it: with its ampersands escaped, and
+/// whatever else a URL cannot hold percent-encoded.
+pub fn unescape(src: &str) -> String {
+    let src = src.replace("&amp;", "&");
+    let mut bytes = Vec::with_capacity(src.len());
+    let mut rest = src.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        let hex = after
+            .get(..2)
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (byte, hex) {
+            (b'%', Some(decoded)) => {
+                bytes.push(decoded);
+                rest = &after[2..];
+            }
+            _ => {
+                bytes.push(byte);
+                rest = after;
+            }
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// The path of `path` from `dir`, climbing out of `dir` as far as they
@@ -104,5 +145,16 @@ mod tests {
         assert_eq!(href("/deck", "/deck/_outputs"), "_outputs");
         assert_eq!(href("/deck/_outputs", "/deck"), "..");
         assert_eq!(href("/deck/out", "/deck/_outputs"), "../_outputs");
+    }
+
+    #[test]
+    fn an_href_encodes_what_a_url_cannot_hold_and_is_read_back() {
+        let path = "/deck/my figures/50% #1 & a:b/ñ.png";
+        let written = href(Path::new("/deck"), Path::new(path));
+        assert_eq!(
+            written,
+            "my%20figures/50%25%20%231%20%26%20a%3Ab/%C3%B1.png"
+        );
+        assert_eq!(Path::new("/deck").join(unescape(&written)), Path::new(path));
     }
 }
