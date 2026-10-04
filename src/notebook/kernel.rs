@@ -320,8 +320,20 @@ impl Kernel {
                     break;
                 }
                 JupyterMessageContent::StreamContent(stream) => outputs.push_stream(stream),
-                JupyterMessageContent::ExecuteResult(result) => outputs.push_media(&result.data)?,
-                JupyterMessageContent::DisplayData(display) => outputs.push_media(&display.data)?,
+                JupyterMessageContent::ExecuteResult(result) => {
+                    outputs.push_media(&result.data, None)?
+                }
+                JupyterMessageContent::DisplayData(display) => {
+                    let id = display.transient.as_ref();
+                    let id = id.and_then(|transient| transient.display_id.as_deref());
+                    outputs.push_media(&display.data, id)?
+                }
+                JupyterMessageContent::UpdateDisplayData(update) => {
+                    if let Some(id) = &update.transient.display_id {
+                        outputs.update_media(&update.data, id)?
+                    }
+                }
+                JupyterMessageContent::ClearOutput(clear) => outputs.clear(clear.wait),
                 JupyterMessageContent::ErrorOutput(error) => outputs.push_error(error),
                 _ => {}
             }

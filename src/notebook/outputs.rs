@@ -48,28 +48,35 @@ fn rank(media: &MediaType) -> usize {
         .map_or(0, |index| store::MEDIA_TYPES.len() - index)
 }
 
-/// Collects what a kernel publishes for one cell, in the order it arrives.
+/// Collects what a kernel publishes for one cell, in the order it arrives,
+/// as a notebook shows it once the cell is done: without what it cleared, and
+/// with each display as it was last updated.
 #[derive(Default)]
 pub struct Outputs {
-    outputs: Vec<Output>,
+    /// Each output, with the id of the display it shows, if it has one.
+    outputs: Vec<(Output, Option<String>)>,
     /// Which stream the last output came from, if it was a stream at all.
     open_stream: Option<&'static str>,
+    /// Whether to clear what there is once the next output arrives, as
+    /// `clear_output(wait=True)` asks, to redraw without flickering.
+    clear_on_next: bool,
 }
 
 impl Outputs {
     /// A kernel splits a long `print` across several messages, so consecutive
     /// text from the same stream belongs in one file.
     pub fn push_stream(&mut self, stream: &StreamContent) {
+        self.next();
         let name = match stream.name {
             jupyter_protocol::Stdio::Stdout => "stdout",
             jupyter_protocol::Stdio::Stderr => "stderr",
         };
         match self.outputs.last_mut() {
-            Some(last) if self.open_stream == Some(name) => {
+            Some((last, _)) if self.open_stream == Some(name) => {
                 last.bytes.extend_from_slice(stream.text.as_bytes());
             }
             _ => {
-                self.outputs.push(text("txt", &stream.text));
+                self.outputs.push((text("txt", &stream.text), None));
                 self.open_stream = Some(name);
             }
         }
@@ -77,23 +84,65 @@ impl Outputs {
 
     /// Keep the richest representation the kernel offered; a figure arrives as
     /// both a PNG and a `<Figure ...>` repr, and only the PNG belongs on a slide.
-    pub fn push_media(&mut self, media: &Media) -> Result<()> {
+    /// A display with an id can be updated later, by `update_media`.
+    pub fn push_media(&mut self, media: &Media, display: Option<&str>) -> Result<()> {
+        self.next();
         self.open_stream = None;
         let Some(richest) = media.richest(rank) else {
             return Ok(());
         };
-        self.outputs.push(from_media(richest)?);
+        self.outputs
+            .push((from_media(richest)?, display.map(str::to_string)));
+        Ok(())
+    }
+
+    /// Shows `media` in place of what each display with the id `display`
+    /// shows, as `display_handle.update` asks.
+    pub fn update_media(&mut self, media: &Media, display: &str) -> Result<()> {
+        let Some(richest) = media.richest(rank) else {
+            return Ok(());
+        };
+        let updated = from_media(richest)?;
+        for (output, id) in &mut self.outputs {
+            if id.as_deref() == Some(display) {
+                *output = Output {
+                    extension: updated.extension,
+                    bytes: updated.bytes.clone(),
+                };
+            }
+        }
         Ok(())
     }
 
     pub fn push_error(&mut self, error: &ErrorOutput) {
+        self.next();
         self.open_stream = None;
         let traceback = error.traceback.join("\n");
-        self.outputs.push(text("txt", &strip_ansi(&traceback)));
+        self.outputs
+            .push((text("txt", &strip_ansi(&traceback)), None));
+    }
+
+    /// Clears what the cell has shown so far, as `clear_output` asks: now, or,
+    /// with `wait`, once the next output arrives.
+    pub fn clear(&mut self, wait: bool) {
+        if wait {
+            self.clear_on_next = true;
+        } else {
+            self.outputs.clear();
+            self.open_stream = None;
+            self.clear_on_next = false;
+        }
+    }
+
+    /// Before an output arrives, clears what was to be cleared then.
+    fn next(&mut self) {
+        if self.clear_on_next {
+            self.clear(false);
+        }
     }
 
     pub fn into_vec(self) -> Vec<Output> {
-        self.outputs
+        self.outputs.into_iter().map(|(output, _)| output).collect()
     }
 }
 
@@ -128,6 +177,52 @@ mod tests {
         assert_eq!(strip_ansi(traceback), "ZeroDivisionError: division by zero");
     }
 
+    fn stdout(text: &str) -> StreamContent {
+        StreamContent {
+            name: jupyter_protocol::Stdio::Stdout,
+            text: text.to_string(),
+        }
+    }
+
+    fn plain(text: &str) -> Media {
+        Media {
+            content: vec![MediaType::Plain(text.to_string())],
+        }
+    }
+
+    fn texts(outputs: Outputs) -> Vec<String> {
+        outputs
+            .into_vec()
+            .into_iter()
+            .map(|output| String::from_utf8(output.bytes).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn what_is_cleared_is_not_saved() {
+        let mut outputs = Outputs::default();
+        outputs.push_stream(&stdout("1\n"));
+        outputs.clear(false);
+        outputs.push_stream(&stdout("2\n"));
+        outputs.push_media(&plain("a"), None).unwrap();
+        // Cleared once the next output arrives, as an animation redraws.
+        outputs.clear(true);
+        outputs.push_media(&plain("b"), None).unwrap();
+        outputs.clear(true);
+        assert_eq!(texts(outputs), ["b"]);
+    }
+
+    #[test]
+    fn a_display_is_saved_as_last_updated() {
+        let mut outputs = Outputs::default();
+        outputs.push_media(&plain("0%"), Some("bar")).unwrap();
+        outputs.push_stream(&stdout("working\n"));
+        outputs.update_media(&plain("50%"), "bar").unwrap();
+        outputs.update_media(&plain("100%"), "bar").unwrap();
+        outputs.update_media(&plain("other"), "none").unwrap();
+        assert_eq!(texts(outputs), ["100%", "working\n"]);
+    }
+
     #[test]
     fn a_figure_is_saved_as_an_image_not_as_its_repr() {
         let media = Media {
@@ -137,7 +232,7 @@ mod tests {
             ],
         };
         let mut outputs = Outputs::default();
-        outputs.push_media(&media).unwrap();
+        outputs.push_media(&media, None).unwrap();
         let outputs = outputs.into_vec();
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].extension, "png");
@@ -152,7 +247,7 @@ mod tests {
             )],
         };
         let mut outputs = Outputs::default();
-        outputs.push_media(&media).unwrap();
+        outputs.push_media(&media, None).unwrap();
         assert_eq!(outputs.into_vec()[0].bytes, br#"<svg><g step="1"/></svg>"#);
     }
 
