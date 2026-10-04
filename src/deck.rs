@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::markdown::{self, File, NO_STEPS, Part, SECTION};
 use crate::notebook::{Notebook, Runner};
-use crate::paths::{href, parent, read};
+use crate::paths::{Importing, href, parent, read};
 use crate::{page, progress, store};
 
 /// Each file is rendered on its own, so that a change re-renders only that file.
@@ -152,7 +152,17 @@ impl Deck {
     /// The slides of a file whose steps are off, as set in its own
     /// frontmatter or, without it, as `steps` says, are marked so. Outputs
     /// are linked through `outputs`, the outputs directory as the deck links it.
-    fn body(&self, path: &Path, steps: bool, outputs: &str, body: &mut String) {
+    fn body(
+        &self,
+        path: &Path,
+        steps: bool,
+        outputs: &str,
+        importing: &mut Importing,
+        body: &mut String,
+    ) {
+        if !importing.enter(path) {
+            return;
+        }
         let file = &self.files[path];
         let steps = file.steps.unwrap_or(steps);
         for part in &file.parts {
@@ -160,9 +170,10 @@ impl Deck {
                 Part::Html(html) if steps => body.push_str(html),
                 Part::Html(html) => body.push_str(&html.replace(SECTION, NO_STEPS)),
                 Part::Cell(hash) => body.push_str(&store::cell_html(&self.outputs, outputs, hash)),
-                Part::Import(import) => self.body(import, steps, outputs, body),
+                Part::Import(import) => self.body(import, steps, outputs, importing, body),
             }
         }
+        importing.leave();
     }
 
     /// Whether the slides of `target` step, as `path`, stepping as `steps`
@@ -227,7 +238,7 @@ impl Deck {
         let dir = parent(deck);
         let outputs = href(dir, &self.outputs);
         let mut body = String::new();
-        self.body(slides, steps, &outputs, &mut body);
+        self.body(slides, steps, &outputs, &mut Importing::default(), &mut body);
         let settings = &self.files[deck].page;
         let html = page::page(&body, settings, dir, &outputs, output, self.self_contained);
         if fs::read(output).is_ok_and(|old| old == html.as_bytes()) {
@@ -261,7 +272,8 @@ mod tests {
             );
         }
         let mut body = String::new();
-        deck.body(Path::new("/deck/index.md"), true, store::DIR, &mut body);
+        let mut importing = Importing::default();
+        deck.body(Path::new("/deck/index.md"), true, store::DIR, &mut importing, &mut body);
         let opening = |title: &str| {
             let heading = body.find(&format!(">{title}</h1>")).unwrap();
             let section = body[..heading].rfind("<section").unwrap();
@@ -270,6 +282,25 @@ mod tests {
         assert_eq!(opening("Off"), NO_STEPS);
         assert_eq!(opening("Inherited"), NO_STEPS);
         assert_eq!(opening("On"), SECTION);
+    }
+
+    #[test]
+    fn a_file_imported_again_within_itself_brings_nothing() {
+        let mut deck = Deck::new(PathBuf::from("/deck/_outputs"), KERNELS, false);
+        let files = [
+            ("/deck/a.md", "# A\n\n<import-slide src=\"b.md\" />\n"),
+            ("/deck/b.md", "# B\n\n<import-slide src=\"a.md\" />\n"),
+        ];
+        for (path, markdown) in files {
+            deck.files.insert(
+                PathBuf::from(path),
+                markdown::render(markdown, Path::new(path)),
+            );
+        }
+        let mut body = String::new();
+        let mut importing = Importing::default();
+        deck.body(Path::new("/deck/a.md"), true, store::DIR, &mut importing, &mut body);
+        assert_eq!(body.matches("<h1>").count(), 2, "{body}");
     }
 
     #[test]

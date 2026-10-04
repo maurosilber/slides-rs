@@ -96,7 +96,7 @@ export class Previews implements vscode.Disposable {
 		}
 		const line = editor.selection.active.line;
 		try {
-			return await position(this.module, uri, editor.document.getText(), line);
+			return await this.module.position(editor.document.getText(), line, uri);
 		} catch (error) {
 			this.log.error(`${vscode.workspace.asRelativePath(uri)}: could not find the slide at line ${line + 1}: ${error}`);
 			throw error;
@@ -209,74 +209,4 @@ async function open(page: string, fragment?: string) {
 function browserTab(page: string, fragment?: string) {
 	const uri = vscode.Uri.file(page);
 	return { url: uri.with({ fragment: fragment ?? '' }).toString(), reuseUrlFilter: uri.toString() };
-}
-
-/** Where a line is on the page, as slides.js numbers it: its slide, from 1, among those
- * of the file and those its imports bring, and the step it shows at. */
-async function position(module: Module, uri: vscode.Uri, text: string, line: number): Promise<{ slide: number; step: number }> {
-	const lines = text.split(/\r?\n/);
-	const breaks = await module.slides(text);
-	const imports = new Map(breaks.imports.map(({ line, src }) => [line, src]));
-	let slide = 0;
-	let start = breaks.start;
-	for (const end of [...breaks.rules, ...imports.keys()].sort((a, b) => a - b)) {
-		if (end >= line) {
-			break;
-		}
-		if (!isEmpty(lines, start, end)) {
-			slide++;
-		}
-		const src = imports.get(end);
-		if (src !== undefined) {
-			slide += await slideCount(module, vscode.Uri.joinPath(uri, '..', src), new Set([uri.toString()]));
-		}
-		start = end + 1;
-	}
-	// On the line of an import, it is at the first of the slides it brings.
-	if (imports.has(line)) {
-		return { slide: slide + 1, step: 1 };
-	}
-	// What steps at or before the line, in its slide, shows it.
-	const steps = await module.steps(text, uri);
-	const own = steps.filter((slide) => slide.line <= line).at(-1);
-	const before = own?.steps.filter((step) => step.line <= line && step.line >= start) ?? [];
-	const last = before.at(-1)?.line;
-	const step = Math.max(1, ...before.filter((step) => step.line === last).map((step) => step.from));
-	return { slide: slide + 1, step };
-}
-
-/** How many slides a file brings, along with those its imports bring, as the deck
- * leaves the empty ones out. A file imported again within itself brings none. */
-async function slideCount(module: Module, uri: vscode.Uri, importing: Set<string>): Promise<number> {
-	if (importing.has(uri.toString())) {
-		return 0;
-	}
-	let text: string;
-	try {
-		text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-	} catch {
-		return 0;
-	}
-	const lines = text.split(/\r?\n/);
-	const breaks = await module.slides(text);
-	const within = new Set([...importing, uri.toString()]);
-	const imports = new Map(breaks.imports.map(({ line, src }) => [line, src]));
-	let count = 0;
-	let start = breaks.start;
-	for (const end of [...breaks.rules, ...imports.keys(), lines.length].sort((a, b) => a - b)) {
-		if (!isEmpty(lines, start, end)) {
-			count++;
-		}
-		const src = imports.get(end);
-		if (src !== undefined) {
-			count += await slideCount(module, vscode.Uri.joinPath(uri, '..', src), within);
-		}
-		start = end + 1;
-	}
-	return count;
-}
-
-/** Whether the lines from `start` up to `end`, excluded, are all blank. */
-function isEmpty(lines: string[], start: number, end: number): boolean {
-	return lines.slice(start, end).every((line) => /^\s*$/.test(line));
 }

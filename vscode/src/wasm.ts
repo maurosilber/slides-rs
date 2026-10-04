@@ -116,6 +116,17 @@ export class Module {
 		return this.run({ command: 'steps', markdown, place: await place(uri) }, [disk(uri)]);
 	}
 
+	/** Where a line of the file at `uri`, whose markdown is `markdown`, is on its page, as
+	 * slides.js numbers it: its slide, from 1, among those of the file and those its
+	 * imports bring, and the step it shows at. */
+	async position(markdown: string, line: number, uri: vscode.Uri): Promise<{ slide: number; step: number }> {
+		const name = uri.path.slice(uri.path.lastIndexOf('/') + 1);
+		if (uri.scheme === 'untitled') {
+			return this.run({ command: 'position', markdown, line, name });
+		}
+		return this.run({ command: 'position', markdown, line, name, place: await place(uri) }, [disk(uri)]);
+	}
+
 	/** The saved outputs of each code cell of the file at `uri`, given their sources in order. */
 	async load(uri: vscode.Uri, sources: string[]): Promise<Saved[][]> {
 		return this.run({ command: 'load', place: await place(uri), sources }, [disk(uri)]);

@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
-use slides::markdown::code;
+use slides::markdown::{Files, code};
+use slides::paths::{joined, relative};
 use slides::store::{self, FIGURE, MEDIA_TYPES, Output};
 
 /// Where a notebook's file is.
@@ -50,6 +51,32 @@ impl Place {
 
     fn root(&self) -> PathBuf {
         store::root(&self.path)
+    }
+}
+
+/// The files of the deck around `place`, read as this process reads them,
+/// with the saved outputs of their cells, each hashed by its directory on the
+/// disk, as the deck hashes it.
+pub fn files(
+    place: &Place,
+) -> Files<impl FnMut(&Path) -> Option<String>, impl FnMut(&Path, &[String]) -> Vec<String>>
+{
+    let disk = PathBuf::from(&place.dir);
+    let here = place.path.clone();
+    Files {
+        load: |path: &Path| fs::read_to_string(path).ok(),
+        outputs: move |path: &Path, codes: &[String]| {
+            let dir = path.parent().unwrap_or(&here);
+            // Where the file is on the disk, as it is from the place.
+            let relative = relative(&here, dir);
+            let place = Place {
+                dir: joined(&disk, &relative.to_string_lossy())
+                    .to_string_lossy()
+                    .into_owned(),
+                path: dir.to_path_buf(),
+            };
+            place.html(codes)
+        },
     }
 }
 

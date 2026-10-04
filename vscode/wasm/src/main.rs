@@ -24,6 +24,15 @@ enum Request {
         markdown: String,
         place: Option<outputs::Place>,
     },
+    /// Where a line of a markdown file is on its page: its slide, among
+    /// those of the file and those its imports bring, and its step.
+    Position {
+        markdown: String,
+        line: usize,
+        place: Option<outputs::Place>,
+        /// The file's name, in its place.
+        name: String,
+    },
     /// The saved outputs of each code cell of a file.
     Load {
         place: outputs::Place,
@@ -94,6 +103,26 @@ fn respond(request: Request) -> Result<serde_json::Value> {
                     })
                     .collect(),
             )
+        }
+        Request::Position {
+            markdown,
+            line,
+            place,
+            name,
+        } => {
+            let position = match place {
+                Some(place) => {
+                    let path = place.path.join(&name);
+                    outputs::files(&place).position(&path, &markdown, line)
+                }
+                // Not saved, it has no place for its imports to be found from.
+                None => slides::markdown::Files {
+                    load: |_: &std::path::Path| None,
+                    outputs: |_: &std::path::Path, _: &[String]| Vec::new(),
+                }
+                .position(std::path::Path::new(&name), &markdown, line),
+            };
+            serde_json::json!({ "slide": position.slide, "step": position.step })
         }
         Request::Load { place, sources } => serde_json::to_value(outputs::load(&place, &sources))?,
         Request::Save { place, cells } => serde_json::to_value(outputs::save(&place, &cells)?)?,

@@ -1,7 +1,7 @@
 //! Paths and reading files, the same way everywhere.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// The canonical path of a file that need not exist yet, so that the same file
 /// is one cache entry however it is reached.
@@ -35,17 +35,62 @@ pub fn read(path: &Path) -> String {
 /// How a page in `dir` links `path`, as a URL relative to it, with `/` for
 /// every separator; nothing for `dir` itself. Both are canonical.
 pub fn href(dir: &Path, path: &Path) -> String {
+    relative(dir, path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The path of `path` from `dir`, climbing out of `dir` as far as they
+/// differ; empty for `dir` itself. Both are canonical, or joined.
+pub fn relative(dir: &Path, path: &Path) -> PathBuf {
     let common = dir
         .components()
         .zip(path.components())
         .take_while(|(a, b)| a == b)
         .count();
-    let up = dir.components().skip(common).map(|_| "..".to_string());
-    let down = path
-        .components()
-        .skip(common)
-        .map(|component| component.as_os_str().to_string_lossy().into_owned());
-    up.chain(down).collect::<Vec<_>>().join("/")
+    let up = dir.components().skip(common).map(|_| Component::ParentDir);
+    up.chain(path.components().skip(common)).collect()
+}
+
+/// The path of `src` in `dir`, with its `.` and `..` taken out, as a path
+/// is joined where it cannot be made canonical, as in the extension.
+pub fn joined(dir: &Path, src: &str) -> PathBuf {
+    let mut joined = PathBuf::new();
+    for component in dir.join(src).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir if joined.file_name().is_some() => {
+                joined.pop();
+            }
+            component => joined.push(component),
+        }
+    }
+    joined
+}
+
+/// The files being imported, each by the one before it, as the slides of a
+/// deck are gathered. A file imported again within itself brings none,
+/// rather than importing itself forever.
+#[derive(Default)]
+pub struct Importing(Vec<PathBuf>);
+
+impl Importing {
+    /// Imports the file at `path`, unless it is being imported already.
+    /// Returns whether it is, to `leave` once its slides are gathered.
+    pub fn enter(&mut self, path: &Path) -> bool {
+        if self.0.iter().any(|importing| importing == path) {
+            return false;
+        }
+        self.0.push(path.to_path_buf());
+        true
+    }
+
+    /// Done with the file imported last.
+    pub fn leave(&mut self) {
+        self.0.pop();
+    }
 }
 
 #[cfg(test)]

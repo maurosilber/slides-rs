@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use crate::markdown::{NO_STEPS, PageSettings, SECTION};
+use crate::markdown::{self, PageSettings};
 use crate::paths::{href, parent};
 use crate::{step, store};
 
@@ -106,11 +106,7 @@ pub fn page(
     self_contained: bool,
 ) -> String {
     let theme = settings.theme.as_deref();
-    // A slide break at either end of a file, or two in a row, leaves an empty slide.
-    let body = body
-        .replace(&format!("{SECTION}\n</section>\n"), "")
-        .replace(&format!("{NO_STEPS}\n</section>\n"), "");
-    let body = indent(&step::number(&body));
+    let body = indent(&step::number(&markdown::without_empty_slides(body)));
     // The deck's own theme is linked where it is, relative to the deck.
     let own = theme.map(theme_href).filter(|href| bundled(href).is_none());
     if let Some(href) = &own

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
 use crate::aspect::{self, AspectRatio};
-use crate::paths::{canonical, parent};
+use crate::paths::{self, Importing, canonical, parent};
 use crate::step;
 use crate::store;
 
@@ -226,6 +226,9 @@ pub struct SlideSteps {
     pub steps: Vec<LineStep>,
     /// What is wrong with how it steps, by line, in order.
     pub warnings: Vec<LineWarning>,
+    /// Whether it holds nothing, as a break at either end of a file, or two
+    /// in a row, leave, which the deck leaves out.
+    pub empty: bool,
 }
 
 /// What is wrong with how a slide steps, on the line it is about.
@@ -316,6 +319,9 @@ fn steps_of(
         .into_iter()
         .map(|slide| SlideSteps {
             line: line(slide.at),
+            empty: sections(&html)
+                .into_iter()
+                .any(|(at, inner, _)| at == slide.at && is_empty_slide(&html[inner])),
             count: slide.count,
             steps: slide
                 .steps
@@ -343,6 +349,146 @@ fn steps_of(
                 .collect(),
         })
         .collect()
+}
+
+/// The `<section>`s of html as rendered, each with where it begins, where
+/// what it holds is, and where it ends, after the newline that follows it.
+fn sections(html: &str) -> Vec<(usize, Range<usize>, usize)> {
+    let mut sections = Vec::new();
+    let mut from = 0;
+    while let Some(found) = html[from..].find("<section") {
+        let at = from + found;
+        let Some(open) = html[at..].find('>').map(|open| at + open + 1) else {
+            break;
+        };
+        let close = html[open..]
+            .find("</section>")
+            .map_or(html.len(), |close| open + close);
+        let mut end = (close + "</section>".len()).min(html.len());
+        if html[end..].starts_with('\n') {
+            end += 1;
+        }
+        sections.push((at, open..close, end));
+        from = end;
+    }
+    sections
+}
+
+/// Whether a slide holds nothing, as what its `<section>` holds says, but
+/// for where `html_of` marks what is in it.
+fn is_empty_slide(inner: &str) -> bool {
+    let mut rest = inner;
+    while let Some(start) = rest.find(AT) {
+        if !rest[..start].trim().is_empty() {
+            return false;
+        }
+        let Some(end) = rest[start..].find("-->") else {
+            return false;
+        };
+        rest = &rest[start + end + "-->".len()..];
+    }
+    rest.trim().is_empty()
+}
+
+/// The html of the slides with the empty ones left out, as a break at either
+/// end of a file, or two in a row, leave one.
+pub fn without_empty_slides(html: &str) -> String {
+    let mut kept = String::with_capacity(html.len());
+    let mut from = 0;
+    for (at, inner, end) in sections(html) {
+        kept.push_str(&html[from..at]);
+        if !is_empty_slide(&html[inner]) {
+            kept.push_str(&html[at..end]);
+        }
+        from = end;
+    }
+    kept.push_str(&html[from..]);
+    kept
+}
+
+/// Where a line of a file is on its page, as slides.js numbers it.
+#[derive(Debug, PartialEq)]
+pub struct Position {
+    /// Its slide, from 1, among those of the file and those its imports
+    /// bring.
+    pub slide: usize,
+    /// The step it shows at, from 1.
+    pub step: u32,
+}
+
+/// What reads the files of a deck, for the slides they bring: `load` reads
+/// a file's markdown, if there is one, and `outputs` the html of the saved
+/// outputs of its cells, from their code, as `steps` takes them.
+pub struct Files<L, O> {
+    pub load: L,
+    pub outputs: O,
+}
+
+impl<L, O> Files<L, O>
+where
+    L: FnMut(&Path) -> Option<String>,
+    O: FnMut(&Path, &[String]) -> Vec<String>,
+{
+    /// Where `line` of the file at `path`, whose markdown is `markdown`, is
+    /// on its page: the slide it is in, after those its imports before it
+    /// bring, at the step that what steps at or before it in the slide shows
+    /// at. On the line of an import, it is at the first slide it brings.
+    pub fn position(&mut self, path: &Path, markdown: &str, line: usize) -> Position {
+        let slides = steps(markdown, |codes| (self.outputs)(path, codes));
+        let mut importing = Importing::default();
+        importing.enter(path);
+        let mut before = 0;
+        for import in breaks(markdown).imports {
+            if import.line < line {
+                before += self.brought(path, &import.src, &mut importing);
+            } else if import.line == line {
+                // The slides before the import, and its own.
+                let own = slides.iter().filter(|slide| slide.line <= line);
+                let slide = before + own.filter(|slide| !slide.empty).count() + 1;
+                return Position { slide, step: 1 };
+            }
+        }
+        let own = slides.iter().rposition(|slide| slide.line <= line).unwrap_or(0);
+        let slide = before + slides[..own].iter().filter(|slide| !slide.empty).count() + 1;
+        // What steps at or before the line, in its slide, shows it.
+        let steps = slides.get(own).map_or(&[][..], |slide| &slide.steps[..]);
+        let before: Vec<&LineStep> = steps.iter().filter(|step| step.line <= line).collect();
+        let last = before.last().map(|step| step.line);
+        let step = before
+            .iter()
+            .filter(|step| Some(step.line) == last)
+            .map(|step| step.from)
+            .fold(1, u32::max);
+        Position { slide, step }
+    }
+
+    /// How many slides the file at `path` brings, along with those its
+    /// imports bring, but the empty ones, which the deck leaves out.
+    pub fn slide_count(&mut self, path: &Path) -> usize {
+        self.count(path, &mut Importing::default())
+    }
+
+    fn count(&mut self, path: &Path, importing: &mut Importing) -> usize {
+        if !importing.enter(path) {
+            return 0;
+        }
+        let Some(markdown) = (self.load)(path) else {
+            importing.leave();
+            return 0;
+        };
+        let slides = steps(&markdown, |codes| (self.outputs)(path, codes));
+        let mut count = slides.iter().filter(|slide| !slide.empty).count();
+        for import in breaks(&markdown).imports {
+            count += self.brought(path, &import.src, importing);
+        }
+        importing.leave();
+        count
+    }
+
+    /// How many slides an import of `src` in the file at `path` brings.
+    fn brought(&mut self, path: &Path, src: &str, importing: &mut Importing) -> usize {
+        self.count(&paths::joined(parent(path), src), importing)
+    }
 }
 
 /// A code cell as written in the markdown.
@@ -751,6 +897,68 @@ mod tests {
             lines(markdown),
             ["slide 0 count 2", "2 2..", "slide 7 count 1"]
         );
+    }
+
+    #[test]
+    fn an_empty_slide_is_left_out() {
+        let html = "<section>\n</section>\n<section data-steps=\"false\">\n  \n</section>\n<section>\n<p>a</p>\n</section>\n<section>\n<!-- note -->\n</section>\n";
+        assert_eq!(
+            without_empty_slides(html),
+            "<section>\n<p>a</p>\n</section>\n<section>\n<!-- note -->\n</section>\n"
+        );
+    }
+
+    /// The files of a deck, by path, with each cell's outputs as `<p>`, but
+    /// for a cell that prints nothing.
+    fn files(
+        files: &[(&str, &str)],
+    ) -> Files<impl FnMut(&Path) -> Option<String>, impl FnMut(&Path, &[String]) -> Vec<String>>
+    {
+        let files: Vec<(PathBuf, String)> = files
+            .iter()
+            .map(|&(path, markdown)| (PathBuf::from(path), markdown.to_string()))
+            .collect();
+        Files {
+            load: move |path: &Path| {
+                let file = files.iter().find(|(file, _)| file == path);
+                file.map(|(_, markdown)| markdown.clone())
+            },
+            outputs: |_: &Path, codes: &[String]| {
+                let output = |code: &String| match code.as_str() {
+                    "pass\n" => String::new(),
+                    _ => "<p>out</p>\n".to_string(),
+                };
+                codes.iter().map(output).collect()
+            },
+        }
+    }
+
+    #[test]
+    fn a_file_brings_its_slides_and_those_its_imports_do_but_the_empty_ones() {
+        let mut files = files(&[
+            ("/deck/index.md", "# A\n\n<import-slide src=\"part/b.md\" />\n\n---\n\n~~~\npass\n~~~\n"),
+            ("/deck/part/b.md", "# B\n\n---\n\n# C\n\n<import-slide src=\"../index.md\" />\n"),
+        ]);
+        // A slide of a cell that shows nothing is left out, and a file
+        // imported within itself brings nothing.
+        assert_eq!(files.slide_count(Path::new("/deck/index.md")), 3);
+        assert_eq!(files.slide_count(Path::new("/deck/part/b.md")), 3);
+        assert_eq!(files.slide_count(Path::new("/deck/none.md")), 0);
+    }
+
+    #[test]
+    fn a_line_is_on_its_slide_after_those_its_imports_bring() {
+        let markdown = "# A\n\ntext\n\n<import-slide src=\"b.md\" />\n\n# D\n\n---\n\n---\n\n# E\n";
+        let mut files = files(&[("/deck/b.md", "# B\n\n---\n\n# C\n")]);
+        let mut at = |line| files.position(Path::new("/deck/a.md"), markdown, line);
+        let position = |slide, step| Position { slide, step };
+        assert_eq!(at(0), position(1, 1));
+        assert_eq!(at(2), position(1, 2));
+        assert_eq!(at(3), position(1, 2));
+        assert_eq!(at(4), position(2, 1));
+        assert_eq!(at(6), position(4, 1));
+        // The empty slide between two rules is left out.
+        assert_eq!(at(12), position(5, 1));
     }
 
     #[test]
