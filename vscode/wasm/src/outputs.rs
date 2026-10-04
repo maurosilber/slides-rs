@@ -54,29 +54,27 @@ impl Place {
     }
 }
 
-/// The files of the deck around `place`, read as this process reads them,
+/// The files of the deck around a place, read as this process reads them,
 /// with the saved outputs of their cells, each hashed by its directory on the
 /// disk, as the deck hashes it.
-pub fn files(
-    place: &Place,
-) -> Files<impl FnMut(&Path) -> Option<String>, impl FnMut(&Path, &[String]) -> Vec<String>>
-{
-    let disk = PathBuf::from(&place.dir);
-    let here = place.path.clone();
-    Files {
-        load: |path: &Path| fs::read_to_string(path).ok(),
-        outputs: move |path: &Path, codes: &[String]| {
-            let dir = path.parent().unwrap_or(&here);
-            // Where the file is on the disk, as it is from the place.
-            let relative = relative(&here, dir);
-            let place = Place {
-                dir: joined(&disk, &relative.to_string_lossy())
-                    .to_string_lossy()
-                    .into_owned(),
-                path: dir.to_path_buf(),
-            };
-            place.html(codes)
-        },
+pub struct Deck<'a>(pub &'a Place);
+
+impl Files for Deck<'_> {
+    fn load(&mut self, path: &Path) -> Option<String> {
+        fs::read_to_string(path).ok()
+    }
+
+    fn outputs(&mut self, path: &Path, codes: &[String]) -> Vec<String> {
+        let dir = path.parent().unwrap_or(&self.0.path);
+        // Where the file is on the disk, as it is from the place.
+        let relative = relative(&self.0.path, dir);
+        let place = Place {
+            dir: joined(Path::new(&self.0.dir), &relative.to_string_lossy())
+                .to_string_lossy()
+                .into_owned(),
+            path: dir.to_path_buf(),
+        };
+        place.html(codes)
     }
 }
 

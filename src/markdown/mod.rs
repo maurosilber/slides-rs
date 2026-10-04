@@ -147,7 +147,9 @@ fn html_of(markdown: &str, dir: &Path, at: bool) -> (String, String, Vec<String>
                 top,
             )
         });
-        marker.into_iter().chain(std::iter::once((event, range, top)))
+        marker
+            .into_iter()
+            .chain(std::iter::once((event, range, top)))
     });
     let events = events.filter_map(move |(event, range, top)| match event {
         // The frontmatter is metadata, not content.
@@ -284,17 +286,17 @@ fn steps_of(
     // What steps in a cell's outputs is on the line of the cell, which the
     // outputs are kept on.
     let mut outputs = outputs.iter().map(|html| html.replace('\n', " "));
-    let mut html = html
-        .split(&format!("{CELL}\n"))
-        .enumerate()
-        .fold(String::new(), |mut html, (i, part)| {
-            if i > 0 {
-                html.push_str(&outputs.next().unwrap_or_default());
-                html.push('\n');
-            }
-            html.push_str(part);
-            html
-        });
+    let mut html =
+        html.split(&format!("{CELL}\n"))
+            .enumerate()
+            .fold(String::new(), |mut html, (i, part)| {
+                if i > 0 {
+                    html.push_str(&outputs.next().unwrap_or_default());
+                    html.push('\n');
+                }
+                html.push_str(part);
+                html
+            });
     while let Some(start) = html.find(IMPORT) {
         let end = html[start..]
             .find('\n')
@@ -437,25 +439,21 @@ pub struct Position {
     pub step: u32,
 }
 
-/// What reads the files of a deck, for the slides they bring: `load` reads
-/// a file's markdown, if there is one, and `outputs` the html of the saved
-/// outputs of its cells, from their code, as `steps` takes them.
-pub struct Files<L, O> {
-    pub load: L,
-    pub outputs: O,
-}
+/// What reads the files of a deck, for the slides they bring.
+pub trait Files {
+    /// The markdown of the file at `path`, if there is one.
+    fn load(&mut self, path: &Path) -> Option<String>;
 
-impl<L, O> Files<L, O>
-where
-    L: FnMut(&Path) -> Option<String>,
-    O: FnMut(&Path, &[String]) -> Vec<String>,
-{
+    /// The html of the saved outputs of the cells of the file at `path`, from
+    /// their code, as `steps` takes them.
+    fn outputs(&mut self, path: &Path, codes: &[String]) -> Vec<String>;
+
     /// Where `line` of the file at `path`, whose markdown is `markdown`, is
     /// on its page: the slide it is in, after those its imports before it
     /// bring, at the step that what steps at or before it in the slide shows
     /// at. On the line of an import, it is at the first slide it brings.
-    pub fn position(&mut self, path: &Path, markdown: &str, line: usize) -> Position {
-        let slides = steps(markdown, |codes| (self.outputs)(path, codes));
+    fn position(&mut self, path: &Path, markdown: &str, line: usize) -> Position {
+        let slides = steps(markdown, |codes| self.outputs(path, codes));
         let mut importing = Importing::default();
         importing.enter(path);
         let mut before = 0;
@@ -469,7 +467,10 @@ where
                 return Position { slide, step: 1 };
             }
         }
-        let own = slides.iter().rposition(|slide| slide.line <= line).unwrap_or(0);
+        let own = slides
+            .iter()
+            .rposition(|slide| slide.line <= line)
+            .unwrap_or(0);
         let slide = before + slides[..own].iter().filter(|slide| !slide.empty).count() + 1;
         // What steps at or before the line, in its slide, shows it.
         let steps = slides.get(own).map_or(&[][..], |slide| &slide.steps[..]);
@@ -485,7 +486,7 @@ where
 
     /// How many slides the file at `path` brings, along with those its
     /// imports bring, but the empty ones, which the deck leaves out.
-    pub fn slide_count(&mut self, path: &Path) -> usize {
+    fn slide_count(&mut self, path: &Path) -> usize {
         self.count(path, &mut Importing::default())
     }
 
@@ -493,11 +494,11 @@ where
         if !importing.enter(path) {
             return 0;
         }
-        let Some(markdown) = (self.load)(path) else {
+        let Some(markdown) = self.load(path) else {
             importing.leave();
             return 0;
         };
-        let slides = steps(&markdown, |codes| (self.outputs)(path, codes));
+        let slides = steps(&markdown, |codes| self.outputs(path, codes));
         let mut count = slides.iter().filter(|slide| !slide.empty).count();
         for import in breaks(&markdown).imports {
             count += self.brought(path, &import.src, importing);
@@ -509,6 +510,19 @@ where
     /// How many slides an import of `src` in the file at `path` brings.
     fn brought(&mut self, path: &Path, src: &str, importing: &mut Importing) -> usize {
         self.count(&paths::joined(parent(path), src), importing)
+    }
+}
+
+/// No files, as for a file that is not saved, whose imports cannot be found.
+pub struct NoFiles;
+
+impl Files for NoFiles {
+    fn load(&mut self, _: &Path) -> Option<String> {
+        None
+    }
+
+    fn outputs(&mut self, _: &Path, _: &[String]) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -763,13 +777,11 @@ pub fn breaks(markdown: &str) -> Breaks {
             continue;
         }
         match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                breaks.headings.push(Heading {
-                    line: line(range.start),
-                    last: line(range.end.saturating_sub(1)),
-                    level: level as u8,
-                })
-            }
+            Event::Start(Tag::Heading { level, .. }) => breaks.headings.push(Heading {
+                line: line(range.start),
+                last: line(range.end.saturating_sub(1)),
+                level: level as u8,
+            }),
             Event::End(TagEnd::MetadataBlock(_)) => {
                 metadata = false;
                 // The block ends with its closing fence, or just after it.
@@ -790,8 +802,8 @@ pub fn breaks(markdown: &str) -> Breaks {
             _ => {}
         }
     }
-    breaks.deck |= !breaks.imports.is_empty()
-        || Frontmatter::parse(&yaml, Path::new("slides.md")).is_read();
+    breaks.deck |=
+        !breaks.imports.is_empty() || Frontmatter::parse(&yaml, Path::new("slides.md")).is_read();
     breaks
 }
 
@@ -843,7 +855,8 @@ mod tests {
 
     #[test]
     fn a_rule_or_an_import_in_a_list_or_a_quote_is_no_break() {
-        let markdown = "# One\n\n> a\n>\n> ***\n\n- b\n\n  ---\n\n  <import-slide src=\"part.md\" />\n";
+        let markdown =
+            "# One\n\n> a\n>\n> ***\n\n- b\n\n  ---\n\n  <import-slide src=\"part.md\" />\n";
         let breaks = breaks(markdown);
         assert_eq!((breaks.rules, breaks.imports), (vec![], vec![]));
         let html = render(markdown, Path::new("/deck/slides.md"));
@@ -857,14 +870,13 @@ mod tests {
     /// Each slide's line and count, and each step, as `line from..to`, with
     /// an output of each cell, as `<pre>` is.
     fn lines(markdown: &str) -> Vec<String> {
-        lines_with(markdown, |cells| vec!["<pre>\n</pre>\n".into(); cells.len()])
+        lines_with(markdown, |cells| {
+            vec!["<pre>\n</pre>\n".into(); cells.len()]
+        })
     }
 
     /// The same, with the outputs of the cells as `outputs` gives them.
-    fn lines_with(
-        markdown: &str,
-        outputs: impl FnOnce(&[String]) -> Vec<String>,
-    ) -> Vec<String> {
+    fn lines_with(markdown: &str, outputs: impl FnOnce(&[String]) -> Vec<String>) -> Vec<String> {
         steps(markdown, outputs)
             .into_iter()
             .flat_map(|slide| {
@@ -930,34 +942,43 @@ mod tests {
 
     /// The files of a deck, by path, with each cell's outputs as `<p>`, but
     /// for a cell that prints nothing.
-    fn files(
-        files: &[(&str, &str)],
-    ) -> Files<impl FnMut(&Path) -> Option<String>, impl FnMut(&Path, &[String]) -> Vec<String>>
-    {
-        let files: Vec<(PathBuf, String)> = files
-            .iter()
-            .map(|&(path, markdown)| (PathBuf::from(path), markdown.to_string()))
-            .collect();
-        Files {
-            load: move |path: &Path| {
-                let file = files.iter().find(|(file, _)| file == path);
-                file.map(|(_, markdown)| markdown.clone())
-            },
-            outputs: |_: &Path, codes: &[String]| {
-                let output = |code: &String| match code.as_str() {
-                    "pass\n" => String::new(),
-                    _ => "<p>out</p>\n".to_string(),
-                };
-                codes.iter().map(output).collect()
-            },
+    struct Written(Vec<(PathBuf, String)>);
+
+    impl Files for Written {
+        fn load(&mut self, path: &Path) -> Option<String> {
+            let file = self.0.iter().find(|(file, _)| file == path);
+            file.map(|(_, markdown)| markdown.clone())
         }
+
+        fn outputs(&mut self, _: &Path, codes: &[String]) -> Vec<String> {
+            let output = |code: &String| match code.as_str() {
+                "pass\n" => String::new(),
+                _ => "<p>out</p>\n".to_string(),
+            };
+            codes.iter().map(output).collect()
+        }
+    }
+
+    fn files(files: &[(&str, &str)]) -> Written {
+        Written(
+            files
+                .iter()
+                .map(|&(path, markdown)| (PathBuf::from(path), markdown.to_string()))
+                .collect(),
+        )
     }
 
     #[test]
     fn a_file_brings_its_slides_and_those_its_imports_do_but_the_empty_ones() {
         let mut files = files(&[
-            ("/deck/index.md", "# A\n\n<import-slide src=\"part/b.md\" />\n\n---\n\n~~~\npass\n~~~\n"),
-            ("/deck/part/b.md", "# B\n\n---\n\n# C\n\n<import-slide src=\"../index.md\" />\n"),
+            (
+                "/deck/index.md",
+                "# A\n\n<import-slide src=\"part/b.md\" />\n\n---\n\n~~~\npass\n~~~\n",
+            ),
+            (
+                "/deck/part/b.md",
+                "# B\n\n---\n\n# C\n\n<import-slide src=\"../index.md\" />\n",
+            ),
         ]);
         // A slide of a cell that shows nothing is left out, and a file
         // imported within itself brings nothing.

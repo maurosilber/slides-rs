@@ -8,6 +8,7 @@ mod outputs;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use slides::markdown::{Files, NoFiles};
 
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "camelCase")]
@@ -125,14 +126,10 @@ fn respond(request: Request) -> Result<serde_json::Value> {
             let position = match place {
                 Some(place) => {
                     let path = place.path.join(&name);
-                    outputs::files(&place).position(&path, &markdown, line)
+                    outputs::Deck(&place).position(&path, &markdown, line)
                 }
                 // Not saved, it has no place for its imports to be found from.
-                None => slides::markdown::Files {
-                    load: |_: &std::path::Path| None,
-                    outputs: |_: &std::path::Path, _: &[String]| Vec::new(),
-                }
-                .position(std::path::Path::new(&name), &markdown, line),
+                None => NoFiles.position(std::path::Path::new(&name), &markdown, line),
             };
             serde_json::json!({ "slide": position.slide, "step": position.step })
         }
