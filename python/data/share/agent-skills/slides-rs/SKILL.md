@@ -201,6 +201,9 @@ step = Step(1, 2)
 for i, phase in enumerate(phases):
     plt.plot(x, np.sin(x + phase), gid=step.next(i))   # one curve per step
 # .next(n) / .previous(n) shift both bounds by n; a number below 0 is an error
+for phase in phases:
+    plt.plot(x, np.sin(x + phase), gid=Step("+1"))      # each one after the one before
+# a signed bound counts from the artist before, so do not also .next() it
 ```
 
 ## Animating figure artists: `Motion`

@@ -31,6 +31,9 @@ class Step(str):
     A bound written as a signed string, as ``"+1"``, ``"+0"`` or ``"-1"``,
     is a number of steps from the step of the artist before it that steps,
     or else of the group it is in: ``Step("+0", "+2")`` is ``step=+0..+2``.
+    Each artist counts from the one before it, so one step after another is
+    the same ``Step("+1")`` for each, rather than one moved along by
+    ``next``, which would count from the one before twice.
 
     A bound can also be a number of steps from a named one, wherever in the
     slide it is, as ``"a+0"``, ``"a+1"`` or ``"a-1"``: ``Step("a+0", "a+2")``
