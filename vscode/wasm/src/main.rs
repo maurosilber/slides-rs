@@ -18,8 +18,12 @@ enum Request {
     Markdown { cells: Vec<notebook::Cell> },
     /// Where the slides of a markdown file break.
     Slides { markdown: String },
-    /// The steps of the slides of a markdown file, by line.
-    Steps { markdown: String },
+    /// The steps of the slides of a markdown file, by line, with the saved
+    /// outputs of its cells, if it is in a place they are saved.
+    Steps {
+        markdown: String,
+        place: Option<outputs::Place>,
+    },
     /// The saved outputs of each code cell of a file.
     Load {
         place: outputs::Place,
@@ -53,8 +57,11 @@ fn respond(request: Request) -> Result<serde_json::Value> {
                 })).collect::<Vec<_>>(),
             })
         }
-        Request::Steps { markdown } => {
-            let slides = slides::markdown::steps(&markdown);
+        Request::Steps { markdown, place } => {
+            let slides = slides::markdown::steps(&markdown, |codes| match &place {
+                Some(place) => place.html(codes),
+                None => Vec::new(),
+            });
             serde_json::Value::Array(
                 slides
                     .into_iter()

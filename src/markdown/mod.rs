@@ -37,6 +37,8 @@ pub enum Part {
 
 /// A rendered file. Its code cells make up a notebook, run on a kernel of its own.
 pub struct File {
+    /// Its markdown, as rendered.
+    pub markdown: String,
     pub parts: Vec<Part>,
     pub cells: Vec<String>,
     /// The hash each cell's outputs are saved under.
@@ -71,13 +73,6 @@ pub fn render(markdown: &str, path: &Path) -> File {
     // Split at the markers, so every file is cached apart from the ones it
     // imports, and apart from the outputs of its cells, which may come later.
     let frontmatter = Frontmatter::parse(&frontmatter, path);
-    let (marked, _, _) = html_of(markdown, parent(path), true);
-    for slide in steps_of(markdown, marked, frontmatter.steps) {
-        for warning in slide.warnings {
-            let line = warning.line + 1;
-            eprintln!("{}:{line}: {}", path.display(), warning.message);
-        }
-    }
     let dir = parent(path);
     let lock = store::lock_file(dir);
     let hashes = store::hashes(dir, &store::environment(lock.as_deref()), &cells);
@@ -96,6 +91,7 @@ pub fn render(markdown: &str, path: &Path) -> File {
     }
     parts.push(Part::Html(rest.to_string()));
     File {
+        markdown: markdown.to_string(),
         parts,
         cells,
         hashes,
@@ -250,19 +246,40 @@ pub struct LineStep {
 }
 
 /// The steps of a file's slides, numbered as the deck numbers them, for an
-/// editor to show where they are. A code cell is a step, as its outputs are
-/// when it has one, and the frontmatter's `steps` is the file's own, as it is
-/// when the file is the deck rather than imported.
-pub fn steps(markdown: &str) -> Vec<SlideSteps> {
-    let (html, frontmatter, _) = html_of(markdown, Path::new(""), true);
+/// editor to show where they are, and what is wrong with how they step. A
+/// code cell steps as its outputs do, which `outputs` gives, from the code of
+/// every cell, in order, as the html the deck shows each cell's as. The
+/// frontmatter's `steps` is the file's own, as it is when the file is the
+/// deck rather than imported.
+pub fn steps(markdown: &str, outputs: impl FnOnce(&[String]) -> Vec<String>) -> Vec<SlideSteps> {
+    let (html, frontmatter, cells) = html_of(markdown, Path::new(""), true);
     let steps = Frontmatter::parse(&frontmatter, Path::new("slides.md")).steps;
-    steps_of(markdown, html, steps)
+    steps_of(markdown, html, steps, &outputs(&cells))
 }
 
 /// The steps of a file's slides, as `steps` finds them in `html`, the
-/// file's as `html_of` marks it, with `steps` its frontmatter's.
-fn steps_of(markdown: &str, html: String, steps: Option<bool>) -> Vec<SlideSteps> {
-    let mut html = html.replace(&format!("{CELL}\n"), "<div></div>\n");
+/// file's as `html_of` marks it, with `steps` its frontmatter's, and each
+/// cell's outputs as `outputs` has them.
+fn steps_of(
+    markdown: &str,
+    html: String,
+    steps: Option<bool>,
+    outputs: &[String],
+) -> Vec<SlideSteps> {
+    // What steps in a cell's outputs is on the line of the cell, which the
+    // outputs are kept on.
+    let mut outputs = outputs.iter().map(|html| html.replace('\n', " "));
+    let mut html = html
+        .split(&format!("{CELL}\n"))
+        .enumerate()
+        .fold(String::new(), |mut html, (i, part)| {
+            if i > 0 {
+                html.push_str(&outputs.next().unwrap_or_default());
+                html.push('\n');
+            }
+            html.push_str(part);
+            html
+        });
     while let Some(start) = html.find(IMPORT) {
         let end = html[start..]
             .find('\n')
@@ -671,9 +688,18 @@ mod tests {
         assert!(html.contains("<hr />"), "{html}");
     }
 
-    /// Each slide's line and count, and each step, as `line from..to`.
+    /// Each slide's line and count, and each step, as `line from..to`, with
+    /// an output of each cell, as `<pre>` is.
     fn lines(markdown: &str) -> Vec<String> {
-        steps(markdown)
+        lines_with(markdown, |cells| vec!["<pre>\n</pre>\n".into(); cells.len()])
+    }
+
+    /// The same, with the outputs of the cells as `outputs` gives them.
+    fn lines_with(
+        markdown: &str,
+        outputs: impl FnOnce(&[String]) -> Vec<String>,
+    ) -> Vec<String> {
+        steps(markdown, outputs)
             .into_iter()
             .flat_map(|slide| {
                 let steps = slide.steps.into_iter().map(|step| {
@@ -709,7 +735,7 @@ mod tests {
     #[test]
     fn a_name_given_again_is_warned_of_on_its_line() {
         let markdown = "# One\n\n### A { step=a }\n\n$$\n\\step[a]{x}\n$$\n";
-        let warnings: Vec<usize> = steps(markdown)
+        let warnings: Vec<usize> = steps(markdown, |_| Vec::new())
             .into_iter()
             .flat_map(|slide| slide.warnings)
             .map(|warning| warning.line)
@@ -724,6 +750,24 @@ mod tests {
         assert_eq!(
             lines(markdown),
             ["slide 0 count 2", "2 2..", "slide 7 count 1"]
+        );
+    }
+
+    #[test]
+    fn a_code_cell_steps_as_its_outputs_do() {
+        let markdown = "# One\n\n~~~python\nx = 1\n~~~\n\n~~~python\nx\ny\n~~~\n\ntext\n";
+        let outputs = |cells: &[String]| {
+            assert_eq!(cells, ["x = 1\n", "x\ny\n"]);
+            vec![
+                String::new(),
+                "<pre>\nx\n</pre>\n<svg data-count=\"2\">\n<g step=\"\"/>\n</svg>\n".into(),
+            ]
+        };
+        // The first cell shows nothing, and is no step; the second shows
+        // two outputs, the figure with a step of its own, on the cell's line.
+        assert_eq!(
+            lines_with(markdown, outputs),
+            ["slide 0 count 5", "6 2..", "6 3..", "6 4..", "11 5.."]
         );
     }
 

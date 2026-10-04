@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd, html};
 
 use crate::markdown::{NO_STEPS, PageSettings, SECTION};
 use crate::paths::{href, parent};
@@ -93,16 +92,6 @@ pub fn write_static(root: &Path, files: &[&str]) {
     }
 }
 
-/// A file in the outputs directory, as the deck links it from where it is:
-/// through `outputs`, the outputs directory as the deck links it.
-fn in_outputs(outputs: &str, name: &str) -> String {
-    if outputs.is_empty() {
-        name.to_string()
-    } else {
-        format!("{outputs}/{name}")
-    }
-}
-
 /// The page for the slides in `body`, as the input's frontmatter asks for,
 /// to be written at `output`. Its links are written as from `dir`, the
 /// deck's own directory, which links the outputs directory as `outputs`, and
@@ -157,10 +146,10 @@ pub fn page(
             format!("<link rel=\"stylesheet\" href=\"{href}\">")
         };
         let mut styles: Vec<String> = bundled_css
-            .map(|name| link(&in_outputs(outputs, name)))
+            .map(|name| link(&store::in_outputs(outputs, name)))
             .collect();
         styles.extend(own.as_deref().map(link));
-        let script = in_outputs(outputs, "slides.js");
+        let script = store::in_outputs(outputs, "slides.js");
         let script = rebase(&script, dir, page_dir).unwrap_or(script);
         let script = format!("<script src=\"{script}\"></script>");
         let body = links(&body, &[" src=\"", " href=\""], |src| {
@@ -425,49 +414,6 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('"', "&quot;")
         .replace('<', "&lt;")
-}
-
-/// The outputs a cell saved under `root`, in the order the kernel produced
-/// them. Raster images are linked through `outputs`, the outputs directory
-/// as the deck links it, and the rest is inlined: an SVG too, so that the
-/// slides can reach into it for steps.
-pub fn cell_html(root: &Path, outputs: &str, hash: &str) -> String {
-    let Ok(files) = store::saved(root, hash) else {
-        // The cell has not run, or its notebook failed; its error was reported then.
-        return format!("<!-- no outputs for cell {hash} -->\n");
-    };
-    let mut html = String::new();
-    for file in files {
-        let name = file.file_name().unwrap().to_str().unwrap();
-        let extension = file.extension().and_then(|extension| extension.to_str());
-        if let Some("png" | "jpeg" | "gif") = extension {
-            html.push_str(&format!("<img src=\"{}\">\n", in_outputs(outputs, name)));
-            continue;
-        }
-        let Ok(mut text) = fs::read_to_string(&file) else {
-            eprintln!("{}: could not read", file.display());
-            continue;
-        };
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        match extension {
-            // SVGs were prepared for inlining when they were saved.
-            Some("html" | "svg") => html.push_str(&text),
-            Some("md") => html::push_html(&mut html, Parser::new(&text)),
-            // Plain text keeps its layout, and is escaped on the way in.
-            _ => html::push_html(
-                &mut html,
-                [
-                    Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)),
-                    Event::Text(text.into()),
-                    Event::End(TagEnd::CodeBlock),
-                ]
-                .into_iter(),
-            ),
-        }
-    }
-    html
 }
 
 /// Indents the html to sit inside the template. Indentation is cosmetic

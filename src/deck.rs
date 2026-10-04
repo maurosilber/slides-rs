@@ -50,6 +50,27 @@ impl Deck {
             })
             .collect();
         self.runner.run(&self.outputs, &notebooks);
+        for path in &loaded {
+            self.warn(path);
+        }
+    }
+
+    /// Reports what is wrong with how the slides of a file step, on its
+    /// line, with the outputs of its cells, which can name steps too.
+    fn warn(&self, path: &Path) {
+        let file = &self.files[path];
+        let outputs = |_: &[String]| {
+            file.hashes
+                .iter()
+                .map(|hash| store::cell_html(&self.outputs, "", hash))
+                .collect()
+        };
+        for slide in markdown::steps(&file.markdown, outputs) {
+            for warning in slide.warnings {
+                let line = warning.line + 1;
+                eprintln!("{}:{line}: {}", path.display(), warning.message);
+            }
+        }
     }
 
     /// Renders a file, along with every file it imports that is not cached yet,
@@ -138,7 +159,7 @@ impl Deck {
             match part {
                 Part::Html(html) if steps => body.push_str(html),
                 Part::Html(html) => body.push_str(&html.replace(SECTION, NO_STEPS)),
-                Part::Cell(hash) => body.push_str(&page::cell_html(&self.outputs, outputs, hash)),
+                Part::Cell(hash) => body.push_str(&store::cell_html(&self.outputs, outputs, hash)),
                 Part::Import(import) => self.body(import, steps, outputs, body),
             }
         }

@@ -14,6 +14,9 @@ import { Breaks, Module, SlideSteps } from './wasm';
 /** How long to wait, after an edit, before marking the slides again. */
 const DELAY = 150;
 
+/** The timer of the outputs saved, among those of the documents, by uri. */
+const OUTPUTS = 'outputs';
+
 /** A slide of the markdown, by its first and last lines that are not blank. */
 interface Slide {
 	/** The lines between the break before it and the one after, blank ones too. */
@@ -104,7 +107,22 @@ export class SlideEditor implements vscode.Disposable {
 		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {
+		// The outputs of the cells step as they do on the slides, so a run that saves them
+		// moves the steps, though the document stays as it is.
+		const outputs = vscode.workspace.createFileSystemWatcher('**/_outputs/*/outputs.txt');
+		const saved = () => {
+			clearTimeout(this.timers.get(OUTPUTS));
+			this.timers.set(OUTPUTS, setTimeout(() => {
+				this.timers.delete(OUTPUTS);
+				this.layouts.clear();
+				this.refresh();
+			}, DELAY));
+		};
 		this.disposables.push(
+			outputs,
+			outputs.onDidCreate(saved),
+			outputs.onDidChange(saved),
+			outputs.onDidDelete(saved),
 			this.decoration,
 			this.shade,
 			...this.headings,
@@ -168,7 +186,7 @@ export class SlideEditor implements vscode.Disposable {
 		const layout = Promise.all([
 			this.module.slides(text),
 			// Found even while they are not shown, for what is wrong with them.
-			this.module.steps(text),
+			this.module.steps(text, document.uri),
 		]).then(([breaks, steps]) => ({ version, breaks, slides: slidesOf(text.split(/\r?\n/), breaks), steps }));
 		this.layouts.set(document.uri.toString(), layout);
 		layout.catch((error) => {

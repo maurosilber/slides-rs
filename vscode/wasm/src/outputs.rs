@@ -23,13 +23,29 @@ pub struct Place {
 impl Place {
     /// The address of each code cell, given their sources in order.
     fn hashes(&self, sources: &[&str]) -> Vec<String> {
-        let lock = store::lock_file(&self.path);
         let codes: Vec<String> = sources.iter().map(|source| code(source)).collect();
+        self.addresses(&codes)
+    }
+
+    /// The address of each code cell, given their code in order, as the deck
+    /// reads it from the markdown.
+    fn addresses(&self, codes: &[String]) -> Vec<String> {
+        let lock = store::lock_file(&self.path);
         store::hashes(
             Path::new(&self.dir),
             &store::environment(lock.as_deref()),
-            &codes,
+            codes,
         )
+    }
+
+    /// The html of the saved outputs of each code cell, given their code in
+    /// order, as the deck shows them.
+    pub fn html(&self, codes: &[String]) -> Vec<String> {
+        let root = self.root();
+        self.addresses(codes)
+            .iter()
+            .map(|hash| store::cell_html(&root, "", hash))
+            .collect()
     }
 
     fn root(&self) -> PathBuf {

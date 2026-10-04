@@ -237,7 +237,7 @@ async function position(module: Module, uri: vscode.Uri, text: string, line: num
 		return { slide: slide + 1, step: 1 };
 	}
 	// What steps at or before the line, in its slide, shows it.
-	const steps = await module.steps(text);
+	const steps = await module.steps(text, uri);
 	const own = steps.filter((slide) => slide.line <= line).at(-1);
 	const before = own?.steps.filter((step) => step.line <= line && step.line >= start) ?? [];
 	const last = before.at(-1)?.line;

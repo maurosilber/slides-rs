@@ -107,9 +107,13 @@ export class Module {
 		return this.run({ command: 'slides', markdown });
 	}
 
-	/** The steps of the slides of a markdown file, by line. */
-	steps(markdown: string): Promise<SlideSteps[]> {
-		return this.run({ command: 'steps', markdown });
+	/** The steps of the slides of a markdown file, by line, with the saved outputs of its
+	 * cells, which step as they do on the slides, if it is the file at `uri`. */
+	async steps(markdown: string, uri: vscode.Uri): Promise<SlideSteps[]> {
+		if (uri.scheme === 'untitled') {
+			return this.run({ command: 'steps', markdown });
+		}
+		return this.run({ command: 'steps', markdown, place: await place(uri) }, [disk(uri)]);
 	}
 
 	/** The saved outputs of each code cell of the file at `uri`, given their sources in order. */
