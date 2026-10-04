@@ -100,6 +100,14 @@ def test_a_bound_that_is_no_name_is_refused():
         Step("@a+1")
 
 
+def test_a_number_is_not_before_the_first_step():
+    with pytest.raises(ValueError, match="'-1'"):
+        Step(-1)
+    with pytest.raises(ValueError):
+        Step(1, 2).previous(2)
+    assert Step(1, 2).previous() == Step(0, 1)
+
+
 def test_a_bound_from_the_one_before_moves_along():
     assert Step("+0", "+2").next() == Step("+1", "+3")
     assert Step("+1").previous(2) == Step("-1")

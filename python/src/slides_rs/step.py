@@ -64,13 +64,21 @@ class Step(str):
                     f"{bound!r} is not a step from the one before, as '+1' is,"
                     " nor from a name, as 'a+1' is"
                 )
+            # Written signed, it would be a number of steps from the one
+            # before, rather than a step of the slide.
+            if isinstance(bound, int) and bound < 0:
+                raise ValueError(
+                    f"{bound} is before the first step; a number of steps from"
+                    f" the one before is written as a string, as '{bound:+d}'"
+                )
         name = "step*" if collapse else "step"
         start_ = "" if start is None else start
         stop_ = "" if stop is None else stop
         return super().__new__(cls, f"{name}={start_}..{stop_}")
 
     def next(self, n: int = 1) -> Step:
-        """The same steps, ``n`` later.
+        """The same steps, ``n`` later, or earlier, if negative, which must
+        not be before the first.
 
         >>> Step(1, 2).next()
         Step(start=2, stop=3, collapse=False)
@@ -82,6 +90,10 @@ class Step(str):
         Step(start='a+1', stop='a+2', collapse=False)
         >>> Step("+0").next()
         Step(start='+1', stop=None, collapse=False)
+        >>> Step(1).next(-2)
+        Traceback (most recent call last):
+        ...
+        ValueError: -1 is before the first step; a number of steps from the one before is written as a string, as '-1'
         """
         if self.start is None and self.stop is None:
             raise ValueError("Step() shows on every step, which has no steps to move")
