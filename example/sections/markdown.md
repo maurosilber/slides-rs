@@ -125,5 +125,5 @@ which a `<style>` on the slide can dress.
 Any element with a `step` attribute steps: <span step>like this</span>,
 <span step="+0">and this along with it</span>.
 
-<p step="..3" collapse>With <code>collapse</code>, this sentence…</p>
-<p step="3" collapse>…is replaced by this one, in its place.</p>
+<p step="..after+0" collapse>With <code>collapse</code>, this sentence…</p>
+<p step="after" collapse>…is replaced by this one, in its place.</p>

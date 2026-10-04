@@ -80,8 +80,9 @@ By default, reveals happen in document order:
   element with a `step` of its own joins the step before it, instead of
   being a step itself.
 - Explicit ranges use Rust syntax: `step="2..4"` shows from step 2 up to
-  (not including) 4, `step="..3"` until 3, and `step="3.."` or `step="3"`
-  from 3 on. They are the slide's steps, wherever the element is: `1` is
+  (not including) 4, `step="..3"` from the element's own step until 3, and
+  `step="3.."` or `step="3"` from 3 on. A range hidden again before it shows
+  is warned of. They are the slide's steps, wherever the element is: `1` is
   the step the slide opens with.
 - Signed numbers are relative: `step="+1"`, `+0` or `-1` count from the
   step of the previous sibling that steps, or, if there is none, from the

@@ -22,8 +22,8 @@ __all__ = ["Step"]
 class Step(str):
     """The steps an artist shows in, written as ``src/step.rs`` reads them.
 
-    It shows from ``start``, or the start, up to ``stop``, excluded, or the
-    end, as a Rust range does: ``Step(3, 5)`` is ``step=3..5``, ``Step(3)`` is
+    It shows from ``start``, or the step of the element it is in, up to
+    ``stop``, excluded, or the end, as a Rust range does: ``Step(3, 5)`` is ``step=3..5``, ``Step(3)`` is
     ``step=3..``, and ``Step(stop=3)`` is ``step=..3``. Without either, it
     shows on every step: ``Step()`` is ``step=..``. ``collapse`` makes it take
     no space while hidden, as ``step*`` does.

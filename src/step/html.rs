@@ -47,7 +47,7 @@
 //! a bound of a range. These steps do not count as the latest, nor as the
 //! steps a range is numbered among: they show where the name says, once the
 //! whole slide is numbered. A name that names no step shows what is marked
-//! from it all along. A name given again names the first step given it, and
+//! from it all along, and is warned of. A name given again names the first step given it, and
 //! is warned of, for the step to show along with it as `a+0` does.
 //!
 //! Each element that steps is given the class `step`, and `step-collapse` if
@@ -538,6 +538,26 @@ fn resolve_slide(
             }
         }
     }
+    // A name that names no step is warned of, as a step that shows from it
+    // shows from the start, or is never hidden.
+    let mut unnamed: Vec<(usize, &str)> = Vec::new();
+    for (target, shown) in &targets {
+        for step in [Some(&shown.from), shown.to.as_ref()].into_iter().flatten() {
+            if let At::Name(name, _) = step
+                && !named.contains_key(name)
+            {
+                unnamed.push((at(target), name));
+            }
+        }
+    }
+    unnamed.sort();
+    unnamed.dedup();
+    warnings.extend(unnamed.into_iter().map(|(at, name)| Warning {
+        at,
+        message: format!(
+            "no step of the slide is named `{name}`: name one with `step=\"{name}\"`"
+        ),
+    }));
     let resolved: Vec<Resolved> = targets
         .iter()
         .map(|(target, shown)| {
@@ -572,6 +592,21 @@ fn resolve_slide(
             (target, from, to, collapse)
         })
         .collect();
+    // One hidden again before it shows is never shown.
+    let mut empty: Vec<(usize, u32, u32)> = resolved
+        .iter()
+        .filter_map(|(target, from, to, _)| {
+            to.filter(|to| to <= from).map(|to| (at(target), *from, to))
+        })
+        .collect();
+    empty.sort();
+    warnings.extend(empty.into_iter().map(|(at, from, to)| Warning {
+        at,
+        message: format!(
+            "this shows on no step: it shows from step {from}, and is hidden again at step {to}"
+        ),
+    }));
+    warnings.sort_by_key(|warning| warning.at);
     let count = resolved
         .iter()
         .map(|&(_, from, _, _)| from)
@@ -1650,6 +1685,34 @@ mod tests {
     fn a_step_from_a_name_that_names_none_shows_all_along() {
         let html = "<section><h1>T</h1><p step=\"x+0\">a</p><p step=\"..x+0\">b</p></section>";
         assert_eq!(steps(html), ["count 1"]);
+        let warnings: Vec<_> = slides(html)
+            .remove(0)
+            .warnings
+            .into_iter()
+            .map(|warning| (warning.at, warning.message))
+            .collect();
+        let message = "no step of the slide is named `x`: name one with `step=\"x\"`";
+        assert_eq!(
+            warnings,
+            [
+                (html.find("<p step=\"x").unwrap(), message.to_string()),
+                (html.find("<p step=\"..").unwrap(), message.to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_step_hidden_again_before_it_shows_is_warned_of() {
+        let html = "<section><h1>T</h1><p>a</p><p>b</p><p step=\"..2\">c</p><p step=\"..4\">d</p></section>";
+        let slide = slides(html).remove(0);
+        let [warning] = &slide.warnings[..] else {
+            panic!("{:?}", slide.warnings);
+        };
+        assert_eq!(warning.at, html.find("<p step=\"..2").unwrap());
+        assert_eq!(
+            warning.message,
+            "this shows on no step: it shows from step 3, and is hidden again at step 2"
+        );
     }
 
     #[test]

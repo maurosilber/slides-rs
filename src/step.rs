@@ -1,7 +1,9 @@
 //! When a step of a slide shows, written as a range of the steps of its
 //! column, as in Rust: `3..5` shows from step 3 and hides again at step 5,
-//! `..3` shows from the start and hides at step 3, `3..` shows from step 3 to
-//! the end, and so does a bare `3`. The page reads them the same way.
+//! `..3` shows from the element's own step, as it would without a range, and
+//! hides at step 3, `3..` shows from step 3 to the end, and so does a bare
+//! `3`. The page reads them the same way. A range that hides again before it
+//! shows is warned of, as it shows on no step.
 //!
 //! Without a range, a step comes one after the latest one so far, `latest +
 //! 1..`, where the latest is the highest step any range so far starts at.
