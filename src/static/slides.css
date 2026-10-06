@@ -140,6 +140,54 @@ section::after {
     transition: none;
 }
 
+/* The overview, which Escape shows: every slide at once, in rows of
+   `--overview-columns`, in the frame, which scrolls. Each slide keeps the
+   size of the frame, so that it is laid out as when it is shown, and is
+   shrunk into its place, `--overview-gap` of the frame's width apart. The
+   frame is sized in its own units, as the units of the container it is are
+   those of its slides. slides.js marks the one chosen `chosen`. */
+:root {
+    --overview-columns: 4;
+    --overview-gap: 0.03;
+}
+
+.overview body {
+    --overview-scale: calc((1 - (var(--overview-columns) + 1) * var(--overview-gap)) / var(--overview-columns));
+    display: grid;
+    grid-template-columns: repeat(var(--overview-columns), calc(var(--overview-scale) * 100%));
+    grid-auto-rows: calc(var(--overview-scale) * 100% + var(--overview-gap) * var(--slide-width));
+    justify-content: space-evenly;
+    overflow: hidden auto;
+}
+
+.overview section {
+    /* Over the display slides.js gives each, to show only one. */
+    display: block !important;
+    width: 100cqw;
+    height: 100cqh;
+    margin:
+        calc(var(--overview-gap) * 50cqw)
+        calc((var(--overview-scale) - 1) * 100cqw)
+        calc((var(--overview-scale) - 1) * 100cqh)
+        0;
+    transform: scale(var(--overview-scale));
+    transform-origin: top left;
+    cursor: pointer;
+
+    & * {
+        pointer-events: none;
+    }
+
+    & .step {
+        transition: none;
+    }
+}
+
+.overview .chosen {
+    outline: calc(0.4cqmin / var(--overview-scale)) solid;
+    outline-offset: calc(0.3cqmin / var(--overview-scale));
+}
+
 /* The shortcuts, which `?` shows over the slides, in the window's units, as
    they are in the top layer, out of the slide's frame. A theme dresses it. */
 .shortcuts {
