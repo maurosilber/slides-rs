@@ -7,6 +7,7 @@ addEventListener("DOMContentLoaded", () => {
         slide.dataset.number = i + 1;
         slide.dataset.total = slides.length;
     });
+    document.body.append(shortcuts);
     updateSlide(...positionFromHash(), true);
 });
 
@@ -74,6 +75,28 @@ function moveToStep(i) {
     return stepsEnabled && showStep(i);
 }
 
+// The keys the page answers to, which `?` lists, in a dialog of its own,
+// rather than a slide, which is a section.
+const SHORTCUTS = [
+    ["→", "Next step, or next slide"],
+    ["←", "Previous step, or previous slide"],
+    ["↓", "End of this slide, or next slide"],
+    ["↑", "Start of this slide, or previous slide"],
+    ["A", "Show every step, or step again"],
+    ["?", "Show or hide these shortcuts"],
+];
+
+const shortcuts = document.createElement("dialog");
+shortcuts.className = "shortcuts";
+shortcuts.setAttribute("aria-label", "Keyboard shortcuts");
+shortcuts.innerHTML = "<h2>Keyboard shortcuts</h2><dl>" +
+    SHORTCUTS.map(([key, action]) => `<dt><kbd>${key}</kbd></dt><dd>${action}</dd>`).join("") +
+    "</dl>";
+// A click outside it, on its backdrop, closes it, as Escape does.
+shortcuts.addEventListener("click", (event) => {
+    if (event.target == shortcuts) shortcuts.close();
+});
+
 // Whether a key pressed is the page's to step with: not one held with a
 // modifier, as the browser's own shortcuts are, as Alt+Left goes back, nor one
 // pressed in what takes text or arrows itself, as a widget's input does.
@@ -85,6 +108,13 @@ function forSlides(event) {
 
 addEventListener("keydown", (event) => {
     if (!forSlides(event)) return;
+    // `?` is where the keyboard puts it, which `code` does not say.
+    if (event.key == "?") {
+        shortcuts.open ? shortcuts.close() : shortcuts.showModal();
+        return;
+    }
+    // The slides stay as they are while the shortcuts show.
+    if (shortcuts.open) return;
     if (event.code == "ArrowRight") {
         if (!moveToStep(currentStep + 1) && !rushAnimations(slides[currentSlide])) {
             updateSlide(currentSlide + 1);

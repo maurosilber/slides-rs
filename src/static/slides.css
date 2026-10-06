@@ -139,3 +139,34 @@ section::after {
 :root[data-fade-figures="false"] section svg:not(.katex *) .step {
     transition: none;
 }
+
+/* The shortcuts, which `?` shows over the slides, in the window's units, as
+   they are in the top layer, out of the slide's frame. A theme dresses it. */
+.shortcuts {
+    font-size: max(14px, 2.2vmin);
+    padding: 1.5em 2em;
+    max-width: min(90vw, 32em);
+
+    & h2 {
+        font-size: 1.2em;
+        margin: 0 0 0.8em;
+        padding: 0;
+        border: none;
+    }
+
+    & dl {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.5em 1.2em;
+        align-items: baseline;
+        margin: 0;
+    }
+
+    & dt {
+        text-align: center;
+    }
+
+    & dd {
+        margin: 0;
+    }
+}

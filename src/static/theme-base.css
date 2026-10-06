@@ -244,3 +244,30 @@ svg:not(.katex *) {
 section svg:not(.katex *) {
     filter: var(--figure-filter);
 }
+
+/* The shortcuts `?` shows. */
+
+.shortcuts {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: 0 1em 3em rgb(0 0 0 / 0.3);
+    /* Focused as it opens, which needs no ring. */
+    outline: none;
+
+    &::backdrop {
+        background: rgb(0 0 0 / 0.4);
+    }
+
+    & kbd {
+        display: inline-block;
+        min-width: 1.4em;
+        padding: 0.1em 0.4em;
+        font-family: var(--font-mono);
+        background: var(--code-bg);
+        border: 1px solid var(--rule);
+        border-radius: 0.3em;
+    }
+}
