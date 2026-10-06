@@ -98,9 +98,9 @@ shortcuts.addEventListener("click", (event) => {
     if (event.target == shortcuts) shortcuts.close();
 });
 
-// The overview, which Escape toggles: every slide at once, shrunk, as
+// The overview, which Escape toggles: every slide in a row, shrunk, as
 // slides.css lays them out, each at its end, as if stepped through, but the
-// one we were on, as it is. One is chosen, as the arrows move, starting from
+// one we were on, as it is. One is chosen, as ← and → move, starting from
 // the one we were on, to open with Enter, or Escape again, or with a click.
 let overview = false;
 let chosen = 0;
@@ -120,7 +120,10 @@ function choose(i) {
     slides[chosen].classList.remove("chosen");
     chosen = Math.max(0, Math.min(i, slides.length - 1));
     slides[chosen].classList.add("chosen");
-    slides[chosen].scrollIntoView({ block: "nearest" });
+    // Centred as it is shown, shrunk, which scrollIntoView does not see.
+    const slide = slides[chosen].getBoundingClientRect();
+    const row = document.body.getBoundingClientRect();
+    document.body.scrollLeft += slide.left + slide.width / 2 - (row.left + document.body.clientWidth / 2);
 }
 
 // Opens slide `i`, at its start, or as it was if it is the one we were on.
@@ -129,21 +132,15 @@ function closeOverview(i) {
     document.documentElement.classList.remove("overview");
     slides[chosen].classList.remove("chosen");
     // Scrolled, the page would show the slide out of its frame.
-    document.body.scrollTop = 0;
+    document.body.scrollLeft = 0;
     [...slides].forEach((slide, j) => {
         if (j != currentSlide) stopAnimations(slide);
     });
     if (i != currentSlide) updateSlide(i);
 }
 
-// How many slides a row of the overview has, as slides.css says.
-function overviewColumns() {
-    return Number(getComputedStyle(document.documentElement).getPropertyValue("--overview-columns")) || 1;
-}
-
 function overviewKey(event) {
-    const columns = overviewColumns();
-    const move = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns }[event.code];
+    const move = { ArrowRight: 1, ArrowLeft: -1 }[event.code];
     if (move) {
         event.preventDefault();
         choose(chosen + move);
@@ -158,6 +155,17 @@ addEventListener("click", (event) => {
     const slide = event.target.closest?.("section");
     if (slide) closeOverview([...slides].indexOf(slide));
 });
+
+// Resized, the frame keeps the one chosen in its middle.
+addEventListener("resize", () => {
+    if (overview) choose(chosen);
+});
+
+// The row scrolls sideways, as a wheel turned up and down does too.
+addEventListener("wheel", (event) => {
+    if (!overview || event.deltaX) return;
+    document.body.scrollLeft += event.deltaY;
+}, { passive: true });
 
 // Whether a key pressed is the page's to step with: not one held with a
 // modifier, as the browser's own shortcuts are, as Alt+Left goes back, nor one

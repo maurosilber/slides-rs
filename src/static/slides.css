@@ -140,24 +140,27 @@ section::after {
     transition: none;
 }
 
-/* The overview, which Escape shows: every slide at once, in rows of
-   `--overview-columns`, in the frame, which scrolls. Each slide keeps the
-   size of the frame, so that it is laid out as when it is shown, and is
-   shrunk into its place, `--overview-gap` of the frame's width apart. The
-   frame is sized in its own units, as the units of the container it is are
-   those of its slides. slides.js marks the one chosen `chosen`. */
+/* The overview, which Escape shows: every slide in a row, across the
+   middle of the frame, which scrolls sideways, as many at once as
+   `--overview-columns` says. Each slide keeps the size of the frame, so
+   that it is laid out as when it is shown, and is shrunk into its place,
+   `--overview-gap` of the frame's width apart. The frame is sized in its own
+   units, as the units of the container it is are those of its slides.
+   slides.js marks the one chosen `chosen`. */
 :root {
-    --overview-columns: 4;
+    --overview-columns: 3;
     --overview-gap: 0.03;
 }
 
 .overview body {
-    --overview-scale: calc((1 - (var(--overview-columns) + 1) * var(--overview-gap)) / var(--overview-columns));
+    --overview-scale: calc((1 - var(--overview-columns) * var(--overview-gap)) / var(--overview-columns));
     display: grid;
-    grid-template-columns: repeat(var(--overview-columns), calc(var(--overview-scale) * 100%));
-    grid-auto-rows: calc(var(--overview-scale) * 100% + var(--overview-gap) * var(--slide-width));
-    justify-content: space-evenly;
-    overflow: hidden auto;
+    grid-auto-flow: column;
+    grid-auto-columns: calc(var(--overview-scale) * 100% + var(--overview-gap) * var(--slide-width));
+    grid-template-rows: calc(var(--overview-scale) * 100%);
+    align-content: center;
+    justify-content: safe center;
+    overflow: auto hidden;
 }
 
 .overview section {
@@ -166,10 +169,10 @@ section::after {
     width: 100cqw;
     height: 100cqh;
     margin:
-        calc(var(--overview-gap) * 50cqw)
+        0
         calc((var(--overview-scale) - 1) * 100cqw)
         calc((var(--overview-scale) - 1) * 100cqh)
-        0;
+        calc(var(--overview-gap) * 50cqw);
     transform: scale(var(--overview-scale));
     transform-origin: top left;
     cursor: pointer;
