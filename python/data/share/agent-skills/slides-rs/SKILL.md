@@ -31,7 +31,9 @@ the deck's `.md`; the page rewrites them to work from wherever it is written.
 
 In the browser: → / ← step forward and back, ↓ finishes the slide (then goes
 to the next), ↑ restarts it (then goes to the previous), and <kbd>A</kbd>
-toggles showing every step at once. The URL hash tracks the slide.
+toggles showing every step at once. <kbd>Esc</kbd> shows every slide to pick
+one, <kbd>S</kbd> opens the speaker view in a window of its own, and
+<kbd>?</kbd> lists the keys. The URL hash tracks the slide.
 
 ## Deck structure
 
@@ -44,6 +46,8 @@ figures:
   invert: false       # show figures as drawn instead of filtered by the theme (dark inverts)
   fade: false         # figure steps appear at once instead of fading
   rush: 0.5           # seconds an animation still playing takes to finish when the next step begins (default 0.2)
+duration: 20          # minutes the talk lasts, or 45m, 1h30m, for the speaker view's countdown
+deadline: "15:30"     # or the time of day it ends at, instead of a duration
 ---
 
 # Slide title
@@ -112,6 +116,34 @@ By default, reveals happen in document order:
   <p step="..3" collapse>First version…</p>
   <p step="3" collapse>…replaced by this.</p>
   ```
+
+## Speaker notes
+
+An `<aside>` is a speaker's note: hidden on the slide, shown in the speaker
+view. Leave blank lines inside it for its markdown to render:
+
+```markdown
+- First point
+
+<aside>
+
+Mention the **outlier** before the fit.
+
+</aside>
+```
+
+- A slide can have several. Each one is not a step: it shows along with the
+  element before it, as `step="+0.."` would, so the notes follow the slide as
+  it steps. After a list, it shows with the list's first item. Put it inside
+  an item to follow that item.
+- `step` works on an aside as on any element: `<aside step="3..5">`,
+  `<aside step="a+0">`, or a bare `step`, which makes a step of its own.
+- A list inside an aside does not step.
+- The speaker view shows the slide, the step that comes next, the notes of
+  the slide (those of steps to come, or over, dimmed), the clock, and a
+  countdown from the frontmatter's `duration` or `deadline`, which can also
+  be typed in. It shares the time left equally among the slides left, and
+  says to speed up once a slide takes longer than its share.
 
 ## Math (KaTeX)
 

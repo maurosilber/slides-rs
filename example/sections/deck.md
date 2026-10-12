@@ -11,6 +11,7 @@ figures:
   invert: false       # as drawn
   fade: false         # steps at once
   rush: 0.5           # seconds to finish an animation cut short
+duration: 20          # minutes, or 45m, or deadline: "15:30"
 ---
 ```
 
