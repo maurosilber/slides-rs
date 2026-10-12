@@ -304,6 +304,11 @@
 						"newSlideBelow": true
 					}
 				},
+				"slides.editor.previewFollowsCursor": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "In the integrated browser, go to the slide and step the cursor is at as it moves, rather than only once a save is rendered. Takes effect as **Slides: Show Slides** opens the page."
+				},
 				"slides.editor.slideLabel": {
 					"type": "string",
 					"default": "slide ${number}: ${title}",

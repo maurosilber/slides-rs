@@ -133,6 +133,11 @@ export function shown(document: vscode.TextDocument): Shown {
 	};
 }
 
+/** Whether the page of the slides goes, as the cursor moves, to the slide and step it is at. */
+export function previewFollowsCursor(document: vscode.TextDocument): boolean {
+	return vscode.workspace.getConfiguration('slides.editor', document).get('previewFollowsCursor', true);
+}
+
 /** `template` with each `${name}` written as `values` has it. */
 export function fill(template: string, values: Record<string, string | number>): string {
 	return template.replace(/\$\{(\w+)\}/g, (whole, name: string) => (name in values ? String(values[name]) : whole));

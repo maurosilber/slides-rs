@@ -222,3 +222,13 @@ addEventListener("hashchange", () => {
     if (overview) closeOverview(currentSlide);
     updateSlide(...positionFromHash(), true);
 });
+
+// Opened by the editor with `?follow=port/id`, the page goes to the slide and
+// step the editor's cursor is at, as it moves, which the editor sends as
+// `slide.step` from a server of its own on this machine.
+const follow = new URLSearchParams(location.search).get("follow");
+if (follow && /^\d+\/\w+$/.test(follow)) {
+    new EventSource("http://127.0.0.1:" + follow).onmessage = (event) => {
+        if (location.hash.slice(1) !== event.data) location.replace("#" + event.data);
+    };
+}
