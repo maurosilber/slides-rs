@@ -12,6 +12,7 @@ use crate::aspect::{self, AspectRatio};
 use crate::paths::{self, Importing, canonical, parent};
 use crate::step;
 use crate::store;
+use crate::talk::{self, Deadline};
 
 /// Marks an import in the rendered html, followed by its path and a newline.
 const IMPORT: char = '\u{0}';
@@ -99,6 +100,8 @@ pub fn render(markdown: &str, path: &Path) -> File {
         page: PageSettings {
             aspect_ratio: frontmatter.aspect_ratio(path),
             figures: frontmatter.figures(path),
+            duration: frontmatter.duration(path),
+            deadline: frontmatter.deadline(path),
             theme: frontmatter.theme,
         },
         steps: frontmatter.steps,
@@ -612,6 +615,10 @@ pub struct PageSettings {
     pub aspect_ratio: Option<AspectRatio>,
     /// How figures are shown, and step.
     pub figures: FigureSettings,
+    /// How many seconds the talk lasts, for the speaker view to count down.
+    pub duration: Option<u32>,
+    /// When the talk ends, for the speaker view to count down to.
+    pub deadline: Option<Deadline>,
 }
 
 /// How figures are shown, and step.
@@ -659,6 +666,14 @@ struct Frontmatter {
     steps: Option<bool>,
     /// How figures are shown, and step.
     figures: FigureSettings,
+    /// How long the talk lasts, for the speaker view to count down from: a
+    /// number of minutes, or as `1h30m`, `45m` or `90s`.
+    #[cfg_attr(test, schemars(extend("examples" = [20, "45m", "1h30m"])))]
+    duration: Option<talk::Written>,
+    /// The time of day the talk ends at, as `15:30`, for the speaker view to
+    /// count down to, rather than from a duration.
+    #[cfg_attr(test, schemars(extend("examples" = ["15:30"])))]
+    deadline: Option<String>,
 }
 
 impl Frontmatter {
@@ -681,11 +696,43 @@ impl Frontmatter {
             aspect_ratio,
             steps,
             figures,
+            duration,
+            deadline,
         } = self;
         theme.is_some()
             || aspect_ratio.is_some()
             || steps.is_some()
             || *figures != FigureSettings::default()
+            || duration.is_some()
+            || deadline.is_some()
+    }
+
+    /// How many seconds the talk lasts, if it says, with one that is not a
+    /// duration reported and left out.
+    fn duration(&self, path: &Path) -> Option<u32> {
+        let written = self.duration.as_ref()?;
+        let seconds = written.seconds();
+        if seconds.is_none() {
+            eprintln!(
+                "{}: duration {written} is not one, as 20, 45m or 1h30m",
+                path.display()
+            );
+        }
+        seconds
+    }
+
+    /// When the talk ends, if it says, with one that is not a time of day
+    /// reported and left out.
+    fn deadline(&self, path: &Path) -> Option<Deadline> {
+        let written = self.deadline.as_deref()?;
+        let deadline = Deadline::parse(written);
+        if deadline.is_none() {
+            eprintln!(
+                "{}: deadline {written} is not a time of day, as 15:30",
+                path.display()
+            );
+        }
+        deadline
     }
 
     /// The shape the slides keep, if it says one, which is reported and left
@@ -1119,6 +1166,18 @@ mod tests {
             std::fs::write(&path, &json).unwrap();
             panic!("{} was out of date, and is written anew", path.display());
         }
+    }
+
+    #[test]
+    fn the_talk_lasts_as_the_frontmatter_says() {
+        let page = |markdown| render(markdown, Path::new("slides.md")).page;
+        let set = page("---\nduration: 20\ndeadline: 15:30\n---\n# Slide\n");
+        assert_eq!(set.duration, Some(1200));
+        assert_eq!(set.deadline, Deadline::parse("15:30"));
+        assert_eq!(page("---\nduration: 1h30m\n---\n").duration, Some(5400));
+        let unset = page("---\nduration: long\ndeadline: noon\n---\n");
+        assert_eq!((unset.duration, unset.deadline), (None, None));
+        assert!(breaks("---\nduration: 20\n---\n# One\n").deck);
     }
 
     #[test]

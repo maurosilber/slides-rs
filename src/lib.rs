@@ -6,3 +6,4 @@ pub mod markdown;
 pub mod paths;
 pub mod step;
 pub mod store;
+pub mod talk;

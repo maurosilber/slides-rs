@@ -31,6 +31,42 @@
         "none"
       ]
     },
+    "deadline": {
+      "description": "The time of day the talk ends at, as `15:30`, for the speaker view to\ncount down to, rather than from a duration.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "examples": [
+        "15:30"
+      ]
+    },
+    "duration": {
+      "description": "How long the talk lasts, for the speaker view to count down from: a\nnumber of minutes, or as `1h30m`, `45m` or `90s`.",
+      "anyOf": [
+        {
+          "description": "A duration as the frontmatter has it, which YAML reads as a number of\nminutes or as text, as `1h30m`, `45m` or `90s`.",
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "examples": [
+        20,
+        "45m",
+        "1h30m"
+      ]
+    },
     "figures": {
       "description": "How figures are shown, and step.",
       "type": "object",

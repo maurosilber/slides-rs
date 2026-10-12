@@ -192,6 +192,12 @@ fn root_attributes(settings: &PageSettings) -> String {
     if let Some(rush) = figures.rush {
         attributes.push_str(&format!(" data-rush=\"{rush}\""));
     }
+    if let Some(duration) = settings.duration {
+        attributes.push_str(&format!(" data-duration=\"{duration}\""));
+    }
+    if let Some(deadline) = settings.deadline {
+        attributes.push_str(&format!(" data-deadline=\"{deadline}\""));
+    }
     attributes
 }
 
