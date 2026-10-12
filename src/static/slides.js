@@ -39,10 +39,27 @@ let currentSlide = 0;
 let currentStep = 1;
 let stepsEnabled = true;
 
+// It is written once the moves stop for a moment, as a browser limits how
+// often a page writes it, as while a key is held down: Chrome lets some go,
+// and Safari throws. A slide the speaker view shows keeps none.
+let writing = null;
+
 function showPosition() {
-    history.replaceState(null, "", "#" + (currentSlide + 1) + "." + currentStep);
     tellSpeaker();
+    if (preview) return;
+    clearTimeout(writing);
+    writing = setTimeout(writePosition, 300);
 }
+
+function writePosition() {
+    clearTimeout(writing);
+    try {
+        history.replaceState(null, "", "#" + (currentSlide + 1) + "." + currentStep);
+    } catch {}
+}
+
+// Written before the page goes, as it reloads after a rebuild.
+addEventListener("pagehide", writePosition);
 
 // A slide opens as its step is, without the transitions of stepping to it,
 // which would bring in at once all it shows. Its animations play as it opens,

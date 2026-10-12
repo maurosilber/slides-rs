@@ -184,14 +184,26 @@ function followDeck(slide, step, steps) {
     currentSlide = slide;
     currentStep = step;
     stepsEnabled = steps;
-    history.replaceState(null, "", "#" + (slide + 1) + "." + step);
-    if (entered) showNotes();
+    showPosition();
     // Reloaded, the slide keeps the time it had.
     if (entered && (moved || timer.slide != slide)) planSlide();
-    markNotes();
-    showSlides();
     if (moved && timer.started == null) toggleTimer();
     showTimer();
+    // Shown once a frame, however many moves come in it, as while a key is
+    // held down, for the slides shown to keep up.
+    drawn ??= requestAnimationFrame(draw);
+}
+
+// The frame to come, while one is asked for, and the slide whose notes show.
+let drawn = null;
+let notesOf = null;
+
+function draw() {
+    drawn = null;
+    if (notesOf != currentSlide) showNotes();
+    notesOf = currentSlide;
+    markNotes();
+    showSlides();
 }
 
 // The step after the one shown: the next of its slide, or the next slide's
