@@ -225,6 +225,21 @@
 		"configuration": {
 			"title": "Slides Notebook",
 			"properties": {
+				"slides.editor.slideBreaks": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Mark the line of each rule (`---`) or `<import-slide>` that breaks a slide from the one before, in `#slides.editor.slideBreakColor#`."
+				},
+				"slides.editor.slideLabels": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Write after each break which slide follows it: `#slides.editor.slideLabel#`, `#slides.editor.endLabel#` or `#slides.editor.importLabel#`."
+				},
+				"slides.editor.overviewRuler": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Mark each break on the scrollbar too."
+				},
 				"slides.editor.alternateSlides": {
 					"type": "boolean",
 					"default": true,
@@ -238,12 +253,273 @@
 				"slides.editor.columns": {
 					"type": "boolean",
 					"default": true,
-					"markdownDescription": "Draw a line down each column, from its `###` to the next, before its text, in `slides.column` and `slides.alternateColumn` by turns."
+					"markdownDescription": "Draw a line down each column, from its `###` to the next, before its text, in `#slides.editor.columnColor#` and `#slides.editor.alternateColumnColor#` by turns."
 				},
 				"slides.editor.steps": {
 					"type": "boolean",
 					"default": true,
 					"markdownDescription": "Write before each line that steps, in a column of their own, in `slides.stepColumn`, the steps it shows in, as the deck numbers them: `3` from the third on, `2..4` up to the fourth, and a `*` if it takes no space while hidden. And above each slide, how many steps it has, which collapses or expands the column, as hovering over it does."
+				},
+				"slides.editor.stepCounts": {
+					"type": "boolean",
+					"default": true,
+					"markdownDescription": "Write above each slide how many steps it has, which collapses or expands the steps' column, if `#slides.editor.steps#` shows it."
+				},
+				"slides.editor.buttons": {
+					"type": "object",
+					"markdownDescription": "Which buttons to show above each slide.",
+					"properties": {
+						"moveUp": {
+							"type": "boolean",
+							"default": true,
+							"description": "Move the slide before the one above it."
+						},
+						"moveDown": {
+							"type": "boolean",
+							"default": true,
+							"description": "Move the slide after the one below it."
+						},
+						"moveTo": {
+							"type": "boolean",
+							"default": true,
+							"description": "Move the slide before another one."
+						},
+						"newSlideAbove": {
+							"type": "boolean",
+							"default": true,
+							"description": "Add a slide before this one."
+						},
+						"newSlideBelow": {
+							"type": "boolean",
+							"default": true,
+							"description": "Add a slide after this one."
+						}
+					},
+					"additionalProperties": false,
+					"default": {
+						"moveUp": true,
+						"moveDown": true,
+						"moveTo": true,
+						"newSlideAbove": true,
+						"newSlideBelow": true
+					}
+				},
+				"slides.editor.slideLabel": {
+					"type": "string",
+					"default": "slide ${number}: ${title}",
+					"markdownDescription": "What is written after a break, of the slide that follows it: `${number}` its number and `${title}` its heading, or else its first line."
+				},
+				"slides.editor.endLabel": {
+					"type": "string",
+					"default": "end",
+					"markdownDescription": "What is written after a break that no slide follows."
+				},
+				"slides.editor.importLabel": {
+					"type": "string",
+					"default": "its slides, imported",
+					"markdownDescription": "What is written after an `<import-slide>`."
+				},
+				"slides.editor.titleLength": {
+					"type": "number",
+					"default": 50,
+					"minimum": 1,
+					"markdownDescription": "How many characters of a slide's title to write, the last of them an ellipsis if it is longer."
+				},
+				"slides.editor.slideLabelSpacing": {
+					"type": "number",
+					"default": 2,
+					"minimum": 0,
+					"markdownDescription": "The space before what is written after a break, in `em`."
+				},
+				"slides.editor.slideLabelFontStyle": {
+					"type": "string",
+					"default": "italic",
+					"enum": [
+						"normal",
+						"italic"
+					],
+					"markdownDescription": "The font style of what is written after a break."
+				},
+				"slides.editor.titleFontWeight": {
+					"type": "string",
+					"default": "bold",
+					"enum": [
+						"normal",
+						"bold",
+						"lighter",
+						"bolder",
+						"100",
+						"200",
+						"300",
+						"400",
+						"500",
+						"600",
+						"700",
+						"800",
+						"900"
+					],
+					"markdownDescription": "The font weight of a slide's title (`#`)."
+				},
+				"slides.editor.titleFontStyle": {
+					"type": "string",
+					"default": "normal",
+					"enum": [
+						"normal",
+						"italic"
+					],
+					"markdownDescription": "The font style of a slide's title (`#`)."
+				},
+				"slides.editor.subtitleFontWeight": {
+					"type": "string",
+					"default": "bold",
+					"enum": [
+						"normal",
+						"bold",
+						"lighter",
+						"bolder",
+						"100",
+						"200",
+						"300",
+						"400",
+						"500",
+						"600",
+						"700",
+						"800",
+						"900"
+					],
+					"markdownDescription": "The font weight of a slide's subtitles (`##`)."
+				},
+				"slides.editor.subtitleFontStyle": {
+					"type": "string",
+					"default": "normal",
+					"enum": [
+						"normal",
+						"italic"
+					],
+					"markdownDescription": "The font style of a slide's subtitles (`##`)."
+				},
+				"slides.editor.columnHeadingFontWeight": {
+					"type": "string",
+					"default": "bold",
+					"enum": [
+						"normal",
+						"bold",
+						"lighter",
+						"bolder",
+						"100",
+						"200",
+						"300",
+						"400",
+						"500",
+						"600",
+						"700",
+						"800",
+						"900"
+					],
+					"markdownDescription": "The font weight of a column's heading (`###`)."
+				},
+				"slides.editor.columnHeadingFontStyle": {
+					"type": "string",
+					"default": "normal",
+					"enum": [
+						"normal",
+						"italic"
+					],
+					"markdownDescription": "The font style of a column's heading (`###`)."
+				},
+				"slides.editor.columnIndent": {
+					"type": "number",
+					"default": 2,
+					"minimum": 0,
+					"markdownDescription": "How far each column, from its `###` to the next, is moved over, with its line, in characters, and a column within another's twice as far. `0` does not move it."
+				},
+				"slides.editor.columnBarWidth": {
+					"type": "number",
+					"default": 3,
+					"minimum": 0,
+					"markdownDescription": "The width of the line down each column, in pixels. `0` draws none."
+				},
+				"slides.editor.stepPadding": {
+					"type": "number",
+					"default": 1,
+					"minimum": 0,
+					"markdownDescription": "The space on each side of the steps in their column, in characters."
+				},
+				"slides.editor.gutterSpacing": {
+					"type": "number",
+					"default": 1,
+					"minimum": 0,
+					"markdownDescription": "The space between the steps' column, or the columns' line, and the text, in characters."
+				},
+				"slides.editor.stepSeparator": {
+					"type": "string",
+					"default": " · ",
+					"markdownDescription": "What is written between the steps of a line that steps more than once."
+				},
+				"slides.editor.stepRangeSeparator": {
+					"type": "string",
+					"default": "..",
+					"markdownDescription": "What is written between the first step of a range and the one it ends before."
+				},
+				"slides.editor.noSpaceMark": {
+					"type": "string",
+					"default": "*",
+					"markdownDescription": "What is written after the steps of a line that takes no space while hidden."
+				},
+				"slides.editor.collapsedStepMark": {
+					"type": "string",
+					"default": "•",
+					"markdownDescription": "What is written, in the collapsed steps' column, on a line that steps."
+				},
+				"slides.editor.slideBreakColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of the line of a break, and its mark on the scrollbar, as a CSS color. Empty, the theme's `slides.slideBreak`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.slideLabelColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of what is written after a break, as a CSS color. Empty, the theme's `editorCodeLens.foreground`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.alternateSlideColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of every other slide, as a CSS color. Empty, the theme's `slides.alternateSlide`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.titleColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of a slide's title (`#`), as a CSS color. Empty, the theme's `slides.title`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.subtitleColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of a slide's subtitles (`##`), as a CSS color. Empty, the theme's `slides.subtitle`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.columnHeadingColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of a column's heading (`###`), as a CSS color. Empty, the theme's `slides.columnHeading`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.columnColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of the line down the first column, and every other after it, as a CSS color. Empty, the theme's `slides.column`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.alternateColumnColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of the line down the second column, and every other after it, as a CSS color. Empty, the theme's `slides.alternateColumn`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.stepColumnColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of the steps' column, as a CSS color. Empty, the theme's `slides.stepColumn`, which `workbench.colorCustomizations` sets too."
+				},
+				"slides.editor.stepColor": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "The color of the steps written in their column, as a CSS color. Empty, the theme's `slides.step`, which `workbench.colorCustomizations` sets too."
 				},
 				"slides.pythonServer": {
 					"type": "string",

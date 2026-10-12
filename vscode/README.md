@@ -77,7 +77,8 @@ imported file.
 The headings are highlighted by what they are on the slide: its title, a `#`,
 in `slides.title`, a subtitle, a `##`, in `slides.subtitle`, and a column's
 `###` in `slides.columnHeading`. Each column, from its `###` up to the next
-heading of its level or above, has a line down it, before its text, in
+heading of its level or above, is moved over, a column within another's
+further, and has a line down it, before its text, in
 `slides.column` and `slides.alternateColumn` by turns, so that two side by
 side tell apart. Before each line that steps, in a column of their own, the
 steps it shows in are written as the deck numbers them, to tell why an
@@ -89,8 +90,15 @@ cell counts as one step, whatever its outputs, and the frontmatter's `steps`
 is the file's own, as it is unless another file imports it.
 
 Each of these is a setting, to turn off for a quieter editor:
+`slides.editor.slideBreaks`, `slides.editor.slideLabels`,
 `slides.editor.alternateSlides`, `slides.editor.headings`,
-`slides.editor.columns` and `slides.editor.steps`.
+`slides.editor.columns`, `slides.editor.steps`, `slides.editor.stepCounts`,
+and each of the buttons, in `slides.editor.buttons`. The other
+`slides.editor` settings set how they look: their colors, as
+`slides.editor.titleColor`, which, left empty, are the theme's, the headings'
+font weight and style, how far a column is moved over, the widths and spaces
+of the steps' column and the columns' lines, and what is written, as
+`slides.editor.slideLabel`, `slide ${number}: ${title}` by default.
 
 The outputs are read from the closest `_outputs` directory above the file, as
 a deck that imports it saves them there, or else from the one next to it.
