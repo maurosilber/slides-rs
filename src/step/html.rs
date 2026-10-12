@@ -8,7 +8,9 @@
 //! each element, and with the first one, come the steps of the elements it
 //! marks: every list item, the elements with a `step` or a `data-step`, as
 //! raw html and an SVG's are, and the steps of its math, as
-//! `\step{...}` writes them. A list shows with its first item, rather than
+//! `\step{...}` writes them. An `<aside>`, a speaker's note, is no step of
+//! its own: unmarked, it shows along with the element before it, as
+//! `step="+0.."` does, and its list items are no steps unless marked. A list shows with its first item, rather than
 //! a step before it. The numbers of a range are the slide's steps, wherever
 //! the element is, and an element shows from the step its range starts at,
 //! or its own, up to the one it ends at, but from the earliest step of what
@@ -1128,7 +1130,15 @@ fn parts_of(html: &str, elements: &[Element], index: usize) -> Vec<(Target, Mark
         .take(elements[index].end)
         .skip(index)
     {
-        if let Some(mark) = element_mark(html, element) {
+        // A list item in a speaker's note is a line of it, rather than a
+        // step, unless marked as one.
+        let item_of_note = element.name == "li"
+            && element.find("step").is_none()
+            && element.find("data-step").is_none()
+            && in_note(elements, index);
+        if let Some(mark) = element_mark(html, element)
+            && !item_of_note
+        {
             parts.push((Target::Element(index), mark));
         }
         if element.has_class(html, "math")
@@ -1140,8 +1150,22 @@ fn parts_of(html: &str, elements: &[Element], index: usize) -> Vec<(Target, Mark
     parts
 }
 
+/// Whether the element at `index` is in an `<aside>`, a speaker's note.
+fn in_note(elements: &[Element], index: usize) -> bool {
+    let mut parent = elements[index].parent;
+    while let Some(at) = parent {
+        if elements[at].name == "aside" {
+            return true;
+        }
+        parent = elements[at].parent;
+    }
+    false
+}
+
 /// How an element marks itself as a step, if it does: by the range its `step`
-/// or `data-step` says, or as the next step, as a list item does.
+/// or `data-step` says, or as the next step, as a list item does. An
+/// `<aside>`, a speaker's note, shows along with the element before it, as
+/// `step="+0.."` would, unless marked otherwise.
 fn element_mark(html: &str, element: &Element) -> Option<Mark> {
     let collapse = element.find("collapse").is_some() || element.find("data-collapse").is_some();
     let range = element
@@ -1154,6 +1178,11 @@ fn element_mark(html: &str, element: &Element) -> Option<Mark> {
         || element.find("data-step").is_some()
     {
         Step::Next
+    } else if element.name == "aside" {
+        Step::Range(Range {
+            start: Some(Bound::Relative(0)),
+            end: None,
+        })
     } else {
         return None;
     };
@@ -1566,6 +1595,39 @@ mod tests {
         assert_eq!(
             steps(html),
             ["count 3", "p --from:2", "p* --from:2;--to:3", "p* --from:3",]
+        );
+    }
+
+    #[test]
+    fn a_note_shows_along_with_the_element_before_it() {
+        let html = "<section><h1>T</h1><aside>n</aside><p>a</p><aside>m</aside><ul><li>b</li><li>c</li></ul><aside>l</aside><p>d</p></section>";
+        assert_eq!(
+            steps(html),
+            [
+                "count 5",
+                "p --from:2",
+                "aside --from:2",
+                "ul --from:3",
+                "li --from:3",
+                "li --from:4",
+                "aside --from:3",
+                "p --from:5",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_note_steps_as_marked_and_its_items_do_not_step() {
+        let html = "<section><h1>T</h1><p>a</p><aside step=\"3..\"><ul><li>n</li><li>m</li></ul></aside><aside step><p>o</p><ul><li step>p</li></ul></aside></section>";
+        assert_eq!(
+            steps(html),
+            [
+                "count 5",
+                "p --from:2",
+                "aside --from:3",
+                "aside --from:4",
+                "li --from:5",
+            ]
         );
     }
 
