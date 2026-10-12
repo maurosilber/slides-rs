@@ -313,6 +313,7 @@ section aside {
 .speaker-where {
     display: flex;
     justify-content: space-between;
+    align-items: baseline;
     gap: 1em;
     margin: 0;
 }
@@ -338,6 +339,33 @@ section aside {
 
 .speaker-countdown {
     font-variant-numeric: tabular-nums;
+}
+
+.speaker-upcoming {
+    display: none;
+    margin: 0;
+}
+
+/* Laid out `single`, the slide alone is larger, with what comes next in
+   words, rather than shown beside it. */
+.speaker[data-layout="single"] {
+    & .speaker-next {
+        display: none;
+    }
+
+    & .speaker-upcoming {
+        display: block;
+    }
+
+    & .speaker-current {
+        max-height: 70vh;
+    }
+}
+
+/* What the next step shows, which the single slide of the speaker view shows
+   already, for a theme to highlight, as speaker.js marks it. */
+.step.step-coming {
+    --shown: 1;
 }
 
 .speaker-buttons {

@@ -366,14 +366,55 @@ section svg:not(.katex *) {
     color: var(--fg);
 }
 
+.speaker-upcoming {
+    color: var(--accent);
+}
+
+/* The next step, on the speaker view's single slide: what it shows is
+   faint and outlined in the accent, and what it hides is fainter. A list
+   or a figure that shows along with its first item is shown as it is, for
+   that item to be highlighted instead. */
+.step.step-coming {
+    opacity: 0.6;
+}
+
+.step.step-coming:is(ul, ol, svg) {
+    opacity: 1;
+    outline: none;
+    background: none;
+}
+
+.step-coming:not(svg *, ul, ol, svg) {
+    outline: 0.3cqmin dashed var(--accent);
+    outline-offset: 0.4cqmin;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+svg .step-coming {
+    filter: drop-shadow(0 0 0.4cqmin var(--accent));
+}
+
+.step.step-going {
+    opacity: 0.35;
+}
+
+.speaker-view button {
+    font: inherit;
+    color: var(--fg);
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 0.3em 0.6em;
+    cursor: pointer;
+}
+
 .speaker-timer {
     & label {
         font-size: 0.8em;
         color: var(--muted);
     }
 
-    & input,
-    & button {
+    & input {
         font: inherit;
         color: var(--fg);
         background: var(--code-bg);
@@ -384,10 +425,6 @@ section svg:not(.katex *) {
 
     & input:invalid {
         border-color: #d1242f;
-    }
-
-    & button {
-        cursor: pointer;
     }
 }
 

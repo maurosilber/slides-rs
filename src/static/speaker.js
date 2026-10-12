@@ -1,6 +1,8 @@
 // The speaker view, which `S` opens on the deck, in a window of its own, as
 // `?speaker`: the slide as the deck shows it, the step that comes next, the
-// speaker's notes, and a timer, which says how long each slide left has. It is
+// speaker's notes, and a timer, which says how long each slide left has. Laid
+// out `single`, it shows the slide alone, with what the step after it shows
+// in it highlighted, rather than beside it. It is
 // the deck's page too, whose slides it keeps hidden, for the notes in them, and
 // shows the slides as pages of the deck of their own, as `?preview`, which
 // follow it. slides.js comes before this file, with where the deck is.
@@ -13,9 +15,10 @@ let deck = window.opener;
 let current;
 let next;
 
-// The notes, and where the slide is.
+// The notes, where the slide is, and what comes next, in words.
 let notes;
 let where;
+let upcoming;
 
 // The timer: the field it is set in, the countdown and what it says of the pace.
 let target;
@@ -36,6 +39,7 @@ const SPEAKER_SHORTCUTS = [
     ["A", "Show every step, or step again"],
     ["Esc", "Overview, on the deck: pick a slide with the arrows and Enter"],
     ["T", "Start, pause or resume the timer"],
+    ["L", "Layout: the slide and the step after it, or the slide alone, with the step after it highlighted"],
     ["?", "Show or hide these shortcuts"],
 ];
 
@@ -56,7 +60,12 @@ function openSpeakerView() {
                 <iframe tabindex="-1" title="What comes next"></iframe>
                 <p class="speaker-end">End of the deck</p>
             </div>
-            <p class="speaker-where"><span class="speaker-position"></span><time class="speaker-clock"></time></p>
+            <p class="speaker-where">
+                <span class="speaker-position"></span>
+                <button type="button" class="speaker-layout"></button>
+                <time class="speaker-clock"></time>
+            </p>
+            <p class="speaker-upcoming"></p>
             <form class="speaker-timer">
                 <label>Duration or deadline
                     <input name="target" placeholder="20m, 1h30m or 15:30" autocomplete="off" spellcheck="false">
@@ -77,6 +86,7 @@ function openSpeakerView() {
     next = find(".speaker-next iframe");
     notes = find(".speaker-notes");
     where = find(".speaker-position");
+    upcoming = find(".speaker-upcoming");
     clock = find(".speaker-clock");
     target = find("input");
     toggle = find("[name=toggle]");
@@ -93,6 +103,8 @@ function openSpeakerView() {
     target.addEventListener("change", () => setTarget(target.value));
     toggle.addEventListener("click", toggleTimer);
     find("[name=reset]").addEventListener("click", resetTimer);
+    find(".speaker-layout").addEventListener("click", switchLayout);
+    showLayout();
 
     restoreTimer();
     const [slide, step] = positionFromHash();
@@ -126,8 +138,42 @@ addEventListener("message", (event) => {
         followDeck(message.slide, message.step, message.steps);
     } else if (preview && event.source == parent && message?.slides == "preview") {
         goTo(message.slide, message.step, message.steps, message.finished);
+        markNext(message.highlight && stepsEnabled);
     }
 });
+
+// What steps along with the first of the steps it holds.
+const HOLDERS = "ul, ol, svg";
+
+// Marks, on the slide shown, what the step after it shows, `step-coming`,
+// shown already, for slides.css to show and a theme to highlight, and what
+// it hides, `step-going`, or nothing, unless `highlight`. Within what is
+// marked, nothing else is, but in a list or a figure, which show along with
+// their first item, which is what is highlighted. Notes are left out.
+function markNext(highlight) {
+    for (const element of document.querySelectorAll(".step-coming, .step-going")) {
+        element.classList.remove("step-coming", "step-going");
+    }
+    if (!highlight) return;
+    const shownAt = (style, step) => {
+        const from = Number(style.getPropertyValue("--from")) || 1;
+        const to = Number(style.getPropertyValue("--to")) || Infinity;
+        return from <= step && step < to;
+    };
+    for (const element of slides[currentSlide].querySelectorAll(".step")) {
+        if (element.closest("aside")) continue;
+        const marked = element.parentElement.closest(".step-coming, .step-going");
+        if (marked && !marked.matches(HOLDERS)) continue;
+        const style = getComputedStyle(element);
+        const [now, after] = [shownAt(style, currentStep), shownAt(style, currentStep + 1)];
+        if (!now && after) {
+            element.classList.add("step-coming");
+            element.classList.remove("step-hidden");
+        } else if (now && !after) {
+            element.classList.add("step-going");
+        }
+    }
+}
 
 function speakerKey(event) {
     if (event.key == "?") {
@@ -136,6 +182,7 @@ function speakerKey(event) {
     }
     if (speakerShortcuts.open) return;
     if (event.code == "KeyT") return toggleTimer();
+    if (event.code == "KeyL") return switchLayout();
     if (!KEYS.includes(event.code)) return;
     event.preventDefault();
     if (hasDeck()) {
@@ -216,18 +263,55 @@ function stepAfter() {
 }
 
 function showSlides() {
-    const tell = (frame, slide, step, finished) =>
+    const single = layout == "single";
+    const tell = (frame, slide, step, finished, highlight = false) =>
         frame.contentWindow?.postMessage(
-            { slides: "preview", slide, step, steps: stepsEnabled, finished },
+            { slides: "preview", slide, step, steps: stepsEnabled, finished, highlight },
             "*",
         );
-    tell(current, currentSlide, currentStep, false);
+    tell(current, currentSlide, currentStep, false, single);
     const after = stepAfter();
     next.parentElement.classList.toggle("ended", !after);
-    if (after) tell(next, ...after, true);
+    if (after && !single) tell(next, ...after, true);
     const count = stepCount(currentSlide);
     where.textContent = `Slide ${currentSlide + 1} of ${slides.length}` +
         (stepsEnabled && count > 1 ? ` · step ${currentStep} of ${count}` : "");
+    upcoming.textContent = upcomingText(after);
+}
+
+// What comes next, in words, for the slide alone: the step highlighted on
+// it, or the next slide, by its title, or the end.
+function upcomingText(after) {
+    if (!after) return "Next: the end of the deck";
+    const [slide, step] = after;
+    if (slide == currentSlide) return `Next: step ${step}, highlighted`;
+    const title = slides[slide].querySelector("h1, h2, h3")?.textContent.trim();
+    return `Next: slide ${slide + 1}` + (title ? `, ${title}` : "");
+}
+
+// The layout, `next`, the slide and the step after it, or `single`, the
+// slide alone, which the speaker switches between, kept for the next time,
+// as each speaker may like one or the other.
+const LAYOUT_KEY = "slides-rs speaker layout";
+let layout = "next";
+try {
+    if (localStorage.getItem(LAYOUT_KEY) == "single") layout = "single";
+} catch {}
+
+function switchLayout() {
+    layout = layout == "single" ? "next" : "single";
+    try {
+        localStorage.setItem(LAYOUT_KEY, layout);
+    } catch {}
+    showLayout();
+    showSlides();
+}
+
+function showLayout() {
+    document.documentElement.dataset.layout = layout;
+    const button = document.querySelector(".speaker-layout");
+    button.textContent = layout == "single" ? "Slide and next" : "Slide alone";
+    button.title = "Switch the layout (L)";
 }
 
 // The notes of the slide shown: its asides, copied out of it, each showing

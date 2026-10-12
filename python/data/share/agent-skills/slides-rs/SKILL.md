@@ -144,6 +144,10 @@ Mention the **outlier** before the fit.
   countdown from the frontmatter's `duration` or `deadline`, which can also
   be typed in. It shares the time left equally among the slides left, and
   says to speed up once a slide takes longer than its share.
+- <kbd>L</kbd>, or its Layout button, switches the speaker view to the slide
+  alone, larger, with what the next step shows already there, faint and
+  outlined, and what it hides fainter, instead of the next step beside it.
+  The choice is remembered in that browser.
 
 ## Math (KaTeX)
 
