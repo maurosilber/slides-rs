@@ -1,5 +1,12 @@
 const slides = document.getElementsByTagName("section");
 
+// The page is the deck, as the audience sees it, unless the URL asks for the
+// speaker view, as `?speaker`, which speaker.js lays out, or for one of the
+// slides it shows, as `?preview`, which follows what the speaker view says.
+const params = new URLSearchParams(location.search);
+const speaker = params.has("speaker");
+const preview = params.has("preview");
+
 addEventListener("DOMContentLoaded", () => {
     // Every slide knows where it is in the deck, for slides.css to count them,
     // which CSS counters cannot, as the slides not shown are not displayed.
@@ -7,7 +14,9 @@ addEventListener("DOMContentLoaded", () => {
         slide.dataset.number = i + 1;
         slide.dataset.total = slides.length;
     });
-    document.body.append(shortcuts);
+    if (speaker) return openSpeakerView();
+    document.documentElement.classList.toggle("preview", preview);
+    if (!preview) document.body.append(shortcuts);
     updateSlide(...positionFromHash(), true);
 });
 
@@ -32,6 +41,7 @@ let stepsEnabled = true;
 
 function showPosition() {
     history.replaceState(null, "", "#" + (currentSlide + 1) + "." + currentStep);
+    tellSpeaker();
 }
 
 // A slide opens as its step is, without the transitions of stepping to it,
@@ -75,6 +85,18 @@ function moveToStep(i) {
     return stepsEnabled && showStep(i);
 }
 
+// Shows slide `i` at `step`, as the deck the speaker view follows is: stepped
+// to, if it is the slide shown, or opened, as if stepped through already if it
+// is before it, or `finished`.
+function goTo(i, step, steps, finished = false) {
+    stepsEnabled = steps;
+    if (i == currentSlide && !finished) {
+        showStep(Math.max(1, Math.min(step, stepCount(i))));
+    } else {
+        updateSlide(i, step, finished || i < currentSlide);
+    }
+}
+
 // The keys the page answers to, which `?` lists, in a dialog of its own,
 // rather than a slide, which is a section.
 const SHORTCUTS = [
@@ -84,19 +106,26 @@ const SHORTCUTS = [
     ["↑", "Start of this slide, or previous slide"],
     ["A", "Show every step, or step again"],
     ["Esc", "Overview: click a slide, or pick it with the arrows and Enter"],
+    ["S", "Speaker view, in a window of its own: the notes, what comes next, and a timer"],
     ["?", "Show or hide these shortcuts"],
 ];
 
-const shortcuts = document.createElement("dialog");
-shortcuts.className = "shortcuts";
-shortcuts.setAttribute("aria-label", "Keyboard shortcuts");
-shortcuts.innerHTML = "<h2>Keyboard shortcuts</h2><dl>" +
-    SHORTCUTS.map(([key, action]) => `<dt><kbd>${key}</kbd></dt><dd>${action}</dd>`).join("") +
-    "</dl>";
-// A click outside it, on its backdrop, closes it, as Escape does.
-shortcuts.addEventListener("click", (event) => {
-    if (event.target == shortcuts) shortcuts.close();
-});
+// The dialog that lists `keys`, each with what it does.
+function shortcutsDialog(keys) {
+    const dialog = document.createElement("dialog");
+    dialog.className = "shortcuts";
+    dialog.setAttribute("aria-label", "Keyboard shortcuts");
+    dialog.innerHTML = "<h2>Keyboard shortcuts</h2><dl>" +
+        keys.map(([key, action]) => `<dt><kbd>${key}</kbd></dt><dd>${action}</dd>`).join("") +
+        "</dl>";
+    // A click outside it, on its backdrop, closes it, as Escape does.
+    dialog.addEventListener("click", (event) => {
+        if (event.target == dialog) dialog.close();
+    });
+    return dialog;
+}
+
+const shortcuts = shortcutsDialog(SHORTCUTS);
 
 // The overview, which Escape toggles: every slide in a row, shrunk, as
 // slides.css lays them out, each at its end, as if stepped through, but the
@@ -142,7 +171,7 @@ function closeOverview(i) {
 function overviewKey(event) {
     const move = { ArrowRight: 1, ArrowLeft: -1 }[event.code];
     if (move) {
-        event.preventDefault();
+        event.preventDefault?.();
         choose(chosen + move);
     } else if (event.code == "Enter" || event.code == "Escape") {
         closeOverview(chosen);
@@ -177,16 +206,26 @@ function forSlides(event) {
 }
 
 addEventListener("keydown", (event) => {
-    if (!forSlides(event)) return;
+    // A slide the speaker view shows follows it, rather than the keys.
+    if (preview || !forSlides(event)) return;
+    if (speaker) return speakerKey(event);
     // `?` is where the keyboard puts it, which `code` does not say.
     if (event.key == "?") {
         shortcuts.open ? shortcuts.close() : shortcuts.showModal();
         return;
     }
+    press(event);
+});
+
+// Answers a key pressed on the deck, or in the speaker view, which sends it
+// here, as `{ code, key }`, rather than an event.
+function press(event) {
     // The slides stay as they are while the shortcuts show.
     if (shortcuts.open) return;
     if (overview) return overviewKey(event);
-    if (event.code == "ArrowRight") {
+    if (event.code == "KeyS") {
+        openSpeakerWindow();
+    } else if (event.code == "ArrowRight") {
         if (!moveToStep(currentStep + 1) && !rushAnimations(slides[currentSlide])) {
             updateSlide(currentSlide + 1);
         }
@@ -215,6 +254,35 @@ addEventListener("keydown", (event) => {
         stepsEnabled = !stepsEnabled;
         showStep(currentStep);
     }
+}
+
+// The speaker view, in a window the deck opens, which the deck tells where
+// it is, and which sends the keys pressed in it, for the deck to answer as
+// its own. A message is all a window can send another opened from a file, as
+// its origin is none, and the speaker view says it is there every second, for
+// the deck to find it again once it reloads.
+let speakerWindow = null;
+
+function openSpeakerWindow() {
+    if (speakerWindow && !speakerWindow.closed) return speakerWindow.focus();
+    const url = new URL(location.href);
+    url.search = "?speaker";
+    // Named after the deck, for `S` to find it again, rather than open another.
+    speakerWindow = open(url, "speaker " + location.pathname, "popup,width=1280,height=800");
+}
+
+function tellSpeaker() {
+    if (!speakerWindow || speakerWindow.closed) return;
+    const position = { slide: currentSlide, step: currentStep, steps: stepsEnabled };
+    speakerWindow.postMessage({ slides: "deck", ...position }, "*");
+}
+
+addEventListener("message", (event) => {
+    const message = event.data;
+    if (speaker || preview || message?.slides != "speaker") return;
+    speakerWindow = event.source;
+    if (message.key) press(message.key);
+    else tellSpeaker();
 });
 
 // The URL can also be edited, or gone back through.

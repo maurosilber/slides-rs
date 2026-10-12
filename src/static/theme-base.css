@@ -286,3 +286,134 @@ section svg:not(.katex *) {
 .overview .chosen {
     outline-color: var(--accent);
 }
+
+/* The speaker view, in the window's units, on a darker ground, as the
+   overview is. Notes of steps to come, or over, are dimmed, and the pace is
+   in the accent while on time, and in red once the speaker should hurry. */
+
+.speaker body {
+    background: color-mix(in srgb, var(--fg) 12%, var(--bg));
+    font-size: clamp(14px, 1.8vmin, 22px);
+}
+
+.speaker-slide {
+    background: var(--bg);
+    box-shadow: 0 0 1.5vmin rgb(0 0 0 / 0.25);
+}
+
+.speaker-next::before {
+    content: "Next";
+    position: absolute;
+    top: 0.4em;
+    right: 0.4em;
+    padding: 0.1em 0.5em;
+    font-size: 0.8em;
+    color: var(--muted);
+    background: var(--bg);
+    border-radius: var(--radius);
+    z-index: 1;
+}
+
+.speaker-end {
+    color: var(--muted);
+}
+
+.speaker-notes,
+.speaker-timer {
+    background: var(--bg);
+    border-radius: var(--radius);
+    padding: 0.8em 1.2em;
+}
+
+.speaker-notes {
+    font-size: 1.5em;
+
+    &.empty::before {
+        content: "No notes for this slide.";
+        color: var(--muted);
+    }
+
+    & aside {
+        padding-left: 0.6em;
+        border-left: 0.2em solid var(--accent);
+        transition: opacity 0.2s;
+    }
+
+    & aside + aside {
+        margin-top: 0.8em;
+    }
+
+    & aside > :first-child {
+        margin-top: 0;
+    }
+
+    & aside > :last-child {
+        margin-bottom: 0;
+    }
+
+    & aside:is(.coming, .over) {
+        opacity: 0.4;
+        border-left-color: var(--rule);
+    }
+}
+
+.speaker-where {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.speaker-clock {
+    color: var(--fg);
+}
+
+.speaker-timer {
+    & label {
+        font-size: 0.8em;
+        color: var(--muted);
+    }
+
+    & input,
+    & button {
+        font: inherit;
+        color: var(--fg);
+        background: var(--code-bg);
+        border: 1px solid var(--rule);
+        border-radius: var(--radius);
+        padding: 0.3em 0.6em;
+    }
+
+    & input:invalid {
+        border-color: #d1242f;
+    }
+
+    & button {
+        cursor: pointer;
+    }
+}
+
+.speaker-countdown {
+    font-size: 3.2em;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--heading);
+}
+
+.speaker-elapsed,
+.speaker-budget {
+    color: var(--muted);
+}
+
+.speaker-pace {
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+[data-pace="behind"] .speaker-pace,
+[data-pace="over"] :is(.speaker-pace, .speaker-countdown) {
+    color: #d1242f;
+}
+
+.paused .speaker-countdown {
+    opacity: 0.5;
+}

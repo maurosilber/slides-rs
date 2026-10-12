@@ -20,13 +20,15 @@ const TEMPLATE: &str = include_str!("template.html");
 const STATIC: &[(&str, &str)] = &[
     ("slides.css", include_str!("../static/slides.css")),
     // The steps are a file of their own, which the extension's notebook
-    // renderer shares.
+    // renderer shares, and so is the speaker view, which the deck opens.
     (
         "slides.js",
         concat!(
             include_str!("../static/steps.js"),
             "\n",
-            include_str!("../static/slides.js")
+            include_str!("../static/slides.js"),
+            "\n",
+            include_str!("../static/speaker.js")
         ),
     ),
     ("theme-base.css", include_str!("../static/theme-base.css")),

@@ -221,3 +221,134 @@ section::after {
         margin: 0;
     }
 }
+
+/* A speaker's note, an `<aside>`, shows only in the speaker view, which
+   copies it out of its slide. Over the display a step gives it. */
+section aside {
+    display: none !important;
+}
+
+/* The speaker view, which `S` opens in a window of its own, and speaker.js
+   lays out: the slide as the deck shows it, over the notes, and beside them,
+   the step after it, over where the slide is and the timer. The slides are
+   pages of the deck of their own, as large as their frames let them, at the
+   deck's shape. Its own slides, which hold the notes, stay hidden. */
+.speaker body {
+    width: 100%;
+    height: 100%;
+    container-type: normal;
+}
+
+.speaker section {
+    display: none !important;
+}
+
+.speaker-view {
+    box-sizing: border-box;
+    height: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 1.5vmin;
+    padding: 1.5vmin;
+}
+
+.speaker-main,
+.speaker-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5vmin;
+    min-height: 0;
+}
+
+.speaker-slide {
+    flex: none;
+    position: relative;
+    aspect-ratio: var(--aspect-ratio);
+    max-height: 60vh;
+
+    & iframe {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        /* What is on a slide here takes no clicks, nor the keys. */
+        pointer-events: none;
+    }
+}
+
+.speaker-end {
+    display: none;
+    position: absolute;
+    inset: 0;
+    place-content: center;
+    margin: 0;
+    text-align: center;
+}
+
+.speaker-next.ended {
+    & iframe {
+        visibility: hidden;
+    }
+
+    & .speaker-end {
+        display: grid;
+    }
+}
+
+.speaker-notes {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+
+    /* Shown as it is, rather than stepping as on the slide. */
+    & .step {
+        --shown: 1;
+    }
+
+    & .step-hidden {
+        visibility: visible;
+    }
+}
+
+.speaker-where {
+    display: flex;
+    justify-content: space-between;
+    gap: 1em;
+    margin: 0;
+}
+
+.speaker-timer {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5em;
+
+    & label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3em;
+    }
+
+    & p {
+        margin: 0;
+    }
+}
+
+.speaker-countdown {
+    font-variant-numeric: tabular-nums;
+}
+
+.speaker-buttons {
+    display: flex;
+    gap: 0.5em;
+}
+
+/* In a window taller than wide, the step after it goes under the notes. */
+@media (max-aspect-ratio: 1 / 1) {
+    .speaker-view {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+    }
+}
