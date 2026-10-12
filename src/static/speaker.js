@@ -103,7 +103,7 @@ function openSpeakerView() {
         page.hash = `${slide + 1}.${step}`;
         frame.src = page.href;
     }
-    follow(slide, step, true);
+    followDeck(slide, step, true);
     greetDeck();
     setInterval(greetDeck, 1000);
     setInterval(showTimer, 250);
@@ -123,7 +123,7 @@ addEventListener("message", (event) => {
     const message = event.data;
     if (speaker && message?.slides == "deck") {
         deck = event.source;
-        follow(message.slide, message.step, message.steps);
+        followDeck(message.slide, message.step, message.steps);
     } else if (preview && event.source == parent && message?.slides == "preview") {
         goTo(message.slide, message.step, message.steps, message.finished);
     }
@@ -150,7 +150,7 @@ function speakerKey(event) {
 function stepAlone(code) {
     const count = stepCount(currentSlide);
     const last = slides.length - 1;
-    const at = (slide, step) => follow(slide, step, stepsEnabled);
+    const at = (slide, step) => followDeck(slide, step, stepsEnabled);
     const previous = () => currentSlide > 0 && at(currentSlide - 1, stepCount(currentSlide - 1));
     if (code == "ArrowRight") {
         if (stepsEnabled && currentStep < count) at(currentSlide, currentStep + 1);
@@ -165,7 +165,7 @@ function stepAlone(code) {
         if (stepsEnabled && currentStep > 1) at(currentSlide, 1);
         else previous();
     } else if (code == "KeyA") {
-        follow(currentSlide, currentStep, !stepsEnabled);
+        followDeck(currentSlide, currentStep, !stepsEnabled);
     }
 }
 
@@ -175,7 +175,7 @@ let shown = null;
 
 // Shows the slide and step the deck is at, with its notes, and the step
 // after it. The first move of all starts the timer.
-function follow(slide, step, steps) {
+function followDeck(slide, step, steps) {
     const position = `${slide}.${step}.${steps}`;
     if (position == shown) return;
     const moved = shown != null;
