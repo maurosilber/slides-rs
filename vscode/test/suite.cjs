@@ -55,7 +55,7 @@ const tests = {
 		};
 		// Of the keys at the top, those not set yet, and of those under figures, those
 		// not set but on the line being written.
-		assert.deepStrictEqual(await labels(2, 0), ['aspect-ratio', 'steps']);
+		assert.deepStrictEqual(await labels(2, 0), ['aspect-ratio', 'deadline', 'duration', 'steps']);
 		assert.deepStrictEqual(await labels(4, 2), ['fade', 'invert', 'rush']);
 		assert.deepStrictEqual(await labels(4, 8), ['false', 'true']);
 		// Past the frontmatter, it has nothing to say.
