@@ -3,6 +3,7 @@
 
 import * as vscode from 'vscode';
 import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
+import { registerAttributes } from './attributes';
 import { registerFrontmatter } from './frontmatter';
 import { Decks } from './decks';
 import { Previews } from './preview';
@@ -32,6 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
 		decks,
 		new SlideEditor(module, decks, log),
 		registerFrontmatter(),
+		registerAttributes(decks),
 		registerPython(servers),
 		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(module)),
 		vscode.workspace.onDidOpenNotebookDocument((notebook) => outputs.load(notebook)),

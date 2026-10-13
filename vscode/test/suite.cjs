@@ -64,6 +64,46 @@ const tests = {
 		assert.match(hover.contents[0].value, /^\*\*fade\*\* \(boolean\)/);
 	},
 
+	async 'the attributes the deck reads are completed and described, in a heading and in a tag'() {
+		const lines = [
+			'# Slide { steps= }',
+			'',
+			'### Left { step=a }',
+			'',
+			'<p step="" >x</p>',
+			'',
+			'<h2 >y</h2>',
+			'',
+			'## Plain { #id }',
+			'',
+			'---',
+			'',
+			'<p step="">z</p>',
+		];
+		const document = await vscode.workspace.openTextDocument({ language: 'slides', content: lines.join('\n') });
+		await vscode.extensions.getExtension('maurosilber.slides-notebook').activate();
+		const labels = async (line, character) => {
+			const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', document.uri, new vscode.Position(line, character));
+			const ours = [vscode.CompletionItemKind.Property, vscode.CompletionItemKind.EnumMember];
+			return list.items.filter((item) => ours.includes(item.kind)).map((item) => item.label).sort();
+		};
+		const at = (line, text) => lines[line].indexOf(text) + text.length;
+		// The values of a heading's steps.
+		assert.deepStrictEqual(await labels(0, at(0, 'steps=')), ['false', 'interleave', 'parallel', 'true']);
+		// In a heading's block, the attributes not written yet.
+		assert.deepStrictEqual(await labels(8, at(8, '{ ')), ['step', 'steps']);
+		// A step counts from the names on its slide, and from the element before it.
+		assert.deepStrictEqual(await labels(4, at(4, 'step="')), ['+0', '+1', 'a+0', 'a+1']);
+		assert.deepStrictEqual(await labels(12, at(12, 'step="')), ['+0', '+1']);
+		// In a tag, steps on a heading alone.
+		assert.deepStrictEqual(await labels(4, at(4, '"" ')), ['collapse']);
+		assert.deepStrictEqual(await labels(6, at(6, '<h2 ')), ['collapse', 'step', 'steps']);
+		// Outside a block or a tag, none.
+		assert.deepStrictEqual(await labels(4, at(4, '>x')), []);
+		const [hover] = await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(0, at(0, 'step')));
+		assert.match(hover.contents[0].value, /^\*\*steps\*\*/);
+	},
+
 	async 'a slide moves with all its markdown, and a new one is added before or after one'() {
 		const dir = path.join(process.env.SLIDES_DECK, 'move');
 		fs.mkdirSync(dir, { recursive: true });
