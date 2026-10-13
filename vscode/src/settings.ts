@@ -1,37 +1,55 @@
 // The `slides.editor` settings: which of the marks of the slides the text editor shows,
-// in what colors, how far apart, and with what text. A color left empty is the theme's,
-// by the id the extension contributes for it, which `workbench.colorCustomizations` sets
-// too.
+// in what colors and fonts, how far apart, and with what text. Each is an object, of
+// which a key left out is its default. A color is a CSS color, or the id of a theme's
+// color, as `slides.title`, which `workbench.colorCustomizations` sets too.
 
 import * as vscode from 'vscode';
 
-/** The colors of the marks, each the theme's color of the same id under `slides.` if
- * its setting is empty. */
-const COLORS = [
-	'slideBreak',
-	'slideLabel',
-	'alternateSlide',
-	'title',
-	'subtitle',
-	'columnHeading',
-	'column',
-	'alternateColumn',
-	'stepColumn',
-	'step',
-] as const;
+/** A color, as the editor takes it, or none. */
+export type Color = string | vscode.ThemeColor | undefined;
 
-export type ColorName = (typeof COLORS)[number];
+/** The colors of the marks, of which the slides' and the columns' are each a list, taken
+ * by turns. */
+export interface Colors {
+	slideBreak: Color;
+	slideLabel: Color;
+	slides: Color[];
+	title: Color;
+	subtitle: Color;
+	columnHeading: Color;
+	columns: Color[];
+	stepColumn: Color;
+	step: Color;
+}
 
-/** The theme's color for each of `COLORS` that is not a contributed one. */
-const THEME: Partial<Record<ColorName, string>> = {
+const COLORS = {
+	slideBreak: 'slides.slideBreak',
 	slideLabel: 'editorCodeLens.foreground',
+	slides: ['', 'slides.alternateSlide'],
+	title: 'slides.title',
+	subtitle: 'slides.subtitle',
+	columnHeading: 'slides.columnHeading',
+	columns: ['slides.column', 'slides.alternateColumn'],
+	stepColumn: 'slides.stepColumn',
+	step: 'slides.step',
+};
+
+/** The font of a mark: its weight and its style. */
+export interface Font {
+	fontWeight: string;
+	fontStyle: string;
+}
+
+const FONTS = {
+	slideLabel: 'italic',
+	title: 'bold',
+	subtitle: 'bold',
+	columnHeading: 'bold',
 };
 
 /** How a heading of one level is marked. */
-export interface HeadingStyle {
-	color: string | vscode.ThemeColor;
-	fontWeight: string;
-	fontStyle: string;
+export interface HeadingStyle extends Font {
+	color: Color;
 }
 
 /** The buttons above each slide, each shown or not. */
@@ -43,58 +61,162 @@ export interface Buttons {
 	newSlideBelow: boolean;
 }
 
-/** What the marks of the slides look like, the same in every document, as the editor
- * styles every line of a mark alike. */
-export interface Style {
-	colors: Record<ColorName, string | vscode.ThemeColor>;
-	overviewRuler: boolean;
-	slideLabelSpacing: number;
-	slideLabelFontStyle: string;
-	headings: [HeadingStyle, HeadingStyle, HeadingStyle];
-}
+const BUTTONS: Buttons = {
+	moveUp: true,
+	moveDown: true,
+	moveTo: true,
+	newSlideAbove: true,
+	newSlideBelow: true,
+};
 
-/** Which marks a document shows, and with what text and spacing. */
-export interface Shown {
+/** Which marks are shown. */
+export interface Show {
 	slideBreaks: boolean;
 	slideLabels: boolean;
+	overviewRuler: boolean;
 	alternateSlides: boolean;
 	headings: boolean;
 	columns: boolean;
 	steps: boolean;
 	stepCounts: boolean;
-	buttons: Buttons;
-	slideLabel: string;
-	endLabel: string;
-	importLabel: string;
+}
+
+const SHOW: Show = {
+	slideBreaks: true,
+	slideLabels: true,
+	overviewRuler: true,
+	alternateSlides: true,
+	headings: true,
+	columns: true,
+	steps: true,
+	stepCounts: true,
+};
+
+/** What is written after a break. */
+export interface Labels {
+	slide: string;
+	end: string;
+	import: string;
 	titleLength: number;
+}
+
+const LABELS: Labels = {
+	slide: 'slide ${number}: ${title}',
+	end: 'end',
+	import: 'its slides, imported',
+	titleLength: 50,
+};
+
+/** What is written in the steps' column. */
+export interface StepMarks {
+	separator: string;
+	range: string;
+	noSpace: string;
+	collapsed: string;
+}
+
+const STEP_MARKS: StepMarks = {
+	separator: ' · ',
+	range: '..',
+	noSpace: '*',
+	collapsed: '•',
+};
+
+/** The spaces of the marks, in characters but for `slideLabel`, in `em`, and
+ * `columnBarWidth`, in pixels. */
+export interface Spacing {
+	slideLabel: number;
+	stepPadding: number;
 	columnIndent: number;
 	columnBarWidth: number;
-	stepPadding: number;
-	gutterSpacing: number;
-	stepSeparator: string;
-	stepRangeSeparator: string;
-	noSpaceMark: string;
-	collapsedStepMark: string;
+	beforeText: number;
+}
+
+const SPACING: Spacing = {
+	slideLabel: 2,
+	stepPadding: 1,
+	columnIndent: 2,
+	columnBarWidth: 3,
+	beforeText: 1,
+};
+
+/** What the marks of the slides look like, the same in every document, as the editor
+ * styles every line of a mark alike. */
+export interface Style {
+	colors: Colors;
+	overviewRuler: boolean;
+	slideLabelSpacing: number;
+	slideLabelFont: Font;
+	headings: [HeadingStyle, HeadingStyle, HeadingStyle];
+}
+
+/** Which marks a document shows, and with what text and spacing. */
+export interface Shown extends Show {
+	buttons: Buttons;
+	labels: Labels;
+	stepMarks: StepMarks;
+	spacing: Spacing;
+}
+
+/** The setting `name`, an object, over its `defaults`, key by key. */
+function group<T extends object>(settings: vscode.WorkspaceConfiguration, name: string, defaults: T): T {
+	const value = settings.get<Partial<T>>(name);
+	return { ...defaults, ...(typeof value === 'object' && value !== null ? value : {}) };
+}
+
+/** A color of the settings: none if empty, the theme's if it is the id of one, as
+ * `slides.title`, which no CSS color is, or else as it is written. */
+function color(value: unknown): Color {
+	if (typeof value !== 'string' || value.trim() === '') {
+		return undefined;
+	}
+	const text = value.trim();
+	return /^[a-z][\w-]*(\.[\w-]+)+$/i.test(text) ? new vscode.ThemeColor(text) : text;
+}
+
+/** The colors of a list, or a single one, taken by turns. */
+function colorList(value: unknown): Color[] {
+	return (Array.isArray(value) ? value : [value]).map(color);
+}
+
+/** The font of words such as `bold italic` or `600`, `normal` where none says. */
+function font(value: unknown): Font {
+	const result = { fontWeight: 'normal', fontStyle: 'normal' };
+	for (const word of String(value ?? '').split(/\s+/).filter(Boolean)) {
+		if (word === 'italic' || word === 'oblique') {
+			result.fontStyle = word;
+		} else if (word !== 'normal') {
+			result.fontWeight = word;
+		}
+	}
+	return result;
 }
 
 /** The style of the marks, as the user and the workspace set it. */
 export function style(): Style {
 	const settings = vscode.workspace.getConfiguration('slides.editor');
-	const color = (name: ColorName) => {
-		const value = settings.get<string>(`${name}Color`, '').trim();
-		return value === '' ? new vscode.ThemeColor(THEME[name] ?? `slides.${name}`) : value;
+	const values = group(settings, 'colors', COLORS);
+	const colors: Colors = {
+		slideBreak: color(values.slideBreak),
+		slideLabel: color(values.slideLabel),
+		slides: colorList(values.slides),
+		title: color(values.title),
+		subtitle: color(values.subtitle),
+		columnHeading: color(values.columnHeading),
+		columns: colorList(values.columns),
+		stepColumn: color(values.stepColumn),
+		step: color(values.step),
 	};
-	const colors = Object.fromEntries(COLORS.map((name) => [name, color(name)])) as Style['colors'];
+	const fonts = group(settings, 'fonts', FONTS);
 	const heading = (level: 'title' | 'subtitle' | 'columnHeading'): HeadingStyle => ({
 		color: colors[level],
-		fontWeight: settings.get(`${level}FontWeight`, 'bold'),
-		fontStyle: settings.get(`${level}FontStyle`, 'normal'),
+		...font(fonts[level]),
 	});
 	return {
 		colors,
-		overviewRuler: settings.get('overviewRuler', true),
-		slideLabelSpacing: settings.get('slideLabelSpacing', 2),
-		slideLabelFontStyle: settings.get('slideLabelFontStyle', 'italic'),
+		overviewRuler: group(settings, 'show', SHOW).overviewRuler,
+		slideLabelSpacing: Math.max(0, group(settings, 'spacing', SPACING).slideLabel),
+		slideLabelFont: font(fonts.slideLabel),
 		headings: [heading('title'), heading('subtitle'), heading('columnHeading')],
 	};
 }
@@ -102,34 +224,20 @@ export function style(): Style {
 /** The marks the document shows, as the settings of its folder have them. */
 export function shown(document: vscode.TextDocument): Shown {
 	const settings = vscode.workspace.getConfiguration('slides.editor', document);
-	const buttons = settings.get<Partial<Buttons>>('buttons', {});
+	const labels = group(settings, 'labels', LABELS);
+	const spacing = group(settings, 'spacing', SPACING);
 	return {
-		slideBreaks: settings.get('slideBreaks', true),
-		slideLabels: settings.get('slideLabels', true),
-		alternateSlides: settings.get('alternateSlides', true),
-		headings: settings.get('headings', true),
-		columns: settings.get('columns', true),
-		steps: settings.get('steps', true),
-		stepCounts: settings.get('stepCounts', true),
-		buttons: {
-			moveUp: buttons.moveUp ?? true,
-			moveDown: buttons.moveDown ?? true,
-			moveTo: buttons.moveTo ?? true,
-			newSlideAbove: buttons.newSlideAbove ?? true,
-			newSlideBelow: buttons.newSlideBelow ?? true,
+		...group(settings, 'show', SHOW),
+		buttons: group(settings, 'buttons', BUTTONS),
+		labels: { ...labels, titleLength: Math.max(1, labels.titleLength) },
+		stepMarks: group(settings, 'stepMarks', STEP_MARKS),
+		spacing: {
+			slideLabel: Math.max(0, spacing.slideLabel),
+			stepPadding: Math.max(0, spacing.stepPadding),
+			columnIndent: Math.max(0, spacing.columnIndent),
+			columnBarWidth: Math.max(0, spacing.columnBarWidth),
+			beforeText: Math.max(0, spacing.beforeText),
 		},
-		slideLabel: settings.get('slideLabel', 'slide ${number}: ${title}'),
-		endLabel: settings.get('endLabel', 'end'),
-		importLabel: settings.get('importLabel', 'its slides, imported'),
-		titleLength: Math.max(1, settings.get('titleLength', 50)),
-		columnIndent: Math.max(0, settings.get('columnIndent', 2)),
-		columnBarWidth: Math.max(0, settings.get('columnBarWidth', 3)),
-		stepPadding: Math.max(0, settings.get('stepPadding', 1)),
-		gutterSpacing: Math.max(0, settings.get('gutterSpacing', 1)),
-		stepSeparator: settings.get('stepSeparator', ' · '),
-		stepRangeSeparator: settings.get('stepRangeSeparator', '..'),
-		noSpaceMark: settings.get('noSpaceMark', '*'),
-		collapsedStepMark: settings.get('collapsedStepMark', '•'),
 	};
 }
 

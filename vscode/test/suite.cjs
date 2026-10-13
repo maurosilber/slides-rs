@@ -91,10 +91,10 @@ const tests = {
 		]);
 		// Without the steps, there are only the buttons.
 		const editorSettings = vscode.workspace.getConfiguration('slides.editor');
-		await editorSettings.update('steps', false, vscode.ConfigurationTarget.Global);
+		await editorSettings.update('show', { steps: false }, vscode.ConfigurationTarget.Global);
 		await until(async () => (await lenses()).length === buttons.length);
 		assert.deepStrictEqual(await lenses(), buttons);
-		await editorSettings.update('steps', undefined, vscode.ConfigurationTarget.Global);
+		await editorSettings.update('show', undefined, vscode.ConfigurationTarget.Global);
 		// The rules stay where they are, and the slides move around them.
 		await vscode.commands.executeCommand('slides.moveSlideDown', document.uri, 0);
 		assert.strictEqual(document.getText(), `${frontmatter}# Two\n\n---\n\n# One\n\nfirst\n\n***\n\n# Three\n`);

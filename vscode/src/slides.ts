@@ -44,8 +44,8 @@ interface Layout {
 interface Types {
 	/** Each break, on its line, with what follows it written after. */
 	decoration: vscode.TextEditorDecorationType;
-	/** Every other slide, so that two in a row tell apart. */
-	shade: vscode.TextEditorDecorationType;
+	/** The slides, in their colors by turns, so that two in a row tell apart. */
+	shades: vscode.TextEditorDecorationType[];
 	/** The title, the subtitles and the columns' headings, each its own way. */
 	headings: vscode.TextEditorDecorationType[];
 	/** Before every line, in a column of their own, the steps it shows in, and the line
@@ -64,14 +64,15 @@ function typesOf(style: Style): Types {
 			overviewRulerLane: vscode.OverviewRulerLane.Center,
 			after: {
 				color: colors.slideLabel,
-				fontStyle: style.slideLabelFontStyle,
+				fontStyle: style.slideLabelFont.fontStyle,
+				fontWeight: style.slideLabelFont.fontWeight,
 				margin: `0 0 0 ${style.slideLabelSpacing}em`,
 			},
 		}),
-		shade: vscode.window.createTextEditorDecorationType({
+		shades: colors.slides.map((color) => vscode.window.createTextEditorDecorationType({
 			isWholeLine: true,
-			backgroundColor: colors.alternateSlide,
-		}),
+			backgroundColor: color,
+		})),
 		headings: style.headings.map((heading) => vscode.window.createTextEditorDecorationType({
 			isWholeLine: true,
 			backgroundColor: heading.color,
@@ -87,7 +88,7 @@ function typesOf(style: Style): Types {
 }
 
 function disposeTypes(types: Types) {
-	[types.decoration, types.shade, ...types.headings, types.gutter].forEach((type) => type.dispose());
+	[types.decoration, ...types.shades, ...types.headings, types.gutter].forEach((type) => type.dispose());
 }
 
 export class SlideEditor implements vscode.Disposable {
@@ -217,8 +218,8 @@ export class SlideEditor implements vscode.Disposable {
 	/** Marks where each slide of the editor's document begins. */
 	private async decorate(editor: vscode.TextEditor) {
 		const document = editor.document;
-		const { decoration, shade, headings: headingTypes, gutter } = this.types;
-		const types = [decoration, shade, ...headingTypes, gutter];
+		const { decoration, shades, headings: headingTypes, gutter } = this.types;
+		const types = [decoration, ...shades, ...headingTypes, gutter];
 		if (!this.decks.isDeck(document)) {
 			types.forEach((type) => editor.setDecorations(type, []));
 			this.diagnostics.delete(document.uri);
@@ -242,14 +243,16 @@ export class SlideEditor implements vscode.Disposable {
 		const rules = layout.breaks.rules.map((line) => {
 			const next = layout.slides.findIndex((slide) => slide.first > line);
 			return mark(line, next < 0
-				? show.endLabel
-				: fill(show.slideLabel, { number: next + 1, title: shorten(layout.slides[next].title, show.titleLength) }));
+				? show.labels.end
+				: fill(show.labels.slide, { number: next + 1, title: shorten(layout.slides[next].title, show.labels.titleLength) }));
 		});
-		const imports = layout.breaks.imports.map(({ line }) => mark(line, show.importLabel));
+		const imports = layout.breaks.imports.map(({ line }) => mark(line, show.labels.import));
 		editor.setDecorations(decoration, show.slideBreaks ? [...rules, ...imports] : []);
-		editor.setDecorations(shade, show.alternateSlides
-			? layout.slides.filter((_, i) => i % 2 === 1).map((slide) => new vscode.Range(slide.start, 0, slide.end, 0))
-			: []);
+		shades.forEach((type, turn) => editor.setDecorations(type, show.alternateSlides
+			? layout.slides
+				.filter((_, i) => i % shades.length === turn)
+				.map((slide) => new vscode.Range(slide.start, 0, slide.end, 0))
+			: []));
 		const headings = show.headings ? layout.breaks.headings : [];
 		headingTypes.forEach((type, i) => editor.setDecorations(type, headings
 			.filter((heading) => heading.level === i + 1)
@@ -328,7 +331,7 @@ export class SlideEditor implements vscode.Disposable {
 
 	/** Asks which slide to move the one at `from` before, and moves it. */
 	private async moveTo(editor: vscode.TextEditor, layout: Layout, from: number) {
-		const { titleLength } = shown(editor.document);
+		const { titleLength } = shown(editor.document).labels;
 		const items = layout.slides
 			.map((slide, to) => ({ label: `Before slide ${to + 1}`, description: shorten(slide.title, titleLength), to }))
 			.filter(({ to }) => to !== from && to !== from + 1);
@@ -425,12 +428,13 @@ function columnsOf(layout: Layout): Column[] {
  * `2..4` from the second up to the fourth, excluded, as a range of the deck is written,
  * and with a `*` if it takes no space while hidden. */
 function stepMarks(slides: SlideSteps[], show: Shown): Map<number, string> {
+	const marks = show.stepMarks;
 	const lines = new Map<number, string[]>();
 	for (const { line, from, to, collapse } of slides.flatMap((slide) => slide.steps)) {
-		const text = `${to === null ? from : `${from}${show.stepRangeSeparator}${to}`}${collapse ? show.noSpaceMark : ''}`;
+		const text = `${to === null ? from : `${from}${marks.range}${to}`}${collapse ? marks.noSpace : ''}`;
 		lines.set(line, [...(lines.get(line) ?? []), text]);
 	}
-	return new Map([...lines].map(([line, steps]) => [line, steps.join(show.stepSeparator)]));
+	return new Map([...lines].map(([line, steps]) => [line, steps.join(marks.separator)]));
 }
 
 /** A space that is kept, as one at the start of a decoration's text is not. */
@@ -439,8 +443,8 @@ const NBSP = '\u00a0';
 /** What is written before each line: the steps it shows in, if they are shown, in a
  * column as wide as the widest of them, or a mark if it is collapsed, and the line down
  * the column of the slide it is in, if they are shown, or as much space outside one. A
- * column's lines are moved over by its indent, its line with them, and those of a column
- * within another's by twice as much. The steps and the line are a single decoration, the
+ * column's lines are moved over by its indent, after the steps, its line with them, and
+ * those of a column within another's by twice as much. The steps and the line are a single decoration, the
  * line its right border, as the editor keeps no order between those of two types before
  * the same line. */
 function gutterOf(
@@ -451,8 +455,9 @@ function gutterOf(
 	show: Shown,
 	style: Style,
 ): vscode.DecorationOptions[] {
-	const bars = show.columns && show.columnBarWidth > 0;
-	const indent = show.columnIndent;
+	const { spacing } = show;
+	const bars = show.columns && spacing.columnBarWidth > 0;
+	const indent = spacing.columnIndent;
 	if (steps === undefined && (columns.length === 0 || (!bars && indent === 0))) {
 		return [];
 	}
@@ -465,10 +470,11 @@ function gutterOf(
 			depths[line] = (depths[line] ?? 0) + 1;
 		}
 	}
-	const padding = show.stepPadding;
+	const padding = spacing.stepPadding;
 	const widest = Math.max(1, ...[...(steps?.values() ?? [])].map((text) => text.length));
 	const stepsWidth = steps === undefined ? 0 : (collapsed ? 1 : widest) + 2 * padding;
 	const background = steps === undefined ? undefined : style.colors.stepColumn;
+	const barColors = style.colors.columns;
 	let hover: vscode.MarkdownString | undefined;
 	if (steps !== undefined) {
 		const [icon, verb] = collapsed ? ['unfold', 'Expand'] : ['fold', 'Collapse'];
@@ -487,20 +493,22 @@ function gutterOf(
 			renderOptions: {
 				before: {
 					// Never empty, for the editor to write it at all.
-					contentText: text === undefined ? NBSP : `${pad}${collapsed ? show.collapsedStepMark : text}` || NBSP,
+					contentText: text === undefined ? NBSP : `${pad}${collapsed ? show.stepMarks.collapsed : text}` || NBSP,
 					backgroundColor: background,
-					width: `${stepsWidth}ch`,
+					// With a border, the editor sizes it by its border box, so the indent and
+					// the line are added to the steps' width, not taken out of it.
+					width: bars ? `calc(${stepsWidth + shift}ch + ${spacing.columnBarWidth}px)` : `${stepsWidth + shift}ch`,
 					// The editor takes only a whole border, which this one, after it, narrows
 					// to its right side, and a column's indent is padding before it, out of
 					// the steps' shade.
 					border: bars || shift > 0
-						? ['none', ...(bars ? [`border-right: ${show.columnBarWidth}px solid`] : []),
+						? ['none', ...(bars ? [`border-right: ${spacing.columnBarWidth}px solid`] : []),
 							...(shift > 0 ? [`padding-right: ${shift}ch`, 'background-clip: content-box'] : [])].join('; ')
 						: undefined,
 					borderColor: !bars ? undefined : bar === undefined
 						? 'transparent'
-						: bar % 2 === 0 ? style.colors.column : style.colors.alternateColumn,
-					margin: `0 ${show.gutterSpacing}ch 0 0`,
+						: barColors[bar % barColors.length] ?? 'transparent',
+					margin: `0 ${spacing.beforeText}ch 0 0`,
 				},
 			},
 		});
