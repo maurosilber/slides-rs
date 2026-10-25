@@ -1,97 +1,59 @@
-// Shows the deck in VS Code's integrated browser: `slides-rs --watch` renders it into
-// its page, again whenever the deck or a file it imports is saved, and the browser
-// reloads the page as it changes. The integrated browser opens the page following the
-// text editor: as its cursor moves, and once a save is rendered, the page goes to the
-// slide and the step the cursor is at, which the extension sends it from a server on
-// this machine, as telling the browser to go there would bring its tab to the front.
+// Shows the deck in VS Code's integrated browser, as the language server renders it with
+// `slides-rs --watch`, again whenever the deck or a file it imports is saved, and the
+// browser reloads the page as it changes. The integrated browser opens the page following
+// the text editor: as its cursor moves, which the extension tells the server of, and once
+// a save is rendered, the page goes to the slide and the step the cursor is at, which the
+// server sends it, as telling the browser to go there would bring its tab to the front.
 
 import * as vscode from 'vscode';
-import type { ChildProcess } from 'node:child_process';
-import type { Server, ServerResponse } from 'node:http';
-import type { Decks } from './decks';
+import type { Shown, SlidesServer } from './server';
 import { previewFollowsCursor } from './settings';
-import type { SlidesServer } from './server';
 
 /** The integrated browser's command, which older versions of VS Code do not have. */
 const INTEGRATED_BROWSER = 'workbench.action.browser.open';
-
-/** The line `slides-rs` writes once it renders the page, naming it. */
-const RENDERED = /^rendered (.+) in \S+$/;
-
-/** The line `slides-rs` writes once it renders the page as it was already. */
-const UNCHANGED = /^(.+) is unchanged, after \S+$/;
 
 /** How long the cursor rests before the page goes to where it is. */
 const FOLLOW_DELAY = 100;
 
 export class Previews implements vscode.Disposable {
-	/** The deck being rendered for each file shown, by its uri. */
-	private readonly watches = new Map<string, Watch>();
-	private readonly follow = new Follow();
+	/** The files shown, by uri, whose cursor the server is told of. */
+	private readonly shown = new Set<string>();
 	/** The timer of the cursor of each document, by uri, which the page follows. */
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly disposables: vscode.Disposable[] = [];
 
 	constructor(
 		private readonly server: SlidesServer,
-		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {
 		this.disposables.push(
-			this.follow,
-			vscode.workspace.onDidSaveTextDocument((document) => void this.saved(document)),
 			vscode.window.onDidChangeTextEditorSelection(({ textEditor }) => this.moved(textEditor)),
+			// A save rendered, whose page follows no cursor to be sent where it is.
+			server.onOpen(async ({ page, fragment }) => {
+				if ((await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER)) {
+					await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page, fragment ?? undefined));
+				}
+			}),
 		);
 	}
 
 	/**
-	 * Renders the slides of the file at `uri`, if it is not yet, and shows their page:
+	 * Renders the slides of the file at `uri`, if they are not yet, and shows their page:
 	 * as they are in the deck that imports them, if one does, in its theme and shape.
 	 */
 	async show(uri: vscode.Uri) {
-		if (uri.scheme !== 'file') {
-			void vscode.window.showErrorMessage('Only a deck saved on disk can be rendered.');
-			return;
-		}
-		const deck = await this.decks.deckOf(uri);
-		const key = `${uri}\n${deck ?? ''}`;
-		let watch = this.watches.get(key);
-		if (!watch) {
-			const started = new Watch(uri, deck, await this.server.executable(), this.log);
-			started.onExit(() => {
-				this.follow.forget(started.id);
-				if (this.watches.get(key) === started) {
-					this.watches.delete(key);
-				}
-			});
-			this.watches.set(key, started);
-			watch = started;
-		}
+		// Where the cursor is, if the file is in a text editor, which a tab that shows the
+		// page already goes to rather than back to the first slide.
+		const editor = [vscode.window.activeTextEditor, ...vscode.window.visibleTextEditors].find((editor) => editor?.document.uri.toString() === uri.toString());
 		try {
-			// Where the cursor is, if the file is in a text editor, which a tab that shows the
-			// page already goes to rather than back to the first slide.
-			const at = this.cursor(uri);
-			const page = await watch.page;
-			const fragment = await at.then(({ slide, step }) => `${slide}.${step}`, () => undefined);
-			if (fragment !== undefined) {
-				this.follow.send(watch.id, fragment);
-			}
-			// Opened as before, not following the cursor, if the server cannot start.
-			const port = await this.following(uri) ? await this.follow.port().catch((error) => {
-				this.log.error(`Could not start the server the page follows the cursor from: ${error}`);
-				return undefined;
-			}) : undefined;
-			await open(page, fragment, port === undefined ? undefined : `follow=${port}/${watch.id}`);
+			const shown = await this.server.show(uri, editor?.selection.active.line, await this.following(uri));
+			this.shown.add(uri.toString());
+			await open(shown);
 		} catch (error) {
 			const message = `Could not render ${vscode.workspace.asRelativePath(uri)}: ${error instanceof Error ? error.message : error}`;
 			this.log.error(message);
 			void vscode.window.showErrorMessage(message);
 		}
-	}
-
-	/** The decks being rendered for the file at `uri`. */
-	private watchesOf(uri: vscode.Uri): Watch[] {
-		return [...this.watches.values()].filter((watch) => watch.uri.toString() === uri.toString());
 	}
 
 	/** Whether the page of the file at `uri` follows its cursor, which only the
@@ -102,68 +64,24 @@ export class Previews implements vscode.Disposable {
 			&& (await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER);
 	}
 
-	/** Once a save of a file shown is rendered, goes to where its cursor is, on the page
-	 * the browser shows: sent to it, if it follows the cursor, or else by telling the
-	 * integrated browser to, which only it can be. */
-	private async saved(document: vscode.TextDocument) {
-		const watches = this.watchesOf(document.uri);
-		if (watches.length === 0 || !(await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER)) {
-			return;
-		}
-		// Found as the save has it, before the render that follows it is done.
-		const at = this.cursor(document.uri);
-		at.catch(() => {});
-		for (const watch of watches) {
-			watch.nextRender(async (page) => {
-				const { slide, step } = await at;
-				const fragment = `${slide}.${step}`;
-				// What the page that reloads is sent as it connects again.
-				this.follow.send(watch.id, fragment);
-				if (!this.follow.connected(watch.id)) {
-					await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page, fragment));
-				}
-			});
-		}
-	}
-
-	/** Sends the page of the editor's file where its cursor is, once it rests there. */
+	/** Tells the server where the cursor of a file shown is, once it rests there. */
 	private moved(editor: vscode.TextEditor) {
 		const { document } = editor;
-		const watches = this.watchesOf(document.uri).filter((watch) => this.follow.connected(watch.id));
-		if (watches.length === 0 || !previewFollowsCursor(document)) {
+		const key = document.uri.toString();
+		if (!this.shown.has(key)) {
 			return;
 		}
-		const key = document.uri.toString();
 		clearTimeout(this.timers.get(key));
 		this.timers.set(key, setTimeout(() => {
 			this.timers.delete(key);
-			this.cursor(document.uri).then(
-				({ slide, step }) => watches.forEach((watch) => this.follow.send(watch.id, `${slide}.${step}`)),
-				() => {},
-			);
+			this.server.cursor(document.uri, editor.selection.active.line, previewFollowsCursor(document));
 		}, FOLLOW_DELAY));
-	}
-
-	/** Where the cursor of the text editor of the file at `uri` is on the page, which
-	 * fails if no text editor shows the file. */
-	private async cursor(uri: vscode.Uri): Promise<{ slide: number; step: number }> {
-		const editor = [vscode.window.activeTextEditor, ...vscode.window.visibleTextEditors].find((editor) => editor?.document.uri.toString() === uri.toString());
-		if (!editor) {
-			throw new Error('no text editor shows it');
-		}
-		const line = editor.selection.active.line;
-		try {
-			return await this.server.position(editor.document.getText(), line, uri);
-		} catch (error) {
-			this.log.error(`${vscode.workspace.asRelativePath(uri)}: could not find the slide at line ${line + 1}: ${error}`);
-			throw error;
-		}
 	}
 
 	/** Stops rendering every deck. */
 	stop() {
-		this.watches.forEach((watch) => watch.dispose());
-		this.watches.clear();
+		this.shown.clear();
+		void this.server.stop();
 	}
 
 	dispose() {
@@ -173,94 +91,14 @@ export class Previews implements vscode.Disposable {
 	}
 }
 
-/** `slides-rs --watch`, rendering one deck. */
-class Watch implements vscode.Disposable {
-	/** What the page names it by, to be sent where the cursor is. */
-	readonly id = Math.random().toString(36).slice(2);
-	/** The page, once it is first rendered. */
-	readonly page: Promise<string>;
-	private process: ChildProcess | undefined;
-	private readonly exitListeners: (() => void)[] = [];
-	/** What to do once the page is rendered again, which a later save replaces. */
-	private next: ((page: string) => Promise<void>) | undefined;
-
-	constructor(
-		readonly uri: vscode.Uri,
-		/** The deck that imports it, which it is rendered as it is in. */
-		private readonly deck: vscode.Uri | undefined,
-		command: string,
-		private readonly log: vscode.LogOutputChannel,
-	) {
-		this.page = this.start(command);
-		this.page.catch(() => {});
-	}
-
-	private async start(command: string): Promise<string> {
-		const { spawn } = await import('node:child_process');
-		const { createInterface } = await import('node:readline');
-		const path = await import('node:path');
-		const name = vscode.workspace.asRelativePath(this.uri);
-		const dir = path.dirname(this.uri.fsPath);
-		// A group of its own, so that stopping it stops the kernel it may be running too.
-		const args = [this.uri.fsPath, '--watch', ...(this.deck ? ['--deck', this.deck.fsPath] : [])];
-		const process = spawn(command, args, { cwd: dir, detached: globalThis.process.platform !== 'win32' });
-		this.process = process;
-		return new Promise((resolve, reject) => {
-			process.once('error', (error) => reject(new Error(`Could not run \`${command}\`: ${error.message}. The \`slides.path\` setting names the \`slides-rs\` to run.`)));
-			createInterface({ input: process.stderr! }).on('line', (line) => {
-				this.log.info(`${name}: ${line}`);
-				const rendered = RENDERED.exec(line) ?? UNCHANGED.exec(line);
-				if (rendered) {
-					const page = path.resolve(dir, rendered[1]);
-					resolve(page);
-					const next = this.next;
-					this.next = undefined;
-					next?.(page).catch((error) => this.log.error(`${name}: could not go to the slide: ${error}`));
-				}
-			});
-			process.once('close', () => {
-				this.log.info(`${name}: stopped rendering`);
-				reject(new Error('slides-rs exited before rendering it. Its output is in the Slides Notebook log.'));
-				this.exitListeners.forEach((listener) => listener());
-			});
-		});
-	}
-
-	/** Calls `listener` with the page once it is rendered again, unless another is set first. */
-	nextRender(listener: (page: string) => Promise<void>) {
-		this.next = listener;
-	}
-
-	onExit(listener: () => void) {
-		this.exitListeners.push(listener);
-	}
-
-	dispose() {
-		const process = this.process;
-		if (process?.pid === undefined || process.exitCode !== null) {
-			return;
-		}
-		try {
-			if (globalThis.process.platform === 'win32') {
-				process.kill();
-			} else {
-				globalThis.process.kill(-process.pid);
-			}
-		} catch {
-			// It exited meanwhile.
-		}
-	}
-}
-
 /** Opens the page in the integrated browser, at `#slide.step` if given, and with the
  * query, in the tab that shows it already if one does, or else in the default browser. */
-async function open(page: string, fragment?: string, query?: string) {
-	const uri = vscode.Uri.file(page);
+async function open({ page, fragment, query }: Shown) {
 	const commands = await vscode.commands.getCommands(true);
 	if (commands.includes(INTEGRATED_BROWSER)) {
-		await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page, fragment, query));
+		await vscode.commands.executeCommand(INTEGRATED_BROWSER, browserTab(page, fragment ?? undefined, query ?? undefined));
 	} else {
-		await vscode.env.openExternal(uri);
+		await vscode.env.openExternal(vscode.Uri.file(page));
 	}
 }
 
@@ -273,80 +111,4 @@ function browserTab(page: string, fragment?: string, query?: string) {
 	// does not read.
 	const url = `${uri.toString()}${query ? `?${query}` : ''}${fragment ? `#${fragment}` : ''}`;
 	return { url, reuseUrlFilter: uri.toString() };
-}
-
-/** A server on this machine from which each page, by the id of the deck it shows, is sent
- * the slide and step to go to, as `slide.step`, and the last of them as it connects. */
-class Follow implements vscode.Disposable {
-	private server: Promise<{ server: Server; port: number }> | undefined;
-	/** The pages connected, by the id of their deck. */
-	private readonly pages = new Map<string, Set<ServerResponse>>();
-	/** The last place sent, by the id of the deck. */
-	private readonly last = new Map<string, string>();
-
-	/** The port of the server, started the first time. */
-	async port(): Promise<number> {
-		this.server ??= this.start();
-		return (await this.server).port;
-	}
-
-	private async start() {
-		const { createServer } = await import('node:http');
-		const server = createServer((request, response) => {
-			const id = /^\/(\w+)$/.exec(request.url ?? '')?.[1];
-			if (id === undefined) {
-				response.writeHead(404).end();
-				return;
-			}
-			// The page is a file, from no origin.
-			response.writeHead(200, {
-				'Content-Type': 'text/event-stream',
-				'Cache-Control': 'no-cache',
-				'Access-Control-Allow-Origin': '*',
-			});
-			response.write('retry: 1000\n\n');
-			const last = this.last.get(id);
-			if (last !== undefined) {
-				response.write(`data: ${last}\n\n`);
-			}
-			const pages = this.pages.get(id) ?? new Set();
-			pages.add(response);
-			this.pages.set(id, pages);
-			request.once('close', () => pages.delete(response));
-		});
-		return new Promise<{ server: Server; port: number }>((resolve, reject) => {
-			server.once('error', reject);
-			server.listen(0, '127.0.0.1', () => {
-				const address = server.address();
-				resolve({ server, port: typeof address === 'object' && address ? address.port : 0 });
-			});
-		});
-	}
-
-	/** Whether a page of the deck is connected. */
-	connected(id: string): boolean {
-		return (this.pages.get(id)?.size ?? 0) > 0;
-	}
-
-	/** Sends the pages of the deck to `position`, unless it is where they were sent last. */
-	send(id: string, position: string) {
-		if (this.last.get(id) === position) {
-			return;
-		}
-		this.last.set(id, position);
-		this.pages.get(id)?.forEach((page) => page.write(`data: ${position}\n\n`));
-	}
-
-	/** Disconnects the pages of the deck, which stopped rendering. */
-	forget(id: string) {
-		this.pages.get(id)?.forEach((page) => page.end());
-		this.pages.delete(id);
-		this.last.delete(id);
-	}
-
-	dispose() {
-		this.pages.forEach((pages) => pages.forEach((page) => page.end()));
-		this.pages.clear();
-		void this.server?.then(({ server }) => server.close(), () => {});
-	}
 }

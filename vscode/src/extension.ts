@@ -17,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	const outputs = new Outputs(server, log);
 	const decks = new Decks(server);
 	const kernels = new Kernels(NOTEBOOK, server, log);
-	const previews = new Previews(server, decks, log);
+	const previews = new Previews(server, log);
 	context.subscriptions.push(
 		log,
 		server,

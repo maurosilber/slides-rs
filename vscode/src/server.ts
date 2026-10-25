@@ -4,7 +4,8 @@
 // warns of what is wrong with how the slides step, and says which files are decks. The code
 // cells have what a Python language server it starts in their environment has. Its own
 // requests, under `slides/`, answer what the notebook and the slide editor ask of the deck.
-// It names the `slides-rs` it is, which runs the cells and renders the slides too.
+// It renders the slides the extension shows, and names the `slides-rs` it is, which runs the
+// cells too.
 
 import * as vscode from 'vscode';
 import { LanguageClient, ServerOptions } from 'vscode-languageclient/node';
@@ -64,6 +65,13 @@ export interface SlideSteps {
 	columns: { line: number; last: number; index: number }[];
 }
 
+/** A page to open, at `#slide.step` if given, with the query it follows the cursor by. */
+export interface Shown {
+	page: string;
+	fragment: string | null;
+	query: string | null;
+}
+
 /** The languages a deck is written in. */
 export const SELECTOR: { language: string }[] = [{ language: 'markdown' }, { language: 'slides' }];
 
@@ -111,7 +119,7 @@ export class SlidesServer implements vscode.Disposable {
 		return this.client.onNotification('slides/decks', ({ paths }: { paths: string[] }) => listener(paths));
 	}
 
-	/** The `slides-rs` the server is, which runs the cells and renders the slides. */
+	/** The `slides-rs` the server is, which runs the cells. */
 	async executable(): Promise<string> {
 		await this.started;
 		return this.client.initializeResult?.capabilities.experimental?.executable ?? 'slides-rs';
@@ -155,14 +163,28 @@ export class SlidesServer implements vscode.Disposable {
 		return this.request('slides/save', { uri: uri.toString(), cells });
 	}
 
-	/**
-	 * The deck the file at `uri` is part of: the file that imports it, or that imports one
-	 * that does, which nothing imports itself. Nothing, if no file imports it. Of several,
-	 * the first by path.
-	 */
-	async deckOf(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
-		const deck = await this.request<string | null>('slides/deckOf', { uri: uri.toString() });
-		return deck === null ? undefined : vscode.Uri.parse(deck);
+	/** Renders the slides of the file at `uri`, if they are not yet, and answers with their
+	 * page once it is rendered, at the slide and step of the cursor's `line`, if given, and
+	 * with the query it follows the cursor by, if it does. */
+	show(uri: vscode.Uri, line: number | undefined, follow: boolean): Promise<Shown> {
+		return this.request('slides/show', { uri: uri.toString(), line: line ?? null, follow });
+	}
+
+	/** Tells the server where the cursor of a file shown is, for its page to go there if
+	 * it follows it, and once a save is rendered. */
+	cursor(uri: vscode.Uri, line: number, follow: boolean) {
+		void this.started.then(() => this.client.sendNotification('slides/cursor', { uri: uri.toString(), line, follow }), () => {});
+	}
+
+	/** Stops rendering every deck. */
+	stop(): Promise<void> {
+		return this.request('slides/stop', {});
+	}
+
+	/** Calls `listener` with a page to open, once a save is rendered, as no page that
+	 * follows the cursor was sent where it is. */
+	onOpen(listener: (shown: Shown) => void): vscode.Disposable {
+		return this.client.onNotification('slides/open', listener);
 	}
 
 	private async request<T>(method: string, params: object): Promise<T> {

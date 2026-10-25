@@ -147,7 +147,8 @@ stops its kernel too.
 ## Show
 
 **Slides: Show Slides**, in the editor's title, the notebook's toolbar, the
-explorer, or the command palette, renders the deck with `slides-rs --watch`
+explorer, or the command palette, has the language server render the deck
+with `slides-rs --watch`
 and opens its page in VS Code's integrated browser, or in the default browser
 where VS Code has none. It renders again whenever the deck or a file it
 imports is saved, and the integrated browser reloads the page, as its
@@ -156,8 +157,8 @@ It opens the page at the slide and the step the cursor is at, if the file is
 in a text editor, counting the slides its imports bring, in the tab that
 shows the page already rather than a new one, and so does every save of the
 file shown, once it is rendered. The integrated browser's page follows the
-cursor as it moves, too, which the extension sends it, as `slide.step`, from
-a server of its own on `127.0.0.1`, as the page names it in its
+cursor as it moves, too, which the language server sends it, as
+`slide.step`, from a server of its own on `127.0.0.1`, as the page names it in its
 `?follow=port/id`; telling the browser to go there instead would bring its
 tab to the front. `slides.editor.previewFollowsCursor` turns that off.
 A file another one in the workspace imports shows its own slides as they are

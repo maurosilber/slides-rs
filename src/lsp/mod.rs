@@ -3,7 +3,8 @@
 //! describes the frontmatter and the attributes the deck reads, links each
 //! import to the file it imports, warns of what is wrong with how the slides
 //! step, and tells the extension which files are decks. The code cells have
-//! what a Python language server it starts has of them. Its own requests,
+//! what a Python language server it starts has of them. It renders the decks
+//! the extension shows, whose pages follow the cursor. Its own requests,
 //! under `slides/`, answer what the extension's notebook and slide editor ask
 //! of the deck: the cells of a file, the file the cells make, where its
 //! slides break and how they step, and the outputs saved for its cells.
@@ -13,13 +14,14 @@ mod decks;
 mod frontmatter;
 mod notebook;
 mod outputs;
+mod preview;
 mod python;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -37,15 +39,19 @@ use slides::paths::{joined, parent};
 
 use decks::Decks;
 use outputs::{Disk, Place};
+use preview::{Showing, Shown, Watches};
 use python::Pythons;
 
-/// What the server hears of: the extension, a Python language server, or the
-/// environment of a directory's cells, once it is activated.
+/// What the server hears of: the extension, a Python language server, the
+/// environment of a directory's cells, once it is activated, or a deck it
+/// renders.
 pub enum Event {
     Client(Message),
     Python(usize, Message),
     Exited(usize),
     Activated(PathBuf, Result<Option<python::Activated>, String>),
+    Rendered(usize, PathBuf),
+    Stopped(usize),
 }
 
 /// How long the edits of a document stop before what is wrong with its
@@ -108,6 +114,7 @@ pub fn serve() -> Result<()> {
     let mut server = Server::new(
         connection,
         heard,
+        events.clone(),
         Pythons::new(&params, roots.clone(), events, to_client),
     );
     server.decks.scan_all(&roots);
@@ -115,6 +122,7 @@ pub fn serve() -> Result<()> {
     server.publish_decks();
     let run = server.run();
     server.pythons.shutdown();
+    server.watches.stop();
     run?;
     drop(server);
     io.join()?;
@@ -153,10 +161,15 @@ impl Document {
 struct Server {
     connection: Connection,
     events: Receiver<Event>,
+    /// What the threads it starts tell it by.
+    sender: Sender<Event>,
     /// The open documents, by uri.
     documents: HashMap<String, Document>,
     decks: Decks,
     pythons: Pythons,
+    watches: Watches,
+    /// The line of the cursor in each document whose deck is shown, by uri.
+    cursors: HashMap<String, usize>,
     /// The documents whose warnings are found again once their edits stop.
     stale: HashSet<String>,
     deadline: Option<Instant>,
@@ -170,13 +183,21 @@ struct Server {
 }
 
 impl Server {
-    fn new(connection: Connection, events: Receiver<Event>, pythons: Pythons) -> Server {
+    fn new(
+        connection: Connection,
+        events: Receiver<Event>,
+        sender: Sender<Event>,
+        pythons: Pythons,
+    ) -> Server {
         Server {
             connection,
             events,
+            sender,
             documents: HashMap::new(),
             decks: Decks::default(),
             pythons,
+            watches: Watches::default(),
+            cursors: HashMap::new(),
             stale: HashSet::new(),
             deadline: None,
             warnings: HashMap::new(),
@@ -223,6 +244,32 @@ impl Server {
                     self.later(self.documents.keys().cloned().collect::<Vec<_>>());
                     continue;
                 }
+                Event::Rendered(index, page) => {
+                    let (answers, opened) = self.watches.rendered(index, page);
+                    for (id, shown) in answers {
+                        self.connection
+                            .sender
+                            .send(Message::Response(Response::new_ok(id, shown_json(shown))))?;
+                    }
+                    // A page that follows no cursor, which the extension
+                    // opens there, in the integrated browser.
+                    if let Some(shown) = opened {
+                        self.notify("slides/open", shown_json(shown));
+                    }
+                    continue;
+                }
+                Event::Stopped(index) => {
+                    for id in self.watches.stopped(index) {
+                        let message = "slides-rs exited before rendering it. Its output is in the Slides Notebook log.";
+                        let response = Response::new_err(
+                            id,
+                            ErrorCode::InternalError as i32,
+                            message.to_string(),
+                        );
+                        self.connection.sender.send(Message::Response(response))?;
+                    }
+                    continue;
+                }
             };
             match message {
                 Message::Request(request) => {
@@ -238,6 +285,12 @@ impl Server {
                         .map(|document| document.text.clone())
                         .unwrap_or_default();
                     if self.pythons.forward(&request, &text) {
+                        continue;
+                    }
+                    if request.method == "slides/show" {
+                        if let Some(response) = self.show(request) {
+                            self.connection.sender.send(Message::Response(response))?;
+                        }
                         continue;
                     }
                     let id = request.id.clone();
@@ -342,10 +395,9 @@ impl Server {
                 let place = place(&uri).with_context(|| format!("{uri} is not a file"))?;
                 serde_json::to_value(outputs::save(&place, &cells)?)?
             }
-            "slides/deckOf" => {
-                let UriOf { uri } = parse(params)?;
-                let path = file_path(&uri).with_context(|| format!("{uri} is not a file"))?;
-                serde_json::to_value(self.decks.deck_of(&path).map(|deck| file_uri(&deck)))?
+            "slides/stop" => {
+                self.watches.stop();
+                Value::Null
             }
             _ => return Err(Failure::NotFound(method)),
         };
@@ -403,7 +455,32 @@ impl Server {
             }
             "textDocument/didSave" => {
                 if let Ok(params) = parse::<lsp_types::DidSaveTextDocumentParams>(params) {
-                    self.rescan(params.text_document.uri.as_str());
+                    let uri = params.text_document.uri.as_str();
+                    self.rescan(uri);
+                    // Where the cursor is, found as the save has it, before
+                    // the render that follows it is done.
+                    if let (Some(path), Some(fragment)) = (file_path(uri), self.cursor(uri)) {
+                        for index in self.watches.of(&path) {
+                            self.watches.after_render(index, fragment.clone());
+                        }
+                    }
+                }
+            }
+            "slides/cursor" => {
+                let Ok(CursorOf { uri, line, follow }) = parse(params) else {
+                    return;
+                };
+                self.cursors.insert(uri.clone(), line);
+                let (Some(path), true) = (file_path(&uri), follow) else {
+                    return;
+                };
+                let Some(fragment) = self.cursor(&uri) else {
+                    return;
+                };
+                for index in self.watches.of(&path) {
+                    if let Some(id) = self.watches.id(index) {
+                        self.watches.follow.send(id, &fragment);
+                    }
                 }
             }
             "textDocument/didClose" => {
@@ -452,6 +529,79 @@ impl Server {
             }
             _ => {}
         }
+    }
+
+    /// Renders the deck of a file, if it is not yet, and answers with its
+    /// page once it is rendered: as it is in the deck that imports it, if one
+    /// does, in its theme and shape, at the slide and step the cursor is at.
+    fn show(&mut self, request: Request) -> Option<Response> {
+        let failed = |message: String| {
+            Response::new_err(request.id.clone(), ErrorCode::InternalError as i32, message)
+        };
+        let Ok(ShowOf { uri, line, follow }) = parse(request.params.clone()) else {
+            return Some(failed("invalid parameters".to_string()));
+        };
+        let Some(path) = file_path(&uri) else {
+            return Some(failed(
+                "Only a deck saved on disk can be rendered.".to_string(),
+            ));
+        };
+        if let Some(line) = line {
+            self.cursors.insert(uri.clone(), line);
+        }
+        let deck = self.decks.deck_of(&path);
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(error) => return Some(failed(error.to_string())),
+        };
+        let index = match self
+            .watches
+            .start(&executable, &path, deck.as_deref(), &self.sender)
+        {
+            Ok(index) => index,
+            Err(error) => return Some(failed(error)),
+        };
+        let id = self.watches.id(index)?.to_string();
+        // A tab that shows the page already goes there rather than back to
+        // the first slide.
+        let fragment = line.and_then(|_| self.cursor(&uri));
+        if let Some(fragment) = &fragment {
+            self.watches.follow.send(&id, fragment);
+        }
+        // Opened as before, not following the cursor, if the server cannot
+        // start.
+        let query = if follow {
+            match self.watches.follow.port() {
+                Ok(port) => Some(format!("follow={port}/{id}")),
+                Err(error) => {
+                    eprintln!(
+                        "could not start the server the page follows the cursor from: {error}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let showing = Showing {
+            id: request.id,
+            fragment,
+            query,
+        };
+        let (id, shown) = self.watches.show(index, showing)?;
+        Some(Response::new_ok(id, shown_json(shown)))
+    }
+
+    /// Where the cursor of a document is on its page, as `slide.step`.
+    fn cursor(&self, uri: &str) -> Option<String> {
+        let path = file_path(uri)?;
+        let line = *self.cursors.get(uri)?;
+        let text = match self.documents.get(uri) {
+            Some(document) => document.text.clone(),
+            None => std::fs::read_to_string(&path).ok()?,
+        };
+        let position = Disk.position(&path, &text, line);
+        Some(format!("{}.{}", position.slide, position.step))
     }
 
     /// Reads the file of a document again, from the disk, for whether it is a
@@ -640,8 +790,23 @@ struct SaveOf {
 }
 
 #[derive(Deserialize)]
-struct UriOf {
+struct ShowOf {
     uri: String,
+    /// The line of the cursor, if the file is in a text editor.
+    line: Option<usize>,
+    /// Whether the page follows the cursor.
+    follow: bool,
+}
+
+#[derive(Deserialize)]
+struct CursorOf {
+    uri: String,
+    line: usize,
+    follow: bool,
+}
+
+fn shown_json(shown: Shown) -> Value {
+    json!({ "page": shown.page, "fragment": shown.fragment, "query": shown.query })
 }
 
 /// Where the slides of a markdown file break.
@@ -816,8 +981,9 @@ mod tests {
     fn the_deck_s_requests_are_answered() {
         let (client, server) = Connection::memory();
         let (events, heard) = std::sync::mpsc::channel();
+        let sender = events.clone();
         let pythons = Pythons::new(&json!({}), Vec::new(), events, Arc::new(|_| {}));
-        let mut server = Server::new(server, heard, pythons);
+        let mut server = Server::new(server, heard, sender, pythons);
         let markdown = "# One\n\n~~~python\nx = 1\n~~~\n\n---\n\n# Two\n";
         let cells = server
             .respond(request(1, "slides/cells", json!({ "markdown": markdown })))

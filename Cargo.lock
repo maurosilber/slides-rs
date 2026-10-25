@@ -1740,6 +1740,7 @@ dependencies = [
  "indicatif",
  "jupyter-protocol",
  "jupyter-zmq-client",
+ "libc",
  "lsp-server",
  "lsp-types",
  "notify",

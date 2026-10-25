@@ -18,7 +18,7 @@ export class Decks implements vscode.Disposable {
 	readonly onDidChange = this.changed.event;
 	private readonly disposables: vscode.Disposable[] = [];
 
-	constructor(private readonly server: SlidesServer) {
+	constructor(server: SlidesServer) {
 		this.disposables.push(
 			this.changed,
 			server.onDecks((paths) => {
@@ -32,11 +32,6 @@ export class Decks implements vscode.Disposable {
 	/** Whether the document is a deck, or part of one. */
 	isDeck(document: vscode.TextDocument): boolean {
 		return document.languageId === LANGUAGE || (document.languageId === 'markdown' && this.decks.has(document.uri.fsPath));
-	}
-
-	/** The deck the file at `uri` is part of, as `SlidesServer.deckOf` finds it. */
-	deckOf(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
-		return this.server.deckOf(uri);
 	}
 
 	dispose() {
