@@ -1,0 +1,981 @@
+//! The Python of a deck's code cells, as a Python language server has it: one
+//! started in the environment the cells run in, as for the kernel, so that it
+//! resolves the imports as the cells do when they run. It is the one the
+//! `slides.pythonServer` setting names, or else the first of `SERVERS` that
+//! the environment has, or the `PATH`. The server is told of a Python file of
+//! a deck's cells, in order, each line where it is in the markdown and the
+//! rest blank, which is never written to disk, so that its answers hold for
+//! the markdown as they are. What the extension asks within the cells is
+//! asked of it, and its diagnostics are shown on the markdown, but for an
+//! expression left unused at the end of a cell, which the kernel shows.
+
+use std::collections::{HashMap, HashSet};
+use std::io::{BufReader, BufWriter};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
+use std::sync::mpsc::Sender;
+
+use lsp_server::{Message, Notification, Request, RequestId, Response};
+use serde_json::{Value, json};
+use slides::markdown::code_cells;
+use slides::paths::parent;
+
+use super::{Event, file_path, file_uri};
+use crate::notebook::{FOREIGN, activated};
+
+/// The servers looked for, in order, by the command that starts one.
+const SERVERS: &[(&str, &[&str])] = &[
+    ("basedpyright-langserver", &["--stdio"]),
+    ("ty", &["server"]),
+    ("pyright-langserver", &["--stdio"]),
+];
+
+/// What sends a message to the extension.
+pub type ToClient = Arc<dyn Fn(Message) + Send + Sync>;
+
+/// The environment the cells of the files in a directory run in.
+enum Activation {
+    Pending,
+    Failed,
+    Ready(Option<Arc<Activated>>),
+}
+
+/// An environment pinned by a lock file, activated.
+pub struct Activated {
+    lock: PathBuf,
+    prefix: PathBuf,
+    vars: HashMap<String, String>,
+}
+
+/// Activates the environment of the cells of the files in `dir`, which may
+/// install it first, and so is done apart.
+pub fn activate(dir: &Path) -> Result<Option<Activated>, String> {
+    match activated(dir) {
+        Ok(environment) => Ok(environment.map(|(lock, environment)| Activated {
+            lock,
+            prefix: environment.prefix,
+            vars: environment.vars,
+        })),
+        Err(error) => Err(format!("{error:#}")),
+    }
+}
+
+/// A Python file of a deck's cells, as a server knows it.
+struct Shadow {
+    uri: String,
+    version: i32,
+    text: String,
+    /// The lines of its cells, which only its answers within are kept of.
+    cells: Vec<(usize, usize)>,
+}
+
+/// A started server, for the decks whose cells run in one environment.
+struct Server {
+    name: String,
+    child: Child,
+    writer: Sender<Message>,
+    /// Whether it has answered `initialize`, before which what it is told waits.
+    ready: bool,
+    queue: Vec<Message>,
+    /// The cells' interpreter, which pyright asks for as `python.pythonPath`.
+    python: Option<PathBuf>,
+    /// The directories outside the workspace it was told of as folders.
+    folders: HashSet<PathBuf>,
+    next: i32,
+}
+
+impl Server {
+    fn send(&mut self, message: Message) {
+        if self.ready {
+            let _ = self.writer.send(message);
+        } else {
+            self.queue.push(message);
+        }
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> RequestId {
+        self.next += 1;
+        let id = RequestId::from(self.next);
+        self.send(Message::Request(Request::new(
+            id.clone(),
+            method.to_string(),
+            params,
+        )));
+        id
+    }
+
+    fn notify(&mut self, method: &str, params: Value) {
+        self.send(Message::Notification(Notification::new(
+            method.to_string(),
+            params,
+        )));
+    }
+}
+
+/// A deck whose cells a server was told of.
+struct Tracked {
+    server: usize,
+    shadow: Shadow,
+}
+
+/// What a request asked of a server was, to answer the extension with.
+enum Asked {
+    /// Its answer goes to the extension as it is.
+    Plain,
+    /// Completions, whose edits are kept within the cells.
+    Completion { document: String },
+    /// Locations, in the cells' file, which are in the markdown.
+    Locations { document: String },
+}
+
+pub struct Pythons {
+    /// The `slides.pythonServer` setting: a command, or `off`.
+    setting: String,
+    /// What the extension can do, which the servers are told, but for asking
+    /// for their diagnostics, which they publish instead.
+    capabilities: Value,
+    roots: Vec<PathBuf>,
+    events: Sender<Event>,
+    client: ToClient,
+    environments: HashMap<PathBuf, Activation>,
+    servers: Vec<Option<Server>>,
+    /// The server of each environment, by its lock file, or nothing where none
+    /// was found.
+    by_lock: HashMap<Option<PathBuf>, Option<usize>>,
+    /// The decks the servers were told of, by uri.
+    documents: HashMap<String, Tracked>,
+    /// The extension's requests asked of a server, by the server and its id.
+    pending: HashMap<(usize, RequestId), (RequestId, Asked)>,
+    /// A server's requests asked of the extension, by their id there.
+    forwarded: HashMap<RequestId, (usize, RequestId, Value)>,
+    next: i32,
+    /// The servers' diagnostics of each deck, by its uri.
+    pub diagnostics: HashMap<String, Vec<Value>>,
+}
+
+impl Pythons {
+    pub fn new(
+        params: &Value,
+        roots: Vec<PathBuf>,
+        events: Sender<Event>,
+        client: ToClient,
+    ) -> Pythons {
+        let mut capabilities = params["capabilities"].clone();
+        if let Some(text) = capabilities["textDocument"].as_object_mut() {
+            text.remove("diagnostic");
+        }
+        if let Some(workspace) = capabilities["workspace"].as_object_mut() {
+            workspace.remove("diagnostics");
+        }
+        let setting = params["initializationOptions"]["pythonServer"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        Pythons {
+            setting,
+            capabilities,
+            roots,
+            events,
+            client,
+            environments: HashMap::new(),
+            servers: Vec::new(),
+            by_lock: HashMap::new(),
+            documents: HashMap::new(),
+            pending: HashMap::new(),
+            forwarded: HashMap::new(),
+            next: 0,
+            diagnostics: HashMap::new(),
+        }
+    }
+
+    /// Tells the server of a deck's cells as they are now, starting the server
+    /// of its environment the first time one of its decks asks.
+    pub fn track(&mut self, uri: &str, text: &str) {
+        if self.setting == "off" {
+            return;
+        }
+        let Some(path) = file_path(uri) else {
+            return;
+        };
+        let dir = parent(&path).to_path_buf();
+        let environment = match self.environments.get(&dir) {
+            Some(Activation::Ready(environment)) => environment.clone(),
+            Some(Activation::Pending | Activation::Failed) => return,
+            None => {
+                self.environments.insert(dir.clone(), Activation::Pending);
+                let events = self.events.clone();
+                std::thread::spawn(move || {
+                    let activated = activate(&dir);
+                    let _ = events.send(Event::Activated(dir, activated));
+                });
+                return;
+            }
+        };
+        let lock = environment
+            .as_ref()
+            .map(|environment| environment.lock.clone());
+        let server = match self.by_lock.get(&lock) {
+            Some(server) => *server,
+            None => {
+                let server = self.launch(environment.as_deref());
+                self.by_lock.insert(lock, server);
+                server
+            }
+        };
+        if let Some(server) = server {
+            self.sync(uri, &path, text, server);
+        }
+    }
+
+    /// The environment of a directory, activated, for its decks to be tracked
+    /// again.
+    pub fn activated(&mut self, dir: PathBuf, activated: Result<Option<Activated>, String>) {
+        let activation = match activated {
+            Ok(environment) => Activation::Ready(environment.map(Arc::new)),
+            Err(error) => {
+                eprintln!(
+                    "{}: could not activate the environment of its cells: {error}",
+                    dir.display()
+                );
+                Activation::Failed
+            }
+        };
+        self.environments.insert(dir, activation);
+    }
+
+    /// Forgets a deck once it closes.
+    pub fn close(&mut self, uri: &str) {
+        let Some(tracked) = self.documents.remove(uri) else {
+            return;
+        };
+        self.diagnostics.remove(uri);
+        if let Some(server) = self.servers[tracked.server].as_mut() {
+            server.notify(
+                "textDocument/didClose",
+                json!({ "textDocument": { "uri": tracked.shadow.uri } }),
+            );
+        }
+    }
+
+    /// Starts the server of an environment, or of the one the extension runs
+    /// in without one.
+    fn launch(&mut self, environment: Option<&Activated>) -> Option<usize> {
+        let mut vars: HashMap<String, String> = std::env::vars().collect();
+        let where_ = match environment {
+            Some(environment) => {
+                for name in FOREIGN {
+                    vars.remove(*name);
+                }
+                vars.extend(environment.vars.clone());
+                environment.lock.display().to_string()
+            }
+            None => "the environment the extension runs in".to_string(),
+        };
+        let path = vars.get("PATH").cloned().unwrap_or_default();
+        let Some((name, command, args)) = choose(&self.setting, &path) else {
+            if self.setting.is_empty() {
+                eprintln!(
+                    "no Python language server for {where_}: install basedpyright or ty in it, for the code cells to have one"
+                );
+            } else {
+                eprintln!(
+                    "the Python language server `{}` is not in {where_} nor on the PATH",
+                    self.setting
+                );
+            }
+            return None;
+        };
+        let mut process = Command::new(&command);
+        process
+            .args(&args)
+            .env_clear()
+            .envs(&vars)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        if let Some(environment) = environment {
+            process.current_dir(parent(&environment.lock));
+        }
+        let mut child = match process.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                eprintln!(
+                    "could not start {name}, {}, for {where_}: {error}",
+                    command.display()
+                );
+                return None;
+            }
+        };
+        let index = self.servers.len();
+        let (writer, written) = std::sync::mpsc::channel::<Message>();
+        let mut stdin = BufWriter::new(child.stdin.take().unwrap());
+        std::thread::spawn(move || {
+            for message in written {
+                if message.write(&mut stdin).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let events = self.events.clone();
+        std::thread::spawn(move || {
+            while let Ok(Some(message)) = Message::read(&mut stdout) {
+                if events.send(Event::Python(index, message)).is_err() {
+                    return;
+                }
+            }
+            let _ = events.send(Event::Exited(index));
+        });
+        let python = environment.and_then(|environment| python_of(&environment.prefix));
+        let server = Server {
+            name: name.clone(),
+            child,
+            writer,
+            ready: false,
+            queue: Vec::new(),
+            python,
+            folders: HashSet::new(),
+            next: 0,
+        };
+        let folders: Vec<Value> = self
+            .roots
+            .iter()
+            .map(|root| json!({ "uri": file_uri(root), "name": root.file_name().map(|name| name.to_string_lossy()) }))
+            .collect();
+        let params = json!({
+            "processId": std::process::id(),
+            "clientInfo": { "name": "slides-rs" },
+            "rootUri": self.roots.first().map(|root| file_uri(root)),
+            "workspaceFolders": folders,
+            "capabilities": self.capabilities,
+        });
+        // Sent ahead of what waits for its answer.
+        let initialize = Request::new(RequestId::from(0), "initialize".to_string(), params);
+        let _ = server.writer.send(Message::Request(initialize));
+        eprintln!("started {name}, {}, for {where_}", command.display());
+        self.servers.push(Some(server));
+        Some(index)
+    }
+
+    /// Tells the server of the deck's cells as they are now.
+    fn sync(&mut self, uri: &str, path: &Path, text: &str, index: usize) {
+        let Some(server) = self.servers[index].as_mut() else {
+            return;
+        };
+        let (python, cells) = shadow_text(text);
+        match self.documents.get_mut(uri) {
+            Some(tracked) if tracked.server == index => {
+                tracked.shadow.cells = cells;
+                if tracked.shadow.text != python {
+                    tracked.shadow.text = python;
+                    tracked.shadow.version += 1;
+                    server.notify(
+                        "textDocument/didChange",
+                        json!({
+                            "textDocument": { "uri": tracked.shadow.uri, "version": tracked.shadow.version },
+                            "contentChanges": [{ "text": tracked.shadow.text }],
+                        }),
+                    );
+                }
+            }
+            _ => {
+                // A server may check only the files in its folders, as ty does.
+                let dir = parent(path).to_path_buf();
+                if !self.roots.iter().any(|root| dir.starts_with(root))
+                    && server.folders.insert(dir.clone())
+                {
+                    server.notify(
+                        "workspace/didChangeWorkspaceFolders",
+                        json!({ "event": { "added": [{ "uri": file_uri(&dir), "name": dir.file_name().map(|name| name.to_string_lossy()) }], "removed": [] } }),
+                    );
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let shadow = Shadow {
+                    uri: file_uri(&dir.join(format!(".{name}.py"))),
+                    version: 1,
+                    text: python,
+                    cells,
+                };
+                server.notify(
+                    "textDocument/didOpen",
+                    json!({ "textDocument": { "uri": shadow.uri, "languageId": "python", "version": 1, "text": shadow.text } }),
+                );
+                self.documents.insert(
+                    uri.to_string(),
+                    Tracked {
+                        server: index,
+                        shadow,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Asks the deck's server what the extension asks within its cells, and
+    /// whether it did: outside them, or without a server, the deck answers.
+    pub fn forward(&mut self, request: &Request, text: &str) -> bool {
+        let method = request.method.as_str();
+        if method == "completionItem/resolve" {
+            return self.resolve(request);
+        }
+        if !matches!(
+            method,
+            "textDocument/completion"
+                | "textDocument/hover"
+                | "textDocument/signatureHelp"
+                | "textDocument/definition"
+                | "textDocument/references"
+        ) {
+            return false;
+        }
+        let Some(uri) = request.params["textDocument"]["uri"]
+            .as_str()
+            .map(String::from)
+        else {
+            return false;
+        };
+        self.track(&uri, text);
+        let Some(tracked) = self.documents.get(&uri) else {
+            return false;
+        };
+        let line = request.params["position"]["line"].as_u64().unwrap_or(0) as usize;
+        if !in_cells(&tracked.shadow.cells, line) {
+            return false;
+        }
+        let index = tracked.server;
+        let mut params = request.params.clone();
+        params["textDocument"]["uri"] = json!(tracked.shadow.uri);
+        let asked = match method {
+            "textDocument/completion" => Asked::Completion { document: uri },
+            "textDocument/definition" | "textDocument/references" => {
+                Asked::Locations { document: uri }
+            }
+            _ => Asked::Plain,
+        };
+        let Some(server) = self.servers[index].as_mut() else {
+            return false;
+        };
+        let id = server.request(method, params);
+        self.pending
+            .insert((index, id), (request.id.clone(), asked));
+        true
+    }
+
+    /// Resolves a completion a server gave, which says which it was.
+    fn resolve(&mut self, request: &Request) -> bool {
+        let given = &request.params["data"];
+        let (Some(index), Some(document)) = (
+            given["slidesServer"].as_u64(),
+            given["slidesDocument"].as_str(),
+        ) else {
+            return false;
+        };
+        let index = index as usize;
+        let mut item = request.params.clone();
+        item["data"] = given["data"].clone();
+        let asked = Asked::Completion {
+            document: document.to_string(),
+        };
+        let Some(server) = self.servers.get_mut(index).and_then(Option::as_mut) else {
+            return false;
+        };
+        let id = server.request("completionItem/resolve", item);
+        self.pending
+            .insert((index, id), (request.id.clone(), asked));
+        true
+    }
+
+    /// Cancels what a server was asked, once the extension cancels it.
+    pub fn cancel(&mut self, id: &RequestId) {
+        let asked = self
+            .pending
+            .iter()
+            .find(|(_, (client, _))| client == id)
+            .map(|((index, asked), _)| (*index, asked.clone()));
+        if let Some((index, asked)) = asked
+            && let Some(server) = self.servers[index].as_mut()
+        {
+            server.notify("$/cancelRequest", json!({ "id": asked }));
+        }
+    }
+
+    /// Handles what a server sends, and returns the deck whose diagnostics it
+    /// changed, if it did.
+    pub fn received(&mut self, index: usize, message: Message) -> Option<String> {
+        match message {
+            Message::Response(response) => {
+                self.answered(index, response);
+                None
+            }
+            Message::Request(request) => {
+                self.asked(index, request);
+                None
+            }
+            Message::Notification(notification) => self.notified(index, notification),
+        }
+    }
+
+    fn answered(&mut self, index: usize, response: Response) {
+        if response.id == RequestId::from(0) {
+            let Some(server) = self.servers[index].as_mut() else {
+                return;
+            };
+            if let Err(error) = response.response_result {
+                eprintln!("{} could not start: {}", server.name, error.message);
+                self.stop(index);
+                return;
+            }
+            let _ = server.writer.send(Message::Notification(Notification::new(
+                "initialized".to_string(),
+                json!({}),
+            )));
+            server.ready = true;
+            for message in std::mem::take(&mut server.queue) {
+                let _ = server.writer.send(message);
+            }
+            return;
+        }
+        let Some((id, asked)) = self.pending.remove(&(index, response.id)) else {
+            return;
+        };
+        let response = match response.response_result {
+            Err(error) => Response {
+                id,
+                response_result: Err(error),
+            },
+            Ok(mut result) => {
+                match asked {
+                    Asked::Plain => {}
+                    Asked::Completion { document } => {
+                        self.completions(index, &document, &mut result)
+                    }
+                    Asked::Locations { document } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            in_document(&mut result, &tracked.shadow.uri, &document);
+                        }
+                    }
+                }
+                Response::new_ok(id, result)
+            }
+        };
+        (self.client)(Message::Response(response));
+    }
+
+    /// The completions of a deck's cells, each saying which server gave it, to
+    /// be resolved, and with its edits within the cells.
+    fn completions(&self, index: usize, document: &str, result: &mut Value) {
+        let Some(tracked) = self.documents.get(document) else {
+            return;
+        };
+        // A resolved item.
+        if result.get("label").is_some() {
+            completion(result, index, document, &tracked.shadow.cells);
+            return;
+        }
+        let items = match result {
+            Value::Array(items) => items,
+            Value::Object(list) => match list.get_mut("items") {
+                Some(Value::Array(items)) => items,
+                _ => return,
+            },
+            _ => return,
+        };
+        for item in items.iter_mut() {
+            completion(item, index, document, &tracked.shadow.cells);
+        }
+    }
+
+    /// Answers what a server asks of the extension.
+    fn asked(&mut self, index: usize, request: Request) {
+        if request.method == "workspace/configuration" {
+            // Asked of the extension, with the cells' interpreter for pyright.
+            self.next += 1;
+            let id = RequestId::from(format!("python-{}", self.next));
+            self.forwarded
+                .insert(id.clone(), (index, request.id, request.params.clone()));
+            (self.client)(Message::Request(Request::new(
+                id,
+                request.method,
+                request.params,
+            )));
+            return;
+        }
+        // As registering what it watches, or a progress: taken, but not done.
+        if let Some(server) = self.servers[index].as_mut() {
+            let _ = server
+                .writer
+                .send(Message::Response(Response::new_ok(request.id, Value::Null)));
+        }
+    }
+
+    /// The extension's answer to what a server asked of it, if it was a
+    /// server's.
+    pub fn client_answered(&mut self, response: Response) {
+        let Some((index, id, params)) = self.forwarded.remove(&response.id) else {
+            return;
+        };
+        let Some(server) = self.servers[index].as_mut() else {
+            return;
+        };
+        let mut result = response.response_result.unwrap_or(Value::Null);
+        if let (Some(python), Value::Array(values)) = (&server.python, &mut result) {
+            let items = params["items"].as_array().cloned().unwrap_or_default();
+            for (item, value) in items.iter().zip(values.iter_mut()) {
+                if item["section"] == "python" {
+                    if !value.is_object() {
+                        *value = json!({});
+                    }
+                    value["pythonPath"] = json!(python);
+                }
+            }
+        }
+        let _ = server
+            .writer
+            .send(Message::Response(Response::new_ok(id, result)));
+    }
+
+    fn notified(&mut self, index: usize, notification: Notification) -> Option<String> {
+        let name = self.servers[index]
+            .as_ref()
+            .map_or("", |server| server.name.as_str());
+        match notification.method.as_str() {
+            "textDocument/publishDiagnostics" => {
+                let uri = notification.params["uri"].as_str()?;
+                let (document, tracked) = self
+                    .documents
+                    .iter()
+                    .find(|(_, tracked)| tracked.server == index && tracked.shadow.uri == uri)?;
+                let diagnostics = notification.params["diagnostics"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let kept = kept(&tracked.shadow, diagnostics);
+                let document = document.clone();
+                self.diagnostics.insert(document.clone(), kept);
+                Some(document)
+            }
+            "window/logMessage" | "window/showMessage" => {
+                let message = notification.params["message"].as_str().unwrap_or("");
+                eprintln!("{name}: {message}");
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Forgets a server that exited, and the decks it was told of, which have
+    /// none until the extension restarts.
+    pub fn exited(&mut self, index: usize) -> Vec<String> {
+        if let Some(server) = &self.servers[index] {
+            eprintln!("{} exited", server.name);
+        }
+        self.stop(index);
+        let documents: Vec<String> = self
+            .documents
+            .iter()
+            .filter(|(_, tracked)| tracked.server == index)
+            .map(|(uri, _)| uri.clone())
+            .collect();
+        for uri in &documents {
+            self.documents.remove(uri);
+            self.diagnostics.remove(uri);
+        }
+        let pending: Vec<(usize, RequestId)> = self
+            .pending
+            .keys()
+            .filter(|(server, _)| *server == index)
+            .cloned()
+            .collect();
+        for key in pending {
+            if let Some((id, _)) = self.pending.remove(&key) {
+                (self.client)(Message::Response(Response::new_ok(id, Value::Null)));
+            }
+        }
+        documents
+    }
+
+    fn stop(&mut self, index: usize) {
+        if let Some(mut server) = self.servers[index].take() {
+            let _ = server.child.kill();
+            let _ = server.child.wait();
+        }
+    }
+
+    /// Stops every server, as the extension does.
+    pub fn shutdown(&mut self) {
+        for index in 0..self.servers.len() {
+            self.stop(index);
+        }
+    }
+}
+
+/// A completion of a deck's cells, saying which server gave it, with its
+/// edits within the cells.
+fn completion(item: &mut Value, index: usize, document: &str, cells: &[(usize, usize)]) {
+    let data = item.get("data").cloned().unwrap_or(Value::Null);
+    item["data"] = json!({ "slidesServer": index, "slidesDocument": document, "data": data });
+    if let Some(edits) = item
+        .get_mut("additionalTextEdits")
+        .and_then(Value::as_array_mut)
+    {
+        *edits = keep_in_cells(std::mem::take(edits), cells);
+    }
+}
+
+/// The edits of a completion that are in the cells: an import added at the
+/// top of the file goes at the top of the first cell, and any other edit,
+/// where the markdown is, is left out.
+fn keep_in_cells(edits: Vec<Value>, cells: &[(usize, usize)]) -> Vec<Value> {
+    let Some(&(first, _)) = cells.first() else {
+        return Vec::new();
+    };
+    edits
+        .into_iter()
+        .filter_map(|mut edit| {
+            let range = &edit["range"];
+            let start = range["start"]["line"].as_u64()? as usize;
+            let end = range["end"]["line"].as_u64()? as usize;
+            if range["start"] == range["end"] && start == 0 {
+                let top = json!({ "line": first, "character": 0 });
+                edit["range"] = json!({ "start": top, "end": top });
+                return Some(edit);
+            }
+            cells
+                .iter()
+                .any(|&(from, to)| from <= start && end < to)
+                .then_some(edit)
+        })
+        .collect()
+}
+
+/// Locations in the cells' file, which are in the markdown.
+fn in_document(result: &mut Value, shadow: &str, document: &str) {
+    match result {
+        Value::Array(locations) => locations
+            .iter_mut()
+            .for_each(|location| in_document(location, shadow, document)),
+        Value::Object(location) => {
+            for key in ["uri", "targetUri"] {
+                if location.get(key).and_then(Value::as_str) == Some(shadow) {
+                    location.insert(key.to_string(), json!(document));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The diagnostics of a deck's cells, but for an expression left unused at
+/// the end of a cell, which the kernel shows.
+fn kept(shadow: &Shadow, diagnostics: Vec<Value>) -> Vec<Value> {
+    let lines: Vec<&str> = shadow.text.split('\n').collect();
+    let last_line = |end: usize| {
+        let mut line = end.saturating_sub(1);
+        while line > 0 && lines.get(line).is_some_and(|text| text.trim().is_empty()) {
+            line -= 1;
+        }
+        line
+    };
+    diagnostics
+        .into_iter()
+        .filter(|diagnostic| {
+            let start = diagnostic["range"]["start"]["line"].as_u64().unwrap_or(0) as usize;
+            let end = diagnostic["range"]["end"]["line"].as_u64().unwrap_or(0) as usize;
+            let Some(&(_, cell_end)) = shadow
+                .cells
+                .iter()
+                .find(|&&(from, to)| from <= start && end < to)
+            else {
+                return false;
+            };
+            let code = match &diagnostic["code"] {
+                Value::Object(code) => code.get("value").cloned().unwrap_or(Value::Null),
+                code => code.clone(),
+            };
+            let code = match code {
+                Value::String(code) => code,
+                code => code.to_string(),
+            };
+            !(is_unused_expression(&code) && start == last_line(cell_end))
+        })
+        .collect()
+}
+
+/// Whether a diagnostic's code is of an expression left unused, as
+/// `reportUnusedExpression` is.
+fn is_unused_expression(code: &str) -> bool {
+    let code = code.to_lowercase();
+    code.match_indices("unused").any(|(at, _)| {
+        let rest = &code[at + "unused".len()..];
+        rest.starts_with("expression")
+            || rest
+                .chars()
+                .next()
+                .is_some_and(|c| rest[c.len_utf8()..].starts_with("expression"))
+    })
+}
+
+/// Whether a line is in one of the cells.
+fn in_cells(cells: &[(usize, usize)], line: usize) -> bool {
+    cells
+        .iter()
+        .any(|&(start, end)| start <= line && line < end)
+}
+
+/// The Python file of a deck's cells, each line where it is in the markdown
+/// and the rest blank, and the lines of each cell's code.
+fn shadow_text(markdown: &str) -> (String, Vec<(usize, usize)>) {
+    let cells = python_cells(markdown);
+    let lines: Vec<&str> = markdown
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    let python: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .map(|(line, text)| if in_cells(&cells, line) { *text } else { "" })
+        .collect();
+    (python.join("\n"), cells)
+}
+
+/// The lines of each Python cell's code, from the one after its opening fence
+/// up to its closing one, excluded, as the deck finds them: in Python unless
+/// its fence names another language.
+fn python_cells(markdown: &str) -> Vec<(usize, usize)> {
+    let line_of = |offset: usize| markdown[..offset].matches('\n').count();
+    code_cells(markdown)
+        .into_iter()
+        .filter(|cell| {
+            let language = cell.info.split_whitespace().next().unwrap_or("");
+            let language = language
+                .trim_start_matches('{')
+                .trim_start_matches('.')
+                .trim_end_matches('}');
+            language.is_empty() || language == "python"
+        })
+        .map(|cell| {
+            let start = line_of(cell.range.start) + 1;
+            (start, start + cell.code.lines().count())
+        })
+        .collect()
+}
+
+/// The server to start: the one the setting names, a command or a path, or
+/// else the first of `SERVERS` on the `PATH`, which the environment's comes
+/// first on.
+fn choose(setting: &str, path: &str) -> Option<(String, PathBuf, Vec<String>)> {
+    let args = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect();
+    if !setting.is_empty() {
+        let command = executable(setting, path)?;
+        let name = Path::new(setting)
+            .file_stem()?
+            .to_string_lossy()
+            .into_owned();
+        let known = SERVERS.iter().find(|(server, _)| *server == name);
+        return Some((
+            name,
+            command,
+            known.map_or(vec!["--stdio".to_string()], |(_, known)| args(known)),
+        ));
+    }
+    SERVERS
+        .iter()
+        .find_map(|(name, known)| Some((name.to_string(), executable(name, path)?, args(known))))
+}
+
+/// The path of the command `name`, on the `PATH`, unless it is a path itself.
+fn executable(name: &str, path: &str) -> Option<PathBuf> {
+    let name = Path::new(name);
+    if name.is_absolute() {
+        return name.exists().then(|| name.to_path_buf());
+    }
+    std::env::split_paths(path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// The Python of the environment installed at `prefix`, by conda or pixi, or
+/// by uv.
+fn python_of(prefix: &Path) -> Option<PathBuf> {
+    let python = prefix.join("bin").join("python");
+    python.exists().then_some(python)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DECK: &str = "---\ntheme: dark\n---\n\n# Slide\n\n```python\nnot_a_cell = 1\n```\n\n~~~python\nimport numpy as np\nnp.\n~~~\n\n~~~\nx = 1\n~~~\n\n~~~rust\nlet y = 2;\n~~~\n";
+
+    #[test]
+    fn the_cells_file_holds_the_python_cells_each_line_in_its_place() {
+        let (text, cells) = shadow_text(DECK);
+        assert_eq!(cells, [(11, 13), (16, 17)]);
+        let expected: Vec<&str> = DECK
+            .split('\n')
+            .enumerate()
+            .map(|(i, line)| if [11, 12, 16].contains(&i) { line } else { "" })
+            .collect();
+        assert_eq!(text, expected.join("\n"));
+    }
+
+    #[test]
+    fn an_import_goes_at_the_top_of_the_first_cell_and_an_edit_outside_them_not_at_all() {
+        let at = |line: u32| json!({ "line": line, "character": 0 });
+        let edits = vec![
+            json!({ "range": { "start": at(0), "end": at(0) }, "newText": "import os\n" }),
+            json!({ "range": { "start": at(4), "end": at(4) }, "newText": "no" }),
+            json!({ "range": { "start": at(12), "end": at(12) }, "newText": "yes" }),
+        ];
+        let kept = keep_in_cells(edits, &[(11, 13), (16, 17)]);
+        let lines: Vec<(u64, &str)> = kept
+            .iter()
+            .map(|edit| {
+                (
+                    edit["range"]["start"]["line"].as_u64().unwrap(),
+                    edit["newText"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(lines, [(11, "import os\n"), (12, "yes")]);
+    }
+
+    #[test]
+    fn an_expression_left_unused_at_the_end_of_a_cell_is_not_reported() {
+        let (text, cells) = shadow_text("~~~python\nx = 1\nx\n~~~\n\n~~~python\nx\ny = 2\n~~~\n");
+        let shadow = Shadow {
+            uri: String::new(),
+            version: 1,
+            text,
+            cells,
+        };
+        let diagnostic = |line: u32, code: &str| json!({ "range": { "start": { "line": line, "character": 0 }, "end": { "line": line, "character": 1 } }, "code": code });
+        let kept = kept(
+            &shadow,
+            vec![
+                diagnostic(2, "reportUnusedExpression"),
+                diagnostic(6, "reportUnusedExpression"),
+                diagnostic(2, "reportUndefinedVariable"),
+                diagnostic(4, "reportUndefinedVariable"),
+            ],
+        );
+        let lines: Vec<u64> = kept
+            .iter()
+            .map(|d| d["range"]["start"]["line"].as_u64().unwrap())
+            .collect();
+        assert_eq!(lines, [6, 2]);
+    }
+
+    #[test]
+    fn a_location_in_the_cells_file_is_in_the_deck() {
+        let mut result = json!([
+            { "uri": "file:///d/.talk.md.py", "range": {} },
+            { "targetUri": "file:///lib/os.py", "targetRange": {} },
+        ]);
+        in_document(&mut result, "file:///d/.talk.md.py", "file:///d/talk.md");
+        assert_eq!(result[0]["uri"], "file:///d/talk.md");
+        assert_eq!(result[1]["targetUri"], "file:///lib/os.py");
+    }
+}

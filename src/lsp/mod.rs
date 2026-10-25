@@ -2,7 +2,8 @@
 //! extension starts in the workspace's pixi environment. It completes and
 //! describes the frontmatter and the attributes the deck reads, links each
 //! import to the file it imports, warns of what is wrong with how the slides
-//! step, and tells the extension which files are decks. Its own requests,
+//! step, and tells the extension which files are decks. The code cells have
+//! what a Python language server it starts has of them. Its own requests,
 //! under `slides/`, answer what the extension's notebook and slide editor ask
 //! of the deck: the cells of a file, the file the cells make, where its
 //! slides break and how they step, and the outputs saved for its cells.
@@ -12,18 +13,22 @@ mod decks;
 mod frontmatter;
 mod notebook;
 mod outputs;
+mod python;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response};
+use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response};
 use lsp_types::{
-    CompletionOptions, Diagnostic, DiagnosticSeverity, DocumentLink, DocumentLinkOptions, Position,
-    PublishDiagnosticsParams, Range, SaveOptions, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, Uri,
+    CompletionOptions, Diagnostic, DiagnosticSeverity, DocumentLink, DocumentLinkOptions, OneOf,
+    Position, Range, SaveOptions, ServerCapabilities, SignatureHelpOptions,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions, Uri,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -32,6 +37,16 @@ use slides::paths::{joined, parent};
 
 use decks::Decks;
 use outputs::{Disk, Place};
+use python::Pythons;
+
+/// What the server hears of: the extension, a Python language server, or the
+/// environment of a directory's cells, once it is activated.
+pub enum Event {
+    Client(Message),
+    Python(usize, Message),
+    Exited(usize),
+    Activated(PathBuf, Result<Option<python::Activated>, String>),
+}
 
 /// How long the edits of a document stop before what is wrong with its
 /// slides is found again.
@@ -51,13 +66,20 @@ pub fn serve() -> Result<()> {
                 ..Default::default()
             },
         )),
-        // Values after the space that follows a key, and attributes and their
-        // values as a block or a tag is written.
+        // Values after the space that follows a key, attributes and their
+        // values as a block or a tag is written, and Python after a `.`.
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(["{", " ", "=", "\""].map(String::from).to_vec()),
+            trigger_characters: Some(["{", " ", "=", "\"", "."].map(String::from).to_vec()),
+            resolve_provider: Some(true),
             ..Default::default()
         }),
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
+        signature_help_provider: Some(SignatureHelpOptions {
+            trigger_characters: Some(["(", ","].map(String::from).to_vec()),
+            ..Default::default()
+        }),
+        definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         document_link_provider: Some(DocumentLinkOptions {
             resolve_provider: Some(false),
             work_done_progress_options: Default::default(),
@@ -68,18 +90,33 @@ pub fn serve() -> Result<()> {
         ..Default::default()
     };
     let params = connection.initialize(serde_json::to_value(capabilities)?)?;
-    let mut server = Server {
+    let (events, heard) = std::sync::mpsc::channel();
+    let receiver = connection.receiver.clone();
+    let client = events.clone();
+    std::thread::spawn(move || {
+        for message in receiver {
+            if client.send(Event::Client(message)).is_err() {
+                return;
+            }
+        }
+    });
+    let sender = connection.sender.clone();
+    let to_client: python::ToClient = Arc::new(move |message| {
+        let _ = sender.send(message);
+    });
+    let roots = roots(&params);
+    let mut server = Server::new(
         connection,
-        documents: HashMap::new(),
-        decks: Decks::default(),
-        stale: HashSet::new(),
-        deadline: None,
-        diagnosed: HashSet::new(),
-    };
-    server.decks.scan_all(&roots(&params));
+        heard,
+        Pythons::new(&params, roots.clone(), events, to_client),
+    );
+    server.decks.scan_all(&roots);
     server.decks.update();
     server.publish_decks();
-    server.run()?;
+    let run = server.run();
+    server.pythons.shutdown();
+    run?;
+    drop(server);
     io.join()?;
     Ok(())
 }
@@ -115,40 +152,93 @@ impl Document {
 
 struct Server {
     connection: Connection,
+    events: Receiver<Event>,
     /// The open documents, by uri.
     documents: HashMap<String, Document>,
     decks: Decks,
+    pythons: Pythons,
     /// The documents whose warnings are found again once their edits stop.
     stale: HashSet<String>,
     deadline: Option<Instant>,
-    /// The documents given warnings, which are taken back once they have none.
+    /// What is wrong with how the slides of each document step.
+    warnings: HashMap<String, Vec<Value>>,
+    /// The documents given diagnostics, which are taken back once they have
+    /// none.
     diagnosed: HashSet<String>,
+    /// Whether the extension asked it to shut down, after which it exits.
+    shutting_down: bool,
 }
 
 impl Server {
+    fn new(connection: Connection, events: Receiver<Event>, pythons: Pythons) -> Server {
+        Server {
+            connection,
+            events,
+            documents: HashMap::new(),
+            decks: Decks::default(),
+            pythons,
+            stale: HashSet::new(),
+            deadline: None,
+            warnings: HashMap::new(),
+            diagnosed: HashSet::new(),
+            shutting_down: false,
+        }
+    }
+
     fn run(&mut self) -> Result<()> {
         loop {
-            let message = match self.deadline {
+            let event = match self.deadline {
                 Some(deadline) => {
                     let wait = deadline.saturating_duration_since(Instant::now());
-                    match self.connection.receiver.recv_timeout(wait) {
-                        Ok(message) => message,
-                        Err(error) if error.is_timeout() => {
+                    match self.events.recv_timeout(wait) {
+                        Ok(event) => event,
+                        Err(RecvTimeoutError::Timeout) => {
                             self.diagnose();
                             continue;
                         }
-                        Err(_) => return Ok(()),
+                        Err(RecvTimeoutError::Disconnected) => return Ok(()),
                     }
                 }
-                None => match self.connection.receiver.recv() {
-                    Ok(message) => message,
+                None => match self.events.recv() {
+                    Ok(event) => event,
                     Err(_) => return Ok(()),
                 },
             };
+            let message = match event {
+                Event::Client(message) => message,
+                Event::Python(index, message) => {
+                    if let Some(uri) = self.pythons.received(index, message) {
+                        self.publish(&uri);
+                    }
+                    continue;
+                }
+                Event::Exited(index) => {
+                    for uri in self.pythons.exited(index) {
+                        self.publish(&uri);
+                    }
+                    continue;
+                }
+                Event::Activated(dir, activated) => {
+                    self.pythons.activated(dir, activated);
+                    self.later(self.documents.keys().cloned().collect::<Vec<_>>());
+                    continue;
+                }
+            };
             match message {
                 Message::Request(request) => {
-                    if self.connection.handle_shutdown(&request)? {
-                        return Ok(());
+                    if request.method == "shutdown" {
+                        self.shutting_down = true;
+                        let response = Response::new_ok(request.id, Value::Null);
+                        self.connection.sender.send(Message::Response(response))?;
+                        continue;
+                    }
+                    let text = request.params["textDocument"]["uri"]
+                        .as_str()
+                        .and_then(|uri| self.documents.get(uri))
+                        .map(|document| document.text.clone())
+                        .unwrap_or_default();
+                    if self.pythons.forward(&request, &text) {
+                        continue;
                     }
                     let id = request.id.clone();
                     let response = match self.respond(request) {
@@ -166,8 +256,13 @@ impl Server {
                     };
                     self.connection.sender.send(Message::Response(response))?;
                 }
-                Message::Notification(notification) => self.notified(notification),
-                Message::Response(_) => {}
+                Message::Notification(notification) => {
+                    if notification.method == "exit" {
+                        return Ok(());
+                    }
+                    self.notified(notification);
+                }
+                Message::Response(response) => self.pythons.client_answered(response),
             }
         }
     }
@@ -194,6 +289,12 @@ impl Server {
                 });
                 serde_json::to_value(hover.flatten())?
             }
+            // Outside the code cells, there is no Python to ask of.
+            "textDocument/signatureHelp"
+            | "textDocument/definition"
+            | "textDocument/references" => Value::Null,
+            // The deck's own completions are whole already.
+            "completionItem/resolve" => params,
             "textDocument/documentLink" => {
                 let params: lsp_types::DocumentLinkParams = parse(params)?;
                 serde_json::to_value(self.import_links(params.text_document.uri.as_str()))?
@@ -312,7 +413,14 @@ impl Server {
                 let uri = params.text_document.uri.as_str();
                 self.documents.remove(uri);
                 self.stale.remove(uri);
-                self.clear(uri);
+                self.warnings.remove(uri);
+                self.pythons.close(uri);
+                self.publish(uri);
+            }
+            "$/cancelRequest" => {
+                if let Ok(id) = serde_json::from_value::<RequestId>(params["id"].clone()) {
+                    self.pythons.cancel(&id);
+                }
             }
             "workspace/didChangeWatchedFiles" => {
                 let Ok(params) = parse::<lsp_types::DidChangeWatchedFilesParams>(params) else {
@@ -388,7 +496,8 @@ impl Server {
         self.deadline = Some(Instant::now() + DELAY);
     }
 
-    /// Warns of what is wrong with how the slides of the stale documents step.
+    /// Warns of what is wrong with how the slides of the stale documents step,
+    /// and tells the Python language servers of their cells.
     fn diagnose(&mut self) {
         self.deadline = None;
         for uri in std::mem::take(&mut self.stale) {
@@ -396,12 +505,14 @@ impl Server {
                 continue;
             };
             if !self.is_deck(&uri, document) {
-                self.clear(&uri);
+                self.warnings.remove(&uri);
+                self.publish(&uri);
                 continue;
             }
+            self.pythons.track(&uri, &document.text);
             let lines = document.lines();
             let place = place(&uri);
-            let diagnostics: Vec<Diagnostic> = steps(&document.text, |codes| match &place {
+            let warnings: Vec<Value> = steps(&document.text, |codes| match &place {
                 Some(place) => place.html(codes),
                 None => Vec::new(),
             })
@@ -418,34 +529,32 @@ impl Server {
                 message: warning.message,
                 ..Default::default()
             })
+            .filter_map(|diagnostic| serde_json::to_value(diagnostic).ok())
             .collect();
-            if diagnostics.is_empty() {
-                self.clear(&uri);
-            } else {
-                self.diagnosed.insert(uri.clone());
-                self.publish_diagnostics(&uri, diagnostics);
-            }
+            self.warnings.insert(uri.clone(), warnings);
+            self.publish(&uri);
         }
     }
 
-    fn clear(&mut self, uri: &str) {
-        if self.diagnosed.remove(uri) {
-            self.publish_diagnostics(uri, Vec::new());
-        }
-    }
-
-    fn publish_diagnostics(&self, uri: &str, diagnostics: Vec<Diagnostic>) {
-        let Ok(uri) = Uri::from_str(uri) else {
+    /// Shows the document's diagnostics: what is wrong with how its slides
+    /// step, and what its Python language server says of its cells.
+    fn publish(&mut self, uri: &str) {
+        let diagnostics: Vec<&Value> = self
+            .warnings
+            .get(uri)
+            .into_iter()
+            .chain(self.pythons.diagnostics.get(uri))
+            .flatten()
+            .collect();
+        if diagnostics.is_empty() && !self.diagnosed.remove(uri) {
             return;
-        };
-        let params = PublishDiagnosticsParams {
-            uri,
-            diagnostics,
-            version: None,
-        };
+        }
+        if !diagnostics.is_empty() {
+            self.diagnosed.insert(uri.to_string());
+        }
         self.notify(
             "textDocument/publishDiagnostics",
-            serde_json::to_value(params).unwrap_or_default(),
+            json!({ "uri": uri, "diagnostics": diagnostics }),
         );
     }
 
@@ -706,14 +815,9 @@ mod tests {
     #[test]
     fn the_deck_s_requests_are_answered() {
         let (client, server) = Connection::memory();
-        let mut server = Server {
-            connection: server,
-            documents: HashMap::new(),
-            decks: Decks::default(),
-            stale: HashSet::new(),
-            deadline: None,
-            diagnosed: HashSet::new(),
-        };
+        let (events, heard) = std::sync::mpsc::channel();
+        let pythons = Pythons::new(&json!({}), Vec::new(), events, Arc::new(|_| {}));
+        let mut server = Server::new(server, heard, pythons);
         let markdown = "# One\n\n~~~python\nx = 1\n~~~\n\n---\n\n# Two\n";
         let cells = server
             .respond(request(1, "slides/cells", json!({ "markdown": markdown })))

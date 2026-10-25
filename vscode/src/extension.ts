@@ -7,8 +7,6 @@ import { Decks } from './decks';
 import { Previews } from './preview';
 import { SlideEditor } from './slides';
 import { Kernels } from './kernel';
-import { PythonServers } from './lsp';
-import { registerPython } from './python';
 import { Cell, CodeCell, SlidesServer } from './server';
 
 const NOTEBOOK = 'slides-notebook';
@@ -18,18 +16,15 @@ export async function activate(context: vscode.ExtensionContext) {
 	const server = new SlidesServer(log);
 	const outputs = new Outputs(server, log);
 	const decks = new Decks(server);
-	const servers = new PythonServers(server, decks, log);
 	const kernels = new Kernels(NOTEBOOK, server, log);
 	const previews = new Previews(server, decks, log);
 	context.subscriptions.push(
 		log,
 		server,
 		decks,
-		servers,
 		kernels,
 		previews,
 		new SlideEditor(server, decks, log),
-		registerPython(servers),
 		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(server)),
 		vscode.workspace.onDidOpenNotebookDocument((notebook) => outputs.load(notebook)),
 		vscode.workspace.onDidSaveNotebookDocument((notebook) => outputs.save(notebook)),

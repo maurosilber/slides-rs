@@ -1,7 +1,8 @@
 // The extension's language server, `slides-rs lsp`, started in the workspace's pixi
 // environment, or as the `slides.path` setting names it. It completes and describes the
 // frontmatter and the attributes the deck reads, links each import to the file it imports,
-// warns of what is wrong with how the slides step, and says which files are decks. Its own
+// warns of what is wrong with how the slides step, and says which files are decks. The code
+// cells have what a Python language server it starts in their environment has. Its own
 // requests, under `slides/`, answer what the notebook and the slide editor ask of the deck.
 // It names the `slides-rs` it is, which runs the cells and renders the slides too.
 
@@ -68,6 +69,7 @@ export const SELECTOR: { language: string }[] = [{ language: 'markdown' }, { lan
 
 export class SlidesServer implements vscode.Disposable {
 	private readonly client: LanguageClient;
+	private readonly disposables: vscode.Disposable[] = [];
 	/** Once the server has started, and its completions, hovers and links are registered. */
 	readonly started: Promise<void>;
 
@@ -82,6 +84,8 @@ export class SlidesServer implements vscode.Disposable {
 					vscode.workspace.createFileSystemWatcher('**/_outputs/*/outputs.txt'),
 				],
 			},
+			// Read again as it restarts.
+			initializationOptions: () => ({ pythonServer: pythonServer() }),
 			outputChannel: log,
 		});
 		this.started = this.client.start().catch((error) => {
@@ -92,6 +96,13 @@ export class SlidesServer implements vscode.Disposable {
 		});
 		// Failing to start is each request's to report.
 		this.started.catch(() => {});
+		this.disposables.push(
+			vscode.workspace.onDidChangeConfiguration((event) => {
+				if (event.affectsConfiguration('slides.pythonServer')) {
+					void this.client.restart();
+				}
+			}),
+		);
 	}
 
 	/** Calls `listener` with the paths of the files that are decks, or parts of one, as
@@ -160,8 +171,14 @@ export class SlidesServer implements vscode.Disposable {
 	}
 
 	dispose() {
+		this.disposables.forEach((disposable) => disposable.dispose());
 		void this.client.stop();
 	}
+}
+
+/** The Python language server the `slides.pythonServer` setting names, or `off`. */
+function pythonServer(): string {
+	return vscode.workspace.getConfiguration('slides').get<string>('pythonServer', '');
 }
 
 /** `slides-rs lsp`, as the `slides.path` setting names it, or else in the pixi environment
