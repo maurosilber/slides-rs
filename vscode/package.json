@@ -1,7 +1,7 @@
 {
 	"name": "slides-notebook",
 	"displayName": "Slides Notebook",
-	"description": "Opens the markdown of a slides-rs deck as a notebook, runs its code cells as the deck does, and saves their outputs where the deck reads them.",
+	"description": "Opens the markdown of a slides-rs deck as a notebook, runs its code cells as the deck does, and saves their outputs where the deck reads them. It runs slides-rs from the workspace's pixi environment.",
 	"version": "0.1.0",
 	"publisher": "maurosilber",
 	"license": "MIT",
@@ -12,16 +12,12 @@
 	"categories": [
 		"Notebooks"
 	],
-	"extensionDependencies": [
-		"ms-vscode.wasm-wasi-core"
-	],
 	"activationEvents": [
 		"onLanguage:markdown",
 		"onLanguage:slides",
 		"workspaceContains:**/*.md"
 	],
 	"main": "./dist/extension.js",
-	"browser": "./dist/extension.js",
 	"contributes": {
 		"languages": [
 			{
@@ -66,15 +62,13 @@
 				"command": "slides.restartKernel",
 				"title": "Restart Kernel",
 				"category": "Slides",
-				"icon": "$(debug-restart)",
-				"enablement": "!isWeb"
+				"icon": "$(debug-restart)"
 			},
 			{
 				"command": "slides.showSlides",
 				"title": "Show Slides",
 				"category": "Slides",
-				"icon": "$(play)",
-				"enablement": "!isWeb"
+				"icon": "$(play)"
 			},
 			{
 				"command": "slides.newSlide",
@@ -115,8 +109,7 @@
 			{
 				"command": "slides.stopSlides",
 				"title": "Stop Rendering Slides",
-				"category": "Slides",
-				"enablement": "!isWeb"
+				"category": "Slides"
 			}
 		],
 		"colors": [
@@ -565,7 +558,7 @@
 				"slides.path": {
 					"type": "string",
 					"default": "",
-					"markdownDescription": "The `slides-rs` command, which runs the code cells with `slides-rs kernel`. Empty, the one that comes with the extension, or else `slides-rs` on the `PATH`."
+					"markdownDescription": "The `slides-rs` command, which serves the editor as `slides-rs lsp`, runs the code cells and renders the slides. Empty, `slides-rs` in the pixi environment of the workspace's first folder, as `pixi run --frozen slides-rs`. Takes effect once the window reloads."
 				}
 			}
 		},
@@ -578,19 +571,19 @@
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && !isWeb",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks)",
 					"group": "navigation"
 				}
 			],
 			"notebook/toolbar": [
 				{
 					"command": "slides.restartKernel",
-					"when": "notebookType == slides-notebook && !isWeb",
+					"when": "notebookType == slides-notebook",
 					"group": "navigation/execute"
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "notebookType == slides-notebook && !isWeb",
+					"when": "notebookType == slides-notebook",
 					"group": "navigation"
 				}
 			],
@@ -617,15 +610,14 @@
 				},
 				{
 					"command": "slides.restartKernel",
-					"when": "notebookType == slides-notebook && !isWeb"
+					"when": "notebookType == slides-notebook"
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks || notebookType == slides-notebook) && !isWeb"
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks || notebookType == slides-notebook)"
 				},
 				{
-					"command": "slides.stopSlides",
-					"when": "!isWeb"
+					"command": "slides.stopSlides"
 				}
 			],
 			"explorer/context": [
@@ -636,22 +628,18 @@
 				},
 				{
 					"command": "slides.showSlides",
-					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks) && !isWeb",
+					"when": "(resourceLangId == slides || resourceLangId == markdown && resourcePath in slides.decks)",
 					"group": "navigation"
 				}
 			]
 		}
 	},
 	"scripts": {
-		"build:wasm": "cargo build --package slides-notebook --release --target wasm32-wasip1-threads && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/wasm32-wasip1-threads/release/slides-notebook.wasm','dist/slides-notebook.wasm')\"",
-		"build:ts": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --external:node:* --external:child_process --external:crypto --external:fs --external:net --external:os --external:path --external:readline --external:util --format=cjs --platform=neutral --conditions=node --main-fields=module,main --target=es2022 --sourcemap && esbuild src/renderer.ts --bundle --outfile=dist/renderer.js --format=esm --target=es2022 --sourcemap",
-		"build:cli": "cargo build --bin slides-rs --release && node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('../target/release/slides-rs','dist/slides-rs');require('fs').chmodSync('dist/slides-rs',0o755)\"",
-		"build": "npm run build:wasm && npm run build:cli && npm run build:ts",
+		"build": "tsc --noEmit && esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --target=es2022 --sourcemap && esbuild src/renderer.ts --bundle --outfile=dist/renderer.js --format=esm --target=es2022 --sourcemap",
 		"test": "node test/run.mjs",
 		"package": "vsce package --no-dependencies --no-rewrite-relative-links --allow-missing-repository --skip-license"
 	},
 	"dependencies": {
-		"@vscode/wasm-wasi": "^1.0.1",
 		"vscode-languageclient": "^10.1.2"
 	},
 	"devDependencies": {

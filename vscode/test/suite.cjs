@@ -15,7 +15,7 @@ async function open(file) {
 	return until(() => vscode.workspace.notebookDocuments.find((notebook) => notebook.uri.fsPath === uri.fsPath));
 }
 
-/** The slides of figures next to the tests, copied and rendered with the extension's
+/** The slides of figures next to the tests, copied and rendered with the tests'
  * slides-rs, so that its outputs are saved as the deck saves them. They are the tests'
  * own, rather than the example's, which changes as it shows more. */
 function renderedSlide() {
@@ -24,8 +24,7 @@ function renderedSlide() {
 	if (!fs.existsSync(file)) {
 		fs.mkdirSync(deck, { recursive: true });
 		fs.copyFileSync(path.join(repo, 'vscode', 'test', 'figures.md'), file);
-		const slidesRs = path.join(repo, 'vscode', 'dist', 'slides-rs');
-		const render = spawnSync(slidesRs, [file], { encoding: 'utf8' });
+		const render = spawnSync(process.env.SLIDES_RS, [file], { encoding: 'utf8' });
 		assert.strictEqual(render.status, 0, render.stderr);
 	}
 	return file;
@@ -301,12 +300,12 @@ const tests = {
 		await vscode.commands.executeCommand('workbench.action.closeAllEditors');
 	},
 
-	async 'a deck opens with outputs larger than the module answers at once'() {
+	async 'a deck opens with outputs larger than the server answers at once'() {
 		const deck = path.join(process.env.SLIDES_DECK, 'large');
 		fs.mkdirSync(deck, { recursive: true });
 		const file = path.join(deck, 'slide.md');
 		fs.writeFileSync(file, '~~~python\nprint("x" * 3_000_000)\n~~~\n');
-		const render = spawnSync(path.join(repo, 'vscode', 'dist', 'slides-rs'), [file], { encoding: 'utf8' });
+		const render = spawnSync(process.env.SLIDES_RS, [file], { encoding: 'utf8' });
 		assert.strictEqual(render.status, 0, render.stderr);
 		const notebook = await open(file);
 		await until(() => notebook.cellAt(0).outputs.length > 0);
@@ -322,11 +321,11 @@ const tests = {
 			fs.writeFileSync(file, `~~~python\nprint("${n}" * 40_000)\n~~~\n`);
 		}
 		for (const file of files) {
-			const render = spawnSync(path.join(repo, 'vscode', 'dist', 'slides-rs'), [file], { encoding: 'utf8' });
+			const render = spawnSync(process.env.SLIDES_RS, [file], { encoding: 'utf8' });
 			assert.strictEqual(render.status, 0, render.stderr);
 		}
-		// Other extensions starting up keep the host from handling the module's messages as
-		// they come, which is when it dropped the end of an answer.
+		// Other extensions starting up keep the host from handling the server's messages as
+		// they come, which is when the WebAssembly dropped the end of an answer.
 		let busy = true;
 		const block = () => {
 			const end = Date.now() + 30;

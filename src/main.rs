@@ -1,5 +1,6 @@
 mod browser;
 mod deck;
+mod lsp;
 mod notebook;
 mod page;
 mod progress;
@@ -79,6 +80,8 @@ enum Command {
         /// The markdown file the cells are in.
         file: PathBuf,
     },
+    /// Serves the VS Code extension as a language server, on stdin and stdout.
+    Lsp,
 }
 
 /// Which kernel to run the cells on.
@@ -121,6 +124,7 @@ fn main() {
                 notebook::serve(&canonical(&file), kernels)
             }
             Command::Environment { file } => notebook::print_environment(&canonical(&file)),
+            Command::Lsp => lsp::serve(),
         };
         if let Err(error) = done {
             eprintln!("{error:#}");

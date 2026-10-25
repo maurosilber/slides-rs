@@ -4,15 +4,13 @@
 // text editor: as its cursor moves, and once a save is rendered, the page goes to the
 // slide and the step the cursor is at, which the extension sends it from a server on
 // this machine, as telling the browser to go there would bring its tab to the front.
-// Starting a process needs VS Code on the desktop.
 
 import * as vscode from 'vscode';
 import type { ChildProcess } from 'node:child_process';
 import type { Server, ServerResponse } from 'node:http';
-import { command } from './kernel';
 import type { Decks } from './decks';
 import { previewFollowsCursor } from './settings';
-import type { Module } from './wasm';
+import type { SlidesServer } from './server';
 
 /** The integrated browser's command, which older versions of VS Code do not have. */
 const INTEGRATED_BROWSER = 'workbench.action.browser.open';
@@ -35,8 +33,7 @@ export class Previews implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 
 	constructor(
-		private readonly extensionUri: vscode.Uri,
-		private readonly module: Module,
+		private readonly server: SlidesServer,
 		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {
@@ -56,11 +53,11 @@ export class Previews implements vscode.Disposable {
 			void vscode.window.showErrorMessage('Only a deck saved on disk can be rendered.');
 			return;
 		}
-		const deck = await this.decks.deckOf(uri, this.log);
+		const deck = await this.decks.deckOf(uri);
 		const key = `${uri}\n${deck ?? ''}`;
 		let watch = this.watches.get(key);
 		if (!watch) {
-			const started = new Watch(uri, deck, await command(this.extensionUri), this.log);
+			const started = new Watch(uri, deck, await this.server.executable(), this.log);
 			started.onExit(() => {
 				this.follow.forget(started.id);
 				if (this.watches.get(key) === started) {
@@ -156,7 +153,7 @@ export class Previews implements vscode.Disposable {
 		}
 		const line = editor.selection.active.line;
 		try {
-			return await this.module.position(editor.document.getText(), line, uri);
+			return await this.server.position(editor.document.getText(), line, uri);
 		} catch (error) {
 			this.log.error(`${vscode.workspace.asRelativePath(uri)}: could not find the slide at line ${line + 1}: ${error}`);
 			throw error;

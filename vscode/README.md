@@ -7,12 +7,30 @@ markdown cell, and each code cell shows the outputs the deck saved for it in
 runs them on, their outputs are saved where the deck reads them as they run,
 and a figure steps through its steps as on its slide.
 
-The markdown is read and written, and the outputs found and saved, by the
-deck's own Rust code compiled to WASI and run with
-[vscode-wasm](https://github.com/microsoft/vscode-wasm). A cell has the
-address the deck gives it, and the file is written back byte for byte, except
-for the cells that changed. The cells run on `slides-rs kernel`, which the
-extension comes with, as the WebAssembly cannot start a process.
+The extension is a client of `slides-rs lsp`, the deck's own language
+server, which reads and writes the markdown, finds and saves the outputs,
+completes and describes the frontmatter and the attributes, links the imports,
+warns of what is wrong with how the slides step, and says which files are
+decks. A cell has the address the deck gives it, and the file is written back
+byte for byte, except for the cells that changed. The cells run on
+`slides-rs kernel`, and the slides render with `slides-rs --watch`, both the
+same `slides-rs` as the server.
+
+## Install
+
+The extension comes without `slides-rs`, which it runs from the pixi
+environment of the workspace's first folder, as
+`pixi run --frozen slides-rs lsp`, so that each project pins its own. Add it
+to the project's `pixi.toml`:
+
+```toml
+[dependencies]
+slides-rs = { path = "path/to/slides-rs" }
+```
+
+The `slides.path` setting names a `slides-rs` to run instead, as one on the
+`PATH`; a change takes effect once the window reloads. Its log is the *Slides
+Notebook* output.
 
 ## Use
 
@@ -134,8 +152,7 @@ as the deck's dark theme inverts them.
 
 **Slides: Restart Kernel**, in the notebook's toolbar, starts a new kernel for
 the next cell. xeus-python's `xpython` cannot stop a cell, so interrupting one
-stops its kernel too. The `slides.path` setting names another `slides-rs` to
-run, and running cells needs VS Code on the desktop.
+stops its kernel too.
 
 ## Show
 
@@ -155,14 +172,12 @@ a server of its own on `127.0.0.1`, as the page names it in its
 tab to the front. `slides.editor.previewFollowsCursor` turns that off.
 A file another one in the workspace imports shows its own slides as they are
 in that deck, with `--deck`: in its theme and shape, and stepping as it does.
-**Slides: Stop Rendering Slides** stops every deck being rendered. Like
-running cells, this needs VS Code on the desktop.
+**Slides: Stop Rendering Slides** stops every deck being rendered.
 
 ## Build
 
-The Rust half builds for `wasm32-wasip1-threads`, which vscode-wasm runs and
-conda-forge packages, and `slides-rs` for this machine, so the `.vsix` runs on
-this platform alone. The `vscode` pixi environment has the tools of both:
+The extension is TypeScript alone, which runs on any platform VS Code does on
+the desktop. The `vscode` pixi environment has the tools to build and test it:
 
 ```sh
 pixi run vscode-build    # npm install, then build into dist
@@ -172,9 +187,8 @@ pixi run vscode-install  # package a .vsix and install it in VS Code
 ```
 
 The tasks call the `code` CLI in `/Applications/Visual Studio Code.app`. The
-extension depends on
-[WASM WASI Core](https://marketplace.visualstudio.com/items?itemName=ms-vscode.wasm-wasi-core),
-which VS Code installs along with it.
+example deck's pixi environment builds `slides-rs` from this repository. The
+tests run the one `cargo build` builds, which their `slides.path` names.
 
 The tests download a VS Code of their own. Set `VSCODE_EXECUTABLE` to use an
 installed one, and unset `ELECTRON_RUN_AS_NODE` when running from VS Code's

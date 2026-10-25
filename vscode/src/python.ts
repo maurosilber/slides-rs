@@ -9,14 +9,14 @@
 // servers have themselves.
 
 import * as vscode from 'vscode';
-import { SELECTOR } from './decks';
+import { SELECTOR } from './server';
 import type { Found, PythonServers } from './lsp';
 
 type Cells = { start: number; end: number }[];
 
 /** Registers what the cells have, from `servers` where they have a server for the file,
  * or else from the server VS Code has. */
-export function registerPython(servers: Promise<PythonServers | undefined>): vscode.Disposable {
+export function registerPython(servers: PythonServers): vscode.Disposable {
 	const selector = SELECTOR.map((filter) => ({ ...filter, scheme: 'file' }));
 	/** What a server says at a position: the one started for the document, or else, with
 	 * `forwarded`, the one VS Code has. */
@@ -27,9 +27,9 @@ export function registerPython(servers: Promise<PythonServers | undefined>): vsc
 		started: (servers: PythonServers, found: Found) => Promise<T>,
 		forwarded: (file: vscode.Uri, cells: Cells) => Thenable<T>,
 	): Promise<T | undefined> => {
-		const found = await (await servers)?.serverFor(document);
+		const found = await servers.serverFor(document);
 		if (found) {
-			return inCells(found.shadow.cells, position) ? started((await servers)!, found) : undefined;
+			return inCells(found.shadow.cells, position) ? started(servers, found) : undefined;
 		}
 		return forward(document, position, token, forwarded);
 	};
@@ -62,7 +62,7 @@ export function registerPython(servers: Promise<PythonServers | undefined>): vsc
 						},
 					),
 				async resolveCompletionItem(item, token) {
-					return (await servers)?.resolve(item, token) ?? item;
+					return servers.resolve(item, token);
 				},
 			},
 			'.',

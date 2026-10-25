@@ -3,39 +3,34 @@
 
 import * as vscode from 'vscode';
 import { cellOutput, Saved, SAVED_AS, toBase64 } from './output';
-import { registerAttributes } from './attributes';
-import { registerFrontmatter } from './frontmatter';
 import { Decks } from './decks';
 import { Previews } from './preview';
 import { SlideEditor } from './slides';
-import { canRunCells, Kernels } from './kernel';
+import { Kernels } from './kernel';
+import { PythonServers } from './lsp';
 import { registerPython } from './python';
-import { Cell, CodeCell, Module } from './wasm';
+import { Cell, CodeCell, SlidesServer } from './server';
 
 const NOTEBOOK = 'slides-notebook';
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
 	const log = vscode.window.createOutputChannel('Slides Notebook', { log: true });
-	const module = new Module(context.extensionUri, context.globalStorageUri, log);
-	const outputs = new Outputs(module, log);
-	const decks = new Decks(module);
-	// The language servers start processes, which needs VS Code on the desktop, as
-	// does the client of them, loaded only there.
-	const servers = canRunCells()
-		? import('./lsp.js').then(({ PythonServers }) => {
-			const servers = new PythonServers(context.extensionUri, decks, log);
-			context.subscriptions.push(servers);
-			return servers;
-		})
-		: Promise.resolve(undefined);
+	const server = new SlidesServer(log);
+	const outputs = new Outputs(server, log);
+	const decks = new Decks(server);
+	const servers = new PythonServers(server, decks, log);
+	const kernels = new Kernels(NOTEBOOK, server, log);
+	const previews = new Previews(server, decks, log);
 	context.subscriptions.push(
 		log,
+		server,
 		decks,
-		new SlideEditor(module, decks, log),
-		registerFrontmatter(),
-		registerAttributes(decks),
+		servers,
+		kernels,
+		previews,
+		new SlideEditor(server, decks, log),
 		registerPython(servers),
-		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(module)),
+		vscode.workspace.registerNotebookSerializer(NOTEBOOK, new Serializer(server)),
 		vscode.workspace.onDidOpenNotebookDocument((notebook) => outputs.load(notebook)),
 		vscode.workspace.onDidSaveNotebookDocument((notebook) => outputs.save(notebook)),
 		vscode.workspace.onDidCloseNotebookDocument((notebook) => outputs.forget(notebook)),
@@ -45,39 +40,33 @@ export function activate(context: vscode.ExtensionContext) {
 				return vscode.commands.executeCommand('vscode.openWith', uri, NOTEBOOK);
 			}
 		}),
+		vscode.commands.registerCommand('slides.showSlides', (uri?: vscode.Uri) => {
+			uri ??= vscode.window.activeNotebookEditor?.notebook.uri ?? vscode.window.activeTextEditor?.document.uri;
+			if (uri) {
+				return previews.show(uri);
+			}
+		}),
+		vscode.commands.registerCommand('slides.stopSlides', () => previews.stop()),
+		vscode.commands.registerCommand('slides.restartKernel', () => {
+			const notebook = vscode.window.activeNotebookEditor?.notebook;
+			if (notebook?.notebookType === NOTEBOOK) {
+				kernels.restart(notebook);
+			}
+		}),
 	);
-	if (canRunCells()) {
-		const kernels = new Kernels(NOTEBOOK, context.extensionUri, log);
-		const previews = new Previews(context.extensionUri, module, decks, log);
-		context.subscriptions.push(
-			kernels,
-			previews,
-			vscode.commands.registerCommand('slides.showSlides', (uri?: vscode.Uri) => {
-				uri ??= vscode.window.activeNotebookEditor?.notebook.uri ?? vscode.window.activeTextEditor?.document.uri;
-				if (uri) {
-					return previews.show(uri);
-				}
-			}),
-			vscode.commands.registerCommand('slides.stopSlides', () => previews.stop()),
-			vscode.commands.registerCommand('slides.restartKernel', () => {
-				const notebook = vscode.window.activeNotebookEditor?.notebook;
-				if (notebook?.notebookType === NOTEBOOK) {
-					kernels.restart(notebook);
-				}
-			}),
-		);
-	}
 	for (const notebook of vscode.workspace.notebookDocuments) {
 		void outputs.load(notebook);
 	}
+	// Active once the server has started, or failed to, which it reports itself.
+	await server.started.catch(() => {});
 }
 
 /** Reads and writes the markdown, which holds no outputs: the deck saves those apart. */
 class Serializer implements vscode.NotebookSerializer {
-	constructor(private readonly module: Module) {}
+	constructor(private readonly server: SlidesServer) {}
 
 	async deserializeNotebook(content: Uint8Array): Promise<vscode.NotebookData> {
-		const cells = await this.module.cells(new TextDecoder().decode(content));
+		const cells = await this.server.cells(new TextDecoder().decode(content));
 		return new vscode.NotebookData(cells.map(cellData));
 	}
 
@@ -86,7 +75,7 @@ class Serializer implements vscode.NotebookSerializer {
 			const code = cell.kind === vscode.NotebookCellKind.Code;
 			return { kind: code ? 'code' : 'markdown', source: cell.value, language: code ? cell.languageId : '', written: cell.metadata?.written ?? null };
 		});
-		return new TextEncoder().encode(await this.module.markdown(cells));
+		return new TextEncoder().encode(await this.server.markdown(cells));
 	}
 }
 
@@ -110,7 +99,7 @@ class Outputs {
 	private readonly loaded = new Set<string>();
 
 	constructor(
-		private readonly module: Module,
+		private readonly server: SlidesServer,
 		private readonly log: vscode.LogOutputChannel,
 	) {}
 
@@ -122,7 +111,7 @@ class Outputs {
 		try {
 			const version = notebook.version;
 			const cells = codeCells(notebook);
-			const saved = await this.module.load(
+			const saved = await this.server.load(
 				notebook.uri,
 				cells.map((cell) => cell.document.getText()),
 			);
@@ -167,7 +156,7 @@ class Outputs {
 					})),
 				}),
 			);
-			const saved = await this.module.save(notebook.uri, cells);
+			const saved = await this.server.save(notebook.uri, cells);
 			if (saved > 0) {
 				this.log.info(`${notebook.uri}: saved the outputs of ${saved} cell(s)`);
 			}

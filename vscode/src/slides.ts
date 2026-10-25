@@ -3,15 +3,15 @@
 // its headings by their level, its columns, the step each part shows in, and buttons
 // under the break, or under the frontmatter for the first, to move it, with all its
 // markdown, before another one, or to add one before or after it. Where they break,
-// their columns and how they step, is the deck's own reading of the markdown, which the module
-// answers, along with what is wrong with how they step, as warnings on their lines. The
+// their columns and how they step, is the deck's own reading of the markdown, which the
+// language server answers, as it warns of what is wrong with how they step. The
 // `slides.editor` settings turn each of the marks off, and set their colors, spacing and
 // text.
 
 import * as vscode from 'vscode';
-import { Decks, SELECTOR } from './decks';
+import { Decks } from './decks';
 import { fill, shown, Shown, style, Style } from './settings';
-import { Breaks, Module, SlideSteps } from './wasm';
+import { Breaks, SELECTOR, SlideSteps, SlidesServer } from './server';
 
 /** How long to wait, after an edit, before marking the slides again. */
 const DELAY = 150;
@@ -103,11 +103,9 @@ export class SlideEditor implements vscode.Disposable {
 	private style: Style;
 	/** Whether the steps' column is narrowed to a mark on each line that steps. */
 	private collapsed = false;
-	/** What is wrong with how the slides of each document step. */
-	private readonly diagnostics = vscode.languages.createDiagnosticCollection('slides');
 
 	constructor(
-		private readonly module: Module,
+		private readonly server: SlidesServer,
 		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {
@@ -131,7 +129,6 @@ export class SlideEditor implements vscode.Disposable {
 			outputs.onDidDelete(saved),
 			{ dispose: () => disposeTypes(this.types) },
 			this.lensesChanged,
-			this.diagnostics,
 			vscode.languages.registerCodeLensProvider(SELECTOR, {
 				onDidChangeCodeLenses: this.lensesChanged.event,
 				provideCodeLenses: (document) => this.codeLenses(document),
@@ -152,10 +149,7 @@ export class SlideEditor implements vscode.Disposable {
 			}),
 			vscode.window.onDidChangeVisibleTextEditors((editors) => editors.forEach((editor) => void this.decorate(editor))),
 			vscode.workspace.onDidChangeTextDocument(({ document }) => this.later(document)),
-			vscode.workspace.onDidCloseTextDocument((document) => {
-				this.layouts.delete(document.uri.toString());
-				this.diagnostics.delete(document.uri);
-			}),
+			vscode.workspace.onDidCloseTextDocument((document) => this.layouts.delete(document.uri.toString())),
 			this.decks.onDidChange(() => this.refresh()),
 			vscode.workspace.onDidChangeConfiguration((event) => {
 				if (event.affectsConfiguration('slides.editor')) {
@@ -191,9 +185,8 @@ export class SlideEditor implements vscode.Disposable {
 		const version = document.version;
 		const text = document.getText();
 		const layout = Promise.all([
-			this.module.slides(text),
-			// Found even while they are not shown, for what is wrong with them.
-			this.module.steps(text, document.uri),
+			this.server.slides(text),
+			this.server.steps(text, document.uri),
 		]).then(([breaks, steps]) => ({ version, breaks, slides: slidesOf(text.split(/\r?\n/), breaks), steps }));
 		this.layouts.set(document.uri.toString(), layout);
 		layout.catch((error) => {
@@ -222,7 +215,6 @@ export class SlideEditor implements vscode.Disposable {
 		const types = [decoration, ...shades, ...headingTypes, gutter];
 		if (!this.decks.isDeck(document)) {
 			types.forEach((type) => editor.setDecorations(type, []));
-			this.diagnostics.delete(document.uri);
 			return;
 		}
 		let layout: Layout;
@@ -260,14 +252,6 @@ export class SlideEditor implements vscode.Disposable {
 		const columns = columnsOf(layout);
 		const steps = show.steps ? stepMarks(layout.steps, show) : undefined;
 		editor.setDecorations(gutter, gutterOf(document.lineCount, columns, steps, this.collapsed, show, this.style));
-		this.diagnostics.set(document.uri, layout.steps
-			.flatMap((slide) => slide.warnings)
-			.filter(({ line }) => line < document.lineCount)
-			.map(({ line, message }) => {
-				const diagnostic = new vscode.Diagnostic(document.lineAt(line).range, message, vscode.DiagnosticSeverity.Warning);
-				diagnostic.source = 'slides';
-				return diagnostic;
-			}));
 	}
 
 	/** Buttons at the top of each slide, under its break, to move it or to add one before
@@ -516,7 +500,7 @@ function gutterOf(
 	return options;
 }
 
-/** How many steps each slide has, by its index, as the deck numbers them. The module's
+/** How many steps each slide has, by its index, as the deck numbers them. The server's
  * slides open after each break, those of the first at the file's start, and an empty one
  * is none of the editor's. */
 function countsOf(layout: Layout): (number | undefined)[] {

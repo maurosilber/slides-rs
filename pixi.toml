@@ -43,7 +43,6 @@ slides-rs-python = { path = "python" }
 
 [feature.vscode.dependencies]
 nodejs = "*"
-rust-std-wasm32-wasip1-threads = "*"
 # The Python language servers the extension starts, which its tests use.
 basedpyright = "*"
 ty = "*"
@@ -51,8 +50,10 @@ ty = "*"
 [feature.vscode.tasks]
 vscode-deps = { cmd = "npm install", cwd = "vscode" }
 vscode-build = { cmd = "npm run build", cwd = "vscode", depends-on = ["vscode-deps"] }
+# The tests run the slides-rs cargo builds, as the `slides.path` setting names it.
+cargo-build = "cargo build --quiet"
 vscode-dev = { cmd = "\"$VSCODE\" --extensionDevelopmentPath=\"$PIXI_PROJECT_ROOT/vscode\" \"$PIXI_PROJECT_ROOT/example\"", depends-on = ["vscode-build"], description = "Open the example deck in a VS Code window running the extension" }
-vscode-test = { cmd = "npm test", cwd = "vscode", depends-on = ["vscode-build"], description = "Test the extension in a VS Code of its own" }
+vscode-test = { cmd = "npm test", cwd = "vscode", depends-on = ["vscode-build", "cargo-build"], description = "Test the extension in a VS Code of its own" }
 vscode-install = { cmd = "npm run package -- --out slides-notebook.vsix && python install.py \"$VSCODE\" slides-notebook.vsix \"$PIXI_PROJECT_ROOT\"", cwd = "vscode", depends-on = ["vscode-build"], description = "Package the extension and install it in the VS Code profile this project opens with" }
 
 [feature.vscode.activation.env]

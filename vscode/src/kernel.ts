@@ -1,11 +1,11 @@
 // Runs the code cells as the deck does, on a kernel that `slides-rs kernel`
 // starts for each notebook: next to its file, in the environment its lock file
-// pins. The WebAssembly cannot start a process, so this needs VS Code on the
-// desktop.
+// pins. The `slides-rs` is the language server's own.
 
 import * as vscode from 'vscode';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { cellOutput, Saved } from './output';
+import type { SlidesServer } from './server';
 
 /** A cell that ran: its outputs, which are saved in the outputs directory, whether it raised,
  * its count, and whether its outputs were saved with the files it read, which the deck trusts. */
@@ -18,11 +18,6 @@ interface Ran {
 
 type Answer = { kernel: string } | Ran | { error: string };
 
-/** Whether this extension host can start a process. */
-export function canRunCells(): boolean {
-	return typeof process === 'object' && typeof process.versions?.node === 'string';
-}
-
 export class Kernels implements vscode.Disposable {
 	private readonly controller: vscode.NotebookController;
 	/** The kernel of each open notebook that has run a cell, by its uri. */
@@ -31,7 +26,7 @@ export class Kernels implements vscode.Disposable {
 
 	constructor(
 		notebookType: string,
-		private readonly extensionUri: vscode.Uri,
+		private readonly server: SlidesServer,
 		private readonly log: vscode.LogOutputChannel,
 	) {
 		this.controller = vscode.notebooks.createNotebookController('slides-rs', notebookType, 'slides-rs');
@@ -109,7 +104,7 @@ export class Kernels implements vscode.Disposable {
 		const key = notebook.uri.toString();
 		let session = this.sessions.get(key);
 		if (!session) {
-			session = new Session(notebook.uri, command(this.extensionUri), this.log);
+			session = new Session(notebook.uri, this.server.executable(), this.log);
 			session.onExit(() => this.sessions.get(key) === session && this.sessions.delete(key));
 			this.sessions.set(key, session);
 		}
@@ -219,21 +214,6 @@ class Session {
 			throw new Error('slides-rs exited without answering. Its output is in the Slides Notebook log.');
 		}
 		return JSON.parse(line) as Answer;
-	}
-}
-
-/** The `slides-rs` the settings name, or else the one that comes with the extension, or else the one on the `PATH`. */
-export async function command(extensionUri: vscode.Uri): Promise<string> {
-	const configured = vscode.workspace.getConfiguration('slides').get<string>('path');
-	if (configured) {
-		return configured;
-	}
-	const bundled = vscode.Uri.joinPath(extensionUri, 'dist', 'slides-rs');
-	try {
-		await vscode.workspace.fs.stat(bundled);
-		return bundled.fsPath;
-	} catch {
-		return 'slides-rs';
 	}
 }
 

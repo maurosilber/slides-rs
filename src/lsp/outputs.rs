@@ -9,19 +9,22 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use slides::markdown::{Files, code};
-use slides::paths::{joined, relative};
+use slides::paths::{canonical, parent};
 use slides::store::{self, FIGURE, MEDIA_TYPES, Output};
 
-/// Where a notebook's file is.
-#[derive(Deserialize)]
+/// Where a notebook's file is: its directory, canonical, as the deck hashes it.
 pub struct Place {
-    /// Its directory, as the deck hashes it: on the disk, outside the WASM.
-    pub dir: String,
-    /// Its directory as this process reads it.
-    pub path: PathBuf,
+    pub dir: PathBuf,
 }
 
 impl Place {
+    /// The place of the file at `path`.
+    pub fn of(path: &Path) -> Place {
+        Place {
+            dir: canonical(parent(path)),
+        }
+    }
+
     /// The address of each code cell, given their sources in order.
     fn hashes(&self, sources: &[&str]) -> Vec<String> {
         let codes: Vec<String> = sources.iter().map(|source| code(source)).collect();
@@ -31,12 +34,8 @@ impl Place {
     /// The address of each code cell, given their code in order, as the deck
     /// reads it from the markdown.
     fn addresses(&self, codes: &[String]) -> Vec<String> {
-        let lock = store::lock_file(&self.path);
-        store::hashes(
-            Path::new(&self.dir),
-            &store::environment(lock.as_deref()),
-            codes,
-        )
+        let lock = store::lock_file(&self.dir);
+        store::hashes(&self.dir, &store::environment(lock.as_deref()), codes)
     }
 
     /// The html of the saved outputs of each code cell, given their code in
@@ -50,31 +49,20 @@ impl Place {
     }
 
     fn root(&self) -> PathBuf {
-        store::root(&self.path)
+        store::root(&self.dir)
     }
 }
 
-/// The files of the deck around a place, read as this process reads them,
-/// with the saved outputs of their cells, each hashed by its directory on the
-/// disk, as the deck hashes it.
-pub struct Deck<'a>(pub &'a Place);
+/// The files of a deck on the disk, with the saved outputs of their cells.
+pub struct Disk;
 
-impl Files for Deck<'_> {
+impl Files for Disk {
     fn load(&mut self, path: &Path) -> Option<String> {
         fs::read_to_string(path).ok()
     }
 
     fn outputs(&mut self, path: &Path, codes: &[String]) -> Vec<String> {
-        let dir = path.parent().unwrap_or(&self.0.path);
-        // Where the file is on the disk, as it is from the place.
-        let relative = relative(&self.0.path, dir);
-        let place = Place {
-            dir: joined(Path::new(&self.0.dir), &relative.to_string_lossy())
-                .to_string_lossy()
-                .into_owned(),
-            path: dir.to_path_buf(),
-        };
-        place.html(codes)
+        Place::of(path).html(codes)
     }
 }
 
@@ -282,11 +270,9 @@ mod tests {
         let dir = temp_dir("saved");
         let deck = dir.join("deck");
         fs::create_dir_all(deck.join(store::DIR)).unwrap();
-        // The file is imported by a deck above it, which runs its cells there.
-        let place = Place {
-            dir: "/somewhere/deck/sections".to_string(),
-            path: deck.join("sections"),
-        };
+        // The file is imported by a deck above it, whose outputs directory
+        // holds its outputs too.
+        let place = Place::of(&deck.join("sections").join("slide.md"));
         let cells = [
             Cell {
                 source: "x = 1".to_string(),
@@ -310,8 +296,8 @@ mod tests {
 
         // The hash is the one the deck gives the cell.
         let hashes = store::hashes(
-            Path::new("/somewhere/deck/sections"),
-            &store::environment(store::lock_file(&place.path).as_deref()),
+            &deck.join("sections").canonicalize().unwrap(),
+            &store::environment(store::lock_file(&place.dir).as_deref()),
             &["x = 1\n", "x\n"],
         );
         assert!(deck.join(store::DIR).join(&hashes[1]).is_dir());
@@ -322,10 +308,7 @@ mod tests {
     #[test]
     fn outputs_read_from_the_store_are_left_as_they_are() {
         let dir = temp_dir("read");
-        let place = Place {
-            dir: "/deck".to_string(),
-            path: dir.clone(),
-        };
+        let place = Place::of(&dir.join("slide.md"));
         let cells = [Cell {
             source: "edited".to_string(),
             outputs: vec![CellOutput {

@@ -33,7 +33,7 @@ import {
 	TransportKind,
 } from 'vscode-languageclient/node';
 import { Decks } from './decks';
-import { command } from './kernel';
+import type { SlidesServer } from './server';
 import { keepInCells, pythonCells } from './python';
 
 /** The servers looked for, in order, by the command that starts one. */
@@ -267,7 +267,7 @@ export class PythonServers implements vscode.Disposable {
 	private readonly given = new WeakMap<vscode.CompletionItem, Server>();
 
 	constructor(
-		private readonly extensionUri: vscode.Uri,
+		private readonly slides: SlidesServer,
 		private readonly decks: Decks,
 		private readonly log: vscode.LogOutputChannel,
 	) {
@@ -343,7 +343,7 @@ export class PythonServers implements vscode.Disposable {
 		let environment = this.environments.get(dir);
 		if (!environment) {
 			environment = (async () => {
-				const slidesRs = await command(this.extensionUri);
+				const slidesRs = await this.slides.executable();
 				return new Promise<Environment | undefined>((resolve) => {
 					execFile(slidesRs, ['environment', uri.fsPath], { cwd: dir }, (error, stdout, stderr) => {
 						if (error) {

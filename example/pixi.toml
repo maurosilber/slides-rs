@@ -1,11 +1,12 @@
 [workspace]
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]
+preview = ["pixi-build"]
 
 [dependencies]
 python = "*"
 matplotlib = "*"
 xeus-python = "*"
-
-[pypi-dependencies]
-slides-rs = { path = "../python", editable = true }
+# The deck's command, built from this repository, which the VS Code extension
+# runs, with the Python package its figures step with.
+slides-rs = { path = ".." }
