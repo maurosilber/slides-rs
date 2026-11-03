@@ -72,6 +72,39 @@ section::after {
     }
 }
 
+/* A code block too long for its slide is fitted to it by slides.js, which
+   gives it the height it has room for, as `data-fitted` marks, and it
+   scrolls. */
+pre[data-fitted] {
+    box-sizing: border-box;
+    overflow: auto;
+}
+
+/* What a slide does not show, which runs out of it, slides.js marks, and
+   the page the editor opens, `following` its cursor, shows the author: the
+   slide edged, saying so, and what is out of it, dashed. So does the
+   overview, where it can be found, which outlines the slide chosen. */
+:is(.following, .overview) section[data-overflow] {
+    box-shadow: inset 0 0 0 0.5cqmin var(--overflow-color, #e5484d);
+
+    &::before {
+        content: var(--overflow-message, "Not all of this slide shows");
+        position: absolute;
+        top: 1.5cqmin;
+        right: 1.5cqmin;
+        z-index: 1;
+        padding: 0.4cqmin 1.2cqmin;
+        border-radius: 0.6cqmin;
+        font: 600 2cqmin/1.4 system-ui, sans-serif;
+        color: white;
+        background: var(--overflow-color, #e5484d);
+    }
+
+    & [data-overflowing] {
+        outline: 0.3cqmin dashed var(--overflow-color, #e5484d);
+    }
+}
+
 /* Steps. The deck marks each element that steps with `step`, those that
    take no space while hidden with `step-collapse`, and gives each the steps
    it shows in as `--from` and, excluded, `--to`. slides.js says which step

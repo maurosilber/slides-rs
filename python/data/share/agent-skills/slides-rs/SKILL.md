@@ -326,6 +326,10 @@ from slides_rs import Motion, Slider
   reveals.
 - To see a whole slide at once, press <kbd>A</kbd> in the browser, or set
   `steps: false` or `{ steps=false }`.
+- A code block too tall for its slide shrinks to the room left and scrolls,
+  so what follows it stays on the slide. Whatever still runs out of a slide is
+  marked in red in the page the editor opens and in the overview
+  (<kbd>Esc</kbd>), and warned of in the browser console: split the slide.
 - Use `--watch` while editing. Cached outputs keep re-renders fast.
 - A VS Code extension can run a deck's cells as a notebook and step through
   its figures.

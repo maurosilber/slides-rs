@@ -91,10 +91,125 @@ function showStep(i, finished = false) {
     currentStep = i;
     document.documentElement.classList.toggle("steps-off", !stepsEnabled);
     showSteps(slides[currentSlide], i);
+    fit(slides[currentSlide]);
     playAnimations(slides[currentSlide], finished);
     showPosition();
     return true;
 }
+
+// A slide is fitted to its frame as it shows: what runs past its bottom
+// shrinks its code blocks, the `<pre>`s, which then scroll, the largest first,
+// each no lower than a few of its lines, and only those that make it shorter,
+// as one in a column beside a longer one does not. Their heights are in
+// `cqh`, the frame's, for the slide to keep them as the window is resized.
+// What is still out of the slide, which hides it, is marked
+// `data-overflowing`, and the slide `data-overflow`, for slides.css to show
+// it to the author, and warned of in the console.
+const FIT_LINES = 3;
+
+// The slides warned of, by number, for each to be warned of once.
+const warned = new Set();
+
+function fit(slide) {
+    const fitted = slide.querySelectorAll("pre[data-fitted]");
+    for (const pre of fitted) {
+        pre.style.maxHeight = "";
+        delete pre.dataset.fitted;
+    }
+    const box = slide.getBoundingClientRect();
+    if (!box.height) return;
+    // Shrunk in the overview, the slide is measured as drawn.
+    const scale = box.height / slide.offsetHeight;
+    const padding = parseFloat(getComputedStyle(slide).paddingBottom) * scale;
+    const past = () => bottom(slide) - (box.bottom - padding);
+    let over = past();
+    if (over > 1) {
+        const pres = [...slide.querySelectorAll("pre")]
+            .filter((pre) => !pre.closest("svg, .katex, aside"))
+            .map((pre) => [pre, pre.getBoundingClientRect().height])
+            .filter(([, height]) => height > 0)
+            .sort((a, b) => b[1] - a[1]);
+        for (const [pre, height] of pres) {
+            const shrunk = Math.max(height - over, Math.min(height, lowest(pre) * scale));
+            if (shrunk >= height) continue;
+            pre.style.maxHeight = (shrunk / box.height) * 100 + "cqh";
+            pre.dataset.fitted = "";
+            const left = past();
+            if (left >= over - 0.5) {
+                pre.style.maxHeight = "";
+                delete pre.dataset.fitted;
+                continue;
+            }
+            over = left;
+            if (over <= 1) break;
+        }
+    }
+    markOverflow(slide, box);
+}
+
+// Where what a slide holds ends, but its notes, which it does not show.
+function bottom(slide) {
+    let end = -Infinity;
+    for (const child of slide.children) {
+        if (child.tagName == "ASIDE") continue;
+        const rect = child.getBoundingClientRect();
+        if (rect.width || rect.height) end = Math.max(end, rect.bottom);
+    }
+    return end;
+}
+
+// The height of a few lines of a code block, with its padding.
+function lowest(pre) {
+    const style = getComputedStyle(pre);
+    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+    return FIT_LINES * line + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+}
+
+// Marks what is out of the slide, the outermost of each, but within what
+// clips what it holds, as a code block does, or draws it, as an SVG or math.
+function markOverflow(slide, box) {
+    for (const element of slide.querySelectorAll("[data-overflowing]")) {
+        delete element.dataset.overflowing;
+    }
+    const out = [];
+    const walk = (parent) => {
+        for (const element of parent.children) {
+            if (element.tagName == "ASIDE") continue;
+            const rect = element.getBoundingClientRect();
+            if (!rect.width && !rect.height) continue;
+            if (rect.bottom > box.bottom + 1 || rect.right > box.right + 1
+                || rect.top < box.top - 1 || rect.left < box.left - 1) {
+                out.push(element);
+                continue;
+            }
+            if (element instanceof SVGElement || element.classList.contains("katex")) continue;
+            if (getComputedStyle(element).overflow != "visible") continue;
+            walk(element);
+        }
+    };
+    walk(slide);
+    for (const element of out) element.dataset.overflowing = "";
+    slide.toggleAttribute("data-overflow", out.length > 0);
+    const number = slide.dataset.number;
+    if (out.length && !warned.has(number)) {
+        warned.add(number);
+        console.warn(`Slide ${number} does not show all it holds:`, out);
+    }
+}
+
+// Images, and the fonts, can come after the slide is laid out, and the
+// window can change its shape, when the slide shown is fitted again.
+function refit() {
+    if (speaker || !slides.length) return;
+    if (overview) [...slides].forEach(fit);
+    else fit(slides[currentSlide]);
+}
+addEventListener("load", refit);
+addEventListener("resize", refit);
+document.fonts?.ready.then(refit);
+addEventListener("load", (event) => {
+    if (event.target instanceof HTMLImageElement) refit();
+}, true);
 
 // Disabled steps are all visible already, so stepping through them is a
 // no-op: report failure and let the caller move a whole slide instead.
@@ -157,6 +272,7 @@ function openOverview() {
     [...slides].forEach((slide, i) => {
         if (i == currentSlide) return;
         showSteps(slide, stepCount(i));
+        fit(slide);
         playAnimations(slide, true);
     });
     choose(currentSlide);
@@ -313,6 +429,9 @@ addEventListener("hashchange", () => {
 // `slide.step` from a server of its own on this machine.
 const follow = new URLSearchParams(location.search).get("follow");
 if (follow && /^\d+\/\w+$/.test(follow)) {
+    // Followed by the editor, the page is the author's, which shows them what
+    // a slide does not show, as slides.css says.
+    document.documentElement.classList.add("following");
     new EventSource("http://127.0.0.1:" + follow).onmessage = (event) => {
         if (location.hash.slice(1) !== event.data) location.replace("#" + event.data);
     };
