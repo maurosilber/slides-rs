@@ -72,6 +72,55 @@ section::after {
     }
 }
 
+/* What `center` marks, as src/step/html.rs boxes or marks it with
+   `data-center`, is centered along the axes it says. Vertically, it takes
+   the room left on its slide, or in its column, which a slide that holds one
+   lays out as a column of what it holds, for it to grow into, sharing it
+   with any other, and centers what it holds in it. Horizontally, it centers
+   each block it holds, as wide as what it holds, and its text, but that of
+   lists and code, whose lines stay lined up. slides.js shows a slide with
+   its `--slide-display`, for a slide to say how it is laid out. */
+section:has([data-center]) {
+    --slide-display: flex;
+    flex-direction: column;
+}
+
+[data-column]:has([data-center]) {
+    display: flex;
+    flex-direction: column;
+}
+
+:is(section, [data-column]):has([data-center])>* {
+    flex-shrink: 0;
+}
+
+/* A column grows as tall as its run, which grows instead, as it grows as
+   wide as its `width` says. */
+:is([data-center="both"], [data-center="vertical"]):not([data-column]),
+.columns:has(> :is([data-center="both"], [data-center="vertical"])) {
+    flex-grow: 1;
+}
+
+:is([data-center="both"], [data-center="vertical"]) {
+    /* As a flex box, as a column holding one is, or as a block. */
+    justify-content: center;
+    align-content: center;
+}
+
+:is([data-center="both"], [data-center="horizontal"]) {
+    text-align: center;
+
+    &>:not(.columns) {
+        width: fit-content;
+        max-width: 100%;
+        margin-inline: auto;
+    }
+
+    & :is(ul, ol, pre) {
+        text-align: start;
+    }
+}
+
 /* A code block too long for its slide is fitted to it by slides.js, which
    gives it the height it has room for, as `data-fitted` marks, and it
    scrolls. */
@@ -212,7 +261,7 @@ pre[data-fitted] {
 
 .overview section {
     /* Over the display slides.js gives each, to show only one. */
-    display: block !important;
+    display: var(--slide-display, block) !important;
     width: 100cqw;
     height: 100cqh;
     margin:

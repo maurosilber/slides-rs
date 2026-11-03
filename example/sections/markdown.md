@@ -113,6 +113,23 @@ def mean(xs):
 
 ---
 
+# Centered
+
+- `{ center }` on a heading centers it, and what it holds up to the next
+  heading of its level or above, in the room left on the slide,
+- `{ center=horizontal }` or `{ center=vertical }` along one axis alone,
+- and `<p center>` centers a paragraph, or any other element.
+
+## That is all it takes. { center }
+
+---
+
+# A title slide { center }
+
+Centered on `#`, the whole slide is.
+
+---
+
 # Named steps
 
 ### Method { step=method }

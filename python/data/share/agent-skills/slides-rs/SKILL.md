@@ -69,6 +69,13 @@ Plain CommonMark: **bold**, *italic*, `code`, [links](https://example.com), > qu
   width; columns without a width share what is left.
 - Headings take attributes: `# Title { #some-id .some-class }`, and
   `{ steps=false }` turns stepping off for that heading's content.
+- `{ center }` centers a heading and what it holds (up to the next heading
+  of its level or above) in the room left on the slide, both across and
+  down: `## That is all. { center }` ends a slide with a centered phrase, and
+  `# Title { center }` centers the whole slide. On a `###` column heading it
+  centers within that column. `{ center=horizontal }` or
+  `{ center=vertical }` centers along one axis only. On any other element,
+  write it in the tag: `<p center>A closing phrase.</p>`.
 - `<import-slide src="sections/intro.md" />` inlines another markdown file's
   slides. That file may have its own frontmatter.
 - Raw HTML and `<style>` blocks are allowed. Theme colors are CSS

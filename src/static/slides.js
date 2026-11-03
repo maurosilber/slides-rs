@@ -71,7 +71,7 @@ function updateSlide(i, step = 1, finished = false) {
     slide.classList.add("steps-instant");
     slides[currentSlide].style.display = "none";
     stopAnimations(slides[currentSlide]);
-    slide.style.display = "block";
+    slide.style.display = "var(--slide-display, block)";
     currentSlide = i;
     currentStep = Math.max(1, Math.min(step, stepCount(i)));
     showStep(currentStep, finished);

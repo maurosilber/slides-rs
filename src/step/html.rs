@@ -42,6 +42,13 @@
 //! share of the room left, as `2`; or a length, as `40%`. The columns that
 //! say nothing share the room left equally.
 //!
+//! What `center` marks is centered in the room the slide leaves it, as
+//! slides.css lays it out: a heading of the slide, as `{ center }` writes,
+//! with what it holds, up to the next heading of its level or above, boxed
+//! in a `<div data-center>`, or, if it starts a column, its column; and any
+//! other element, as `<p center>`, itself, marked `data-center`. Its value
+//! says along which axes: `both`, as none says, `horizontal` or `vertical`.
+//!
 //! A bound written with its sign, as `+1`, `+0` or `-1`, is a number of
 //! steps from the step of the latest element that steps before it, among
 //! those it is beside, or else of the element it is in, or that holds it,
@@ -75,7 +82,8 @@ use super::{Bound, Mark, Range, Step};
 /// The html with the steps of every `<section>` numbered, and its columns
 /// boxed, as slides.css lays them out: each run of them in a
 /// `<div class="columns">`, with how many it has as its `--cols`, and each
-/// column in a `<div data-column>`, as wide as its heading's `width` says.
+/// column in a `<div data-column>`, as wide as its heading's `width` says,
+/// and what `center` centers boxed, or marked, `data-center`.
 pub fn number(html: &str) -> String {
     let elements = elements(html);
     let mut edits = Vec::new();
@@ -84,49 +92,131 @@ pub fn number(html: &str) -> String {
         let close = elements[index].close;
         edits.push((close..close, format!(" {COUNT}=\"{count}\"")));
         let items = items(html, &elements, &children, steps);
+        // The boxes, as where each opens, with its start tag, and where it
+        // closes. Where one closes where another opens, it closes first, and
+        // of those that open at the same place, the one given first is
+        // outside the others, as a run of columns is outside its first.
+        let mut boxes: Vec<(usize, String)> = Vec::new();
+        let mut heads = Vec::new();
         for run in runs(&items) {
             let first = &elements[run[0][0]];
             let last = &elements[*run.last().unwrap().last().unwrap()];
             let open = format!("<div class=\"columns\" style=\"--cols:{}\">", run.len());
-            edits.push((first.start..first.start, open));
-            // Each column is boxed too, inside the run's box, which opens
-            // first where the first column opens, and closes along with the
-            // last, as the edits at the same place go in the order given.
+            boxes.push((first.start, open));
             for column in &run {
                 let heading = &elements[column[0]];
                 let end = elements[*column.last().unwrap()].outer_end(html);
-                let open = match heading.attribute(html, "width") {
-                    Some(width) => column_box(width),
-                    None => "<div data-column>".to_string(),
-                };
-                edits.push((heading.start..heading.start, open));
-                edits.push((end..end, "</div>".to_string()));
+                heads.push(column[0]);
+                let open = column_box(
+                    heading.attribute(html, "width"),
+                    heading.attribute(html, "center").and_then(center),
+                );
+                boxes.push((heading.start, open));
+                boxes.push((end, String::new()));
             }
-            let end = last.outer_end(html);
-            edits.push((end..end, "</div>".to_string()));
+            boxes.push((last.outer_end(html), String::new()));
+        }
+        for (start, end, axis) in centered(html, &elements, index, &children, &heads) {
+            match end {
+                Some(end) => {
+                    boxes.push((start, format!("<div data-center=\"{axis}\">")));
+                    boxes.push((end, String::new()));
+                }
+                None => edits.push((start..start, format!(" data-center=\"{axis}\""))),
+            }
+        }
+        boxes.sort_by_key(|(at, open)| (*at, !open.is_empty()));
+        for (at, open) in boxes {
+            let tag = if open.is_empty() {
+                "</div>".to_string()
+            } else {
+                open
+            };
+            edits.push((at..at, tag));
         }
     }
     apply(html, edits)
+}
+
+/// The axes `center` centers along, from its value: both, with none or
+/// `both`, or `horizontal` or `vertical` alone. Any other is taken as none.
+fn center(value: &str) -> Option<&'static str> {
+    match value.trim() {
+        "" | "both" => Some("both"),
+        "horizontal" => Some("horizontal"),
+        "vertical" => Some("vertical"),
+        _ => None,
+    }
+}
+
+/// What a slide's `center`s center, each with the axes it centers along: a
+/// heading of the slide, what it holds with it, up to the next heading of
+/// its level or above, which is boxed, as where the box opens and closes,
+/// but a heading that starts a column, of `heads`, whose column's box says
+/// it; and any other element, itself, as where its start tag closes, to
+/// mark it there.
+fn centered(
+    html: &str,
+    elements: &[Element],
+    section: usize,
+    children: &[usize],
+    heads: &[usize],
+) -> Vec<(usize, Option<usize>, &'static str)> {
+    let mut found = Vec::new();
+    for index in section + 1..elements[section].end {
+        let element = &elements[index];
+        let Some(axis) = element.attribute(html, "center").and_then(center) else {
+            continue;
+        };
+        if heads.contains(&index) {
+            continue;
+        }
+        let level = heading_level(&element.name);
+        let Some(at) = children
+            .iter()
+            .position(|&child| child == index)
+            .filter(|_| level.is_some())
+        else {
+            found.push((element.close, None, axis));
+            continue;
+        };
+        // It holds up to the next heading of its level or above, and what
+        // shows nothing after what it holds stays out of its box, as it does
+        // out of a column's.
+        let held = children[at + 1..]
+            .iter()
+            .take_while(|&&child| {
+                heading_level(&elements[child].name).is_none_or(|next| next > level.unwrap())
+            })
+            .filter(|&&child| !UNSHOWN.contains(&elements[child].name.as_str()))
+            .last()
+            .copied()
+            .unwrap_or(index);
+        found.push((element.start, Some(elements[held].outer_end(html)), axis));
+    }
+    found
 }
 
 /// The box of a column whose heading says how wide it is, as `width`:
 /// `fit`, as wide as what it holds, if there is room for it; a number, its
 /// share of the room the columns without a width share, as `2` is twice as
 /// wide as each of them; or a length, as `40%` or `12em`, as wide as that.
-/// Any other width is taken as none.
-fn column_box(width: &str) -> String {
+/// Any other width is taken as none. A column whose heading is centered, as
+/// `center` says, is marked so.
+fn column_box(width: Option<&str>, center: Option<&str>) -> String {
     // A share takes its part of the room as the columns that say nothing
     // do, and is kept as wide as they are beside one that fits, as
     // slides.css says of those with no `data-width`.
-    let width = width.trim();
+    let center = center.map_or(String::new(), |axis| format!(" data-center=\"{axis}\""));
+    let width = width.map_or("", str::trim);
     if width == "fit" {
-        "<div data-column data-width=\"fit\">".to_string()
+        format!("<div data-column data-width=\"fit\"{center}>")
     } else if let Some(share) = width.parse::<f64>().ok().filter(|share| *share > 0.0) {
-        format!("<div data-column style=\"flex:{share} 1 0\">")
+        format!("<div data-column{center} style=\"flex:{share} 1 0\">")
     } else if is_length(width) {
-        format!("<div data-column data-width=\"{width}\" style=\"flex:0 0 {width}\">")
+        format!("<div data-column data-width=\"{width}\"{center} style=\"flex:0 0 {width}\">")
     } else {
-        "<div data-column>".to_string()
+        format!("<div data-column{center}>")
     }
 }
 
@@ -2028,6 +2118,60 @@ mod tests {
         );
         assert!(
             numbered.ends_with("y</h3></div></div></div></div></section>"),
+            "{numbered}"
+        );
+    }
+
+    #[test]
+    fn a_centered_heading_is_boxed_with_what_it_holds() {
+        let html =
+            "<section><h1>T</h1><p>a</p><h2 center=\"\">S</h2><p>b</p><style>p{}</style></section>";
+        assert_eq!(
+            number(html),
+            "<section data-count=\"4\"><h1>T</h1><p class=\"step\" style=\"--from:2\">a</p><div data-center=\"both\"><h2 center=\"\" class=\"step\" style=\"--from:3\">S</h2><p class=\"step\" style=\"--from:4\">b</p></div><style>p{}</style></section>"
+        );
+    }
+
+    #[test]
+    fn a_centered_title_boxes_the_slide_and_its_columns() {
+        let html =
+            "<section><h1 center=\"vertical\">T</h1><h3>A</h3><p>a</p><h3>B</h3><p>b</p></section>";
+        let numbered = number(html);
+        assert!(
+            numbered.starts_with("<section data-count=\"5\"><div data-center=\"vertical\"><h1 center=\"vertical\">T</h1><div class=\"columns\""),
+            "{numbered}"
+        );
+        assert!(
+            numbered.ends_with("b</p></div></div></div></section>"),
+            "{numbered}"
+        );
+    }
+
+    #[test]
+    fn a_centered_element_is_marked() {
+        let html = "<section><h1>T</h1><p center=\"horizontal\">a</p><p center=\"diagonal\">b</p></section>";
+        let numbered = number(html);
+        assert!(numbered.contains("<p center=\"horizontal\" class=\"step\" style=\"--from:2\" data-center=\"horizontal\">a</p>"), "{numbered}");
+        assert!(
+            numbered.contains("<p center=\"diagonal\" class=\"step\" style=\"--from:3\">b</p>"),
+            "{numbered}"
+        );
+    }
+
+    #[test]
+    fn a_centered_column_is_marked_and_what_it_holds_boxed_inside_it() {
+        let html = "<section><h1>T</h1><h3 center=\"\" width=\"fit\">A</h3><p>a</p><h3>B</h3><h4 center=\"\">C</h4><p>c</p><h2>S</h2></section>";
+        let numbered = number(html);
+        assert!(
+            numbered.contains("<div data-column data-width=\"fit\" data-center=\"both\"><h3"),
+            "{numbered}"
+        );
+        assert!(
+            numbered.contains("<div data-column><h3 class=\"step\" style=\"--from:4\">B</h3><div data-center=\"both\"><h4"),
+            "{numbered}"
+        );
+        assert!(
+            numbered.contains("c</p></div></div></div><h2"),
             "{numbered}"
         );
     }

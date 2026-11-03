@@ -1,6 +1,7 @@
 //! Completes and describes the attributes the deck reads of a heading's
 //! `{ … }` and of an HTML element's tag: `steps`, how what a heading holds
-//! steps, `width`, how wide the column it starts is, `step`, the steps an
+//! steps, `width`, how wide the column it starts is, `center`, that it is
+//! centered in the room left on the slide, `step`, the steps an
 //! element shows in, and `collapse`, that it takes no space while hidden. A
 //! `step`'s value is completed with the names given to steps on the slide,
 //! counted from.
@@ -85,6 +86,24 @@ const ATTRIBUTES: &[Attribute] = &[
                 "A number: its share of the room left, as many as the columns with no width take one each.",
             ),
             ("40%", "A length, as `40%` or `12em`: as wide as that."),
+        ],
+    },
+    Attribute {
+        name: "center",
+        description: "Centered in the room left on the slide, or in its column: a heading with what it holds, up to the next heading of its level or above, the slide's title the whole slide, a heading that starts a column its column, and any other element itself. With no value, both ways.",
+        heading: false,
+        bare: true,
+        block: true,
+        values: &[
+            ("both", "Across and down, as with no value."),
+            (
+                "horizontal",
+                "Across alone: each block it holds, and its text, in the middle of the slide's width.",
+            ),
+            (
+                "vertical",
+                "Down alone: in the middle of the room left below what comes before it.",
+            ),
         ],
     },
     Attribute {
@@ -506,6 +525,8 @@ mod tests {
         "---",
         "",
         "<p step=\"\">z</p>",
+        "",
+        "## End { center= }",
     ];
 
     fn labels(line: usize, after: &str) -> Vec<String> {
@@ -529,7 +550,15 @@ mod tests {
 
     #[test]
     fn a_block_completes_the_attributes_not_written_yet() {
-        assert_eq!(labels(8, "{ "), ["step", "steps", "width"]);
+        assert_eq!(labels(8, "{ "), ["center", "step", "steps", "width"]);
+    }
+
+    #[test]
+    fn center_is_completed_with_its_axes() {
+        assert_eq!(
+            labels(LINES.len() - 1, "center="),
+            ["both", "horizontal", "vertical"]
+        );
     }
 
     #[test]
@@ -540,8 +569,11 @@ mod tests {
 
     #[test]
     fn steps_is_completed_in_the_tag_of_a_heading_alone() {
-        assert_eq!(labels(4, "\"\" "), ["collapse"]);
-        assert_eq!(labels(6, "<h2 "), ["collapse", "step", "steps", "width"]);
+        assert_eq!(labels(4, "\"\" "), ["center", "collapse"]);
+        assert_eq!(
+            labels(6, "<h2 "),
+            ["center", "collapse", "step", "steps", "width"]
+        );
     }
 
     #[test]
