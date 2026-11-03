@@ -44,17 +44,31 @@ section::after {
 }
 
 /* Each run of columns is a row of them, one per heading that starts one,
-   which the deck puts in a box of its own, as src/step/html.rs says: the
-   H3s, or the headings a heading steps through as its columns. Headings
-   above them stay out of it: Safari misplaces the columns of a box that
-   holds an element spanning them. */
+   which the deck puts in a box of its own, and each column in one of its
+   own, as src/step/html.rs says: the H3s, or the headings a heading steps
+   through as its columns. A column with no `width` takes its share of the
+   room the others leave; one with a number as its width, that many
+   shares, as the deck writes in its `flex`; one with a length, as wide as
+   that; and one with `fit`, as wide as what it holds, as its longest line
+   of code, or less, if there is no room for it, when its code scrolls. The
+   columns that share the room are kept at least as wide as
+   `--column-min-width` beside one that fits, which would leave them none. */
 .columns {
-    column-count: var(--cols, 1);
+    display: flex;
     /* The theme sets the gap on the slide. */
     column-gap: inherit;
 
-    &>[data-column]:not(:first-child) {
-        break-before: column;
+    &>[data-column] {
+        flex: 1 1 0;
+        min-width: 0;
+    }
+
+    &>[data-width="fit"] {
+        flex: 0 1 auto;
+    }
+
+    &:has(> [data-width="fit"])>[data-column]:not([data-width]) {
+        min-width: var(--column-min-width, 20%);
     }
 }
 

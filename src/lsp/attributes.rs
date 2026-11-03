@@ -1,8 +1,9 @@
 //! Completes and describes the attributes the deck reads of a heading's
 //! `{ … }` and of an HTML element's tag: `steps`, how what a heading holds
-//! steps, `step`, the steps an element shows in, and `collapse`, that it takes
-//! no space while hidden. A `step`'s value is completed with the names given
-//! to steps on the slide, counted from.
+//! steps, `width`, how wide the column it starts is, `step`, the steps an
+//! element shows in, and `collapse`, that it takes no space while hidden. A
+//! `step`'s value is completed with the names given to steps on the slide,
+//! counted from.
 
 use lsp_types::{
     Command, CompletionItem, CompletionItemKind, CompletionTextEdit, Documentation, Hover,
@@ -67,6 +68,24 @@ const ATTRIBUTES: &[Attribute] = &[
         bare: false,
         block: true,
         values: &[],
+    },
+    Attribute {
+        name: "width",
+        description: "How wide the column the heading starts is, beside the others. The columns with no width share the room the others leave equally.",
+        heading: true,
+        bare: false,
+        block: true,
+        values: &[
+            (
+                "fit",
+                "As wide as what it holds, as its longest line of code, if there is room for it; the code scrolls if there is not.",
+            ),
+            (
+                "2",
+                "A number: its share of the room left, as many as the columns with no width take one each.",
+            ),
+            ("40%", "A length, as `40%` or `12em`: as wide as that."),
+        ],
     },
     Attribute {
         name: "collapse",
@@ -510,7 +529,7 @@ mod tests {
 
     #[test]
     fn a_block_completes_the_attributes_not_written_yet() {
-        assert_eq!(labels(8, "{ "), ["step", "steps"]);
+        assert_eq!(labels(8, "{ "), ["step", "steps", "width"]);
     }
 
     #[test]
@@ -522,7 +541,7 @@ mod tests {
     #[test]
     fn steps_is_completed_in_the_tag_of_a_heading_alone() {
         assert_eq!(labels(4, "\"\" "), ["collapse"]);
-        assert_eq!(labels(6, "<h2 "), ["collapse", "step", "steps"]);
+        assert_eq!(labels(6, "<h2 "), ["collapse", "step", "steps", "width"]);
     }
 
     #[test]

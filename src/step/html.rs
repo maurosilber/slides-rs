@@ -35,8 +35,12 @@
 //!
 //! A run of `<h3>`s, up to the next heading above them, are columns too,
 //! which step one after another, as anything else does. Every run of
-//! columns is boxed in a `<div class="columns">`, for slides.css to lay them
-//! out side by side, and the editor to mark.
+//! columns is boxed in a `<div class="columns">`, and each column in a
+//! `<div data-column>`, for slides.css to lay them out side by side, and the
+//! editor to mark. A column is as wide as its heading's `width` says, as
+//! `{ width=fit }` writes: `fit`, as wide as what it holds; a number, its
+//! share of the room left, as `2`; or a length, as `40%`. The columns that
+//! say nothing share the room left equally.
 //!
 //! A bound written with its sign, as `+1`, `+0` or `-1`, is a number of
 //! steps from the step of the latest element that steps before it, among
@@ -70,8 +74,8 @@ use super::{Bound, Mark, Range, Step};
 
 /// The html with the steps of every `<section>` numbered, and its columns
 /// boxed, as slides.css lays them out: each run of them in a
-/// `<div class="columns">`, with how many it has as its `--cols`, and the
-/// heading that starts each marked `data-column`.
+/// `<div class="columns">`, with how many it has as its `--cols`, and each
+/// column in a `<div data-column>`, as wide as its heading's `width` says.
 pub fn number(html: &str) -> String {
     let elements = elements(html);
     let mut edits = Vec::new();
@@ -85,15 +89,53 @@ pub fn number(html: &str) -> String {
             let last = &elements[*run.last().unwrap().last().unwrap()];
             let open = format!("<div class=\"columns\" style=\"--cols:{}\">", run.len());
             edits.push((first.start..first.start, open));
+            // Each column is boxed too, inside the run's box, which opens
+            // first where the first column opens, and closes along with the
+            // last, as the edits at the same place go in the order given.
+            for column in &run {
+                let heading = &elements[column[0]];
+                let end = elements[*column.last().unwrap()].outer_end(html);
+                let open = match heading.attribute(html, "width") {
+                    Some(width) => column_box(width),
+                    None => "<div data-column>".to_string(),
+                };
+                edits.push((heading.start..heading.start, open));
+                edits.push((end..end, "</div>".to_string()));
+            }
             let end = last.outer_end(html);
             edits.push((end..end, "</div>".to_string()));
-            for column in &run {
-                let close = elements[column[0]].close;
-                edits.push((close..close, " data-column".to_string()));
-            }
         }
     }
     apply(html, edits)
+}
+
+/// The box of a column whose heading says how wide it is, as `width`:
+/// `fit`, as wide as what it holds, if there is room for it; a number, its
+/// share of the room the columns without a width share, as `2` is twice as
+/// wide as each of them; or a length, as `40%` or `12em`, as wide as that.
+/// Any other width is taken as none.
+fn column_box(width: &str) -> String {
+    // A share takes its part of the room as the columns that say nothing
+    // do, and is kept as wide as they are beside one that fits, as
+    // slides.css says of those with no `data-width`.
+    let width = width.trim();
+    if width == "fit" {
+        "<div data-column data-width=\"fit\">".to_string()
+    } else if let Some(share) = width.parse::<f64>().ok().filter(|share| *share > 0.0) {
+        format!("<div data-column style=\"flex:{share} 1 0\">")
+    } else if is_length(width) {
+        format!("<div data-column data-width=\"{width}\" style=\"flex:0 0 {width}\">")
+    } else {
+        "<div data-column>".to_string()
+    }
+}
+
+/// Whether the text is a length of CSS: a number and a unit, or `%`.
+fn is_length(text: &str) -> bool {
+    let unit = text.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+    let number = &text[..text.len() - unit.len()];
+    number.parse::<f64>().is_ok_and(|number| number > 0.0)
+        && (unit == "%" || (!unit.is_empty() && unit.chars().all(|c| c.is_ascii_alphabetic())))
 }
 
 /// A column of a slide, by where the heading that starts it begins and where
@@ -1916,7 +1958,7 @@ mod tests {
         let html = "<section><h1>T</h1><h3>A</h3><p>a</p><h3>B</h3><ul><li>b</li></ul><h2>S</h2><p>c</p></section>";
         assert_eq!(
             number(html),
-            "<section data-count=\"7\"><h1>T</h1><div class=\"columns\" style=\"--cols:2\"><h3 class=\"step\" style=\"--from:2\" data-column>A</h3><p class=\"step\" style=\"--from:3\">a</p><h3 class=\"step\" style=\"--from:4\" data-column>B</h3><ul class=\"step\" style=\"--from:5\"><li class=\"step\" style=\"--from:5\">b</li></ul></div><h2 class=\"step\" style=\"--from:6\">S</h2><p class=\"step\" style=\"--from:7\">c</p></section>"
+            "<section data-count=\"7\"><h1>T</h1><div class=\"columns\" style=\"--cols:2\"><div data-column><h3 class=\"step\" style=\"--from:2\">A</h3><p class=\"step\" style=\"--from:3\">a</p></div><div data-column><h3 class=\"step\" style=\"--from:4\">B</h3><ul class=\"step\" style=\"--from:5\"><li class=\"step\" style=\"--from:5\">b</li></ul></div></div><h2 class=\"step\" style=\"--from:6\">S</h2><p class=\"step\" style=\"--from:7\">c</p></section>"
         );
     }
 
@@ -1932,7 +1974,7 @@ mod tests {
             "{numbered}"
         );
         assert!(
-            numbered.contains("<p class=\"step\" style=\"--from:2\">b</p></div></section>"),
+            numbered.contains("<p class=\"step\" style=\"--from:2\">b</p></div></div></section>"),
             "{numbered}"
         );
         let columns: Vec<_> = slides(html)
@@ -1949,6 +1991,44 @@ mod tests {
                 ("<h3>x", 0),
                 ("<h3>y", 1),
             ]
+        );
+    }
+
+    #[test]
+    fn a_column_is_as_wide_as_its_heading_says() {
+        let html = "<section><h1>T</h1><h3 width=\"fit\">A</h3><h3 width=\"2\">B</h3><h3 width=\"40%\">C</h3><h3 width=\"wide\">D</h3><h3>E</h3></section>";
+        let numbered = number(html);
+        let boxes: Vec<_> = numbered
+            .match_indices("<div data-column")
+            .map(|(at, _)| &numbered[at..at + numbered[at..].find('>').unwrap() + 1])
+            .collect();
+        assert_eq!(
+            boxes,
+            [
+                "<div data-column data-width=\"fit\">",
+                "<div data-column style=\"flex:2 1 0\">",
+                "<div data-column data-width=\"40%\" style=\"flex:0 0 40%\">",
+                "<div data-column>",
+                "<div data-column>",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_columns_in_a_column_are_boxed_inside_its_box() {
+        let html = "<section><h1 steps=\"parallel\">T</h1><h2>A</h2><p>a</p><h2 width=\"fit\">B</h2><h3>x</h3><h3>y</h3></section>";
+        let numbered = number(html);
+        assert!(
+            numbered.contains("<div class=\"columns\" style=\"--cols:2\"><div data-column><h2"),
+            "{numbered}"
+        );
+        assert!(
+            numbered.contains("<div data-column data-width=\"fit\"><h2 width=\"fit\">B</h2><div class=\"columns\" style=\"--cols:2\"><div data-column><h3"),
+            "{numbered}"
+        );
+        assert!(
+            numbered.ends_with("y</h3></div></div></div></div></section>"),
+            "{numbered}"
         );
     }
 

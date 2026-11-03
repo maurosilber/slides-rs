@@ -95,6 +95,24 @@ After the title, each element is a step: this paragraph, each heading, each item
 
 ---
 
+# Columns of their own width
+
+### Code { width=fit }
+
+```python
+def mean(xs):
+    return sum(xs) / len(xs)
+```
+
+### Text
+
+- `{ width=fit }` is as wide as its code,
+- `{ width=2 }` takes two shares of the room left,
+- `{ width=40% }` is as wide as that,
+- and a column with no width takes one share.
+
+---
+
 # Named steps
 
 ### Method { step=method }

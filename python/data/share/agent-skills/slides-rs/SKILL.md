@@ -63,7 +63,10 @@ Plain CommonMark: **bold**, *italic*, `code`, [links](https://example.com), > qu
   other keys, such as a title or author, are ignored.
 - `#` is the slide title. `##` is a full-width subtitle, which counts as a
   step. Each `###` starts a column, and consecutive `###` columns sit side by
-  side.
+  side, sharing the width equally. `### Code { width=fit }` makes a column as
+  wide as its content (its longest code line), `{ width=2 }` gives it two
+  shares of the remaining width, and `{ width=40% }` (or `12em`) a fixed
+  width; columns without a width share what is left.
 - Headings take attributes: `# Title { #some-id .some-class }`, and
   `{ steps=false }` turns stepping off for that heading's content.
 - `<import-slide src="sections/intro.md" />` inlines another markdown file's
