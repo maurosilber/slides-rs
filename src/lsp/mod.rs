@@ -80,6 +80,13 @@ pub fn serve() -> Result<()> {
             ..Default::default()
         }),
         hover_provider: Some(lsp_types::HoverProviderCapability::Simple(true)),
+        // The cells' quick fixes, as an import, from their Python server.
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Options(
+            lsp_types::CodeActionOptions {
+                resolve_provider: Some(true),
+                ..Default::default()
+            },
+        )),
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(["(", ","].map(String::from).to_vec()),
             ..Default::default()
@@ -345,9 +352,11 @@ impl Server {
             // Outside the code cells, there is no Python to ask of.
             "textDocument/signatureHelp"
             | "textDocument/definition"
-            | "textDocument/references" => Value::Null,
-            // The deck's own completions are whole already.
-            "completionItem/resolve" => params,
+            | "textDocument/references"
+            | "textDocument/codeAction" => Value::Null,
+            // The deck's own completions, and a server's that it does not
+            // resolve, are whole already.
+            "completionItem/resolve" | "codeAction/resolve" => params,
             "textDocument/documentLink" => {
                 let params: lsp_types::DocumentLinkParams = parse(params)?;
                 serde_json::to_value(self.import_links(params.text_document.uri.as_str()))?

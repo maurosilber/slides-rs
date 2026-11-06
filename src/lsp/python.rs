@@ -77,6 +77,10 @@ struct Server {
     writer: Sender<Message>,
     /// Whether it has answered `initialize`, before which what it is told waits.
     ready: bool,
+    /// Whether it resolves its completions, as ty does not.
+    resolves: bool,
+    /// Whether it resolves its code actions.
+    resolves_actions: bool,
     queue: Vec<Message>,
     /// The cells' interpreter, which pyright asks for as `python.pythonPath`.
     python: Option<PathBuf>,
@@ -127,6 +131,8 @@ enum Asked {
     Completion { document: String },
     /// Locations, in the cells' file, which are in the markdown.
     Locations { document: String },
+    /// Code actions, whose edits of the cells' file are of the markdown.
+    Actions { document: String },
 }
 
 pub struct Pythons {
@@ -334,6 +340,8 @@ impl Pythons {
             child,
             writer,
             ready: false,
+            resolves: false,
+            resolves_actions: false,
             queue: Vec::new(),
             python,
             folders: HashSet::new(),
@@ -417,7 +425,7 @@ impl Pythons {
     /// whether it did: outside them, or without a server, the deck answers.
     pub fn forward(&mut self, request: &Request, text: &str) -> bool {
         let method = request.method.as_str();
-        if method == "completionItem/resolve" {
+        if method == "completionItem/resolve" || method == "codeAction/resolve" {
             return self.resolve(request);
         }
         if !matches!(
@@ -427,6 +435,7 @@ impl Pythons {
                 | "textDocument/signatureHelp"
                 | "textDocument/definition"
                 | "textDocument/references"
+                | "textDocument/codeAction"
         ) {
             return false;
         }
@@ -440,7 +449,12 @@ impl Pythons {
         let Some(tracked) = self.documents.get(&uri) else {
             return false;
         };
-        let line = request.params["position"]["line"].as_u64().unwrap_or(0) as usize;
+        let at = if method == "textDocument/codeAction" {
+            &request.params["range"]["start"]
+        } else {
+            &request.params["position"]
+        };
+        let line = at["line"].as_u64().unwrap_or(0) as usize;
         if !in_cells(&tracked.shadow.cells, line) {
             return false;
         }
@@ -449,6 +463,7 @@ impl Pythons {
         params["textDocument"]["uri"] = json!(tracked.shadow.uri);
         let asked = match method {
             "textDocument/completion" => Asked::Completion { document: uri },
+            "textDocument/codeAction" => Asked::Actions { document: uri },
             "textDocument/definition" | "textDocument/references" => {
                 Asked::Locations { document: uri }
             }
@@ -463,8 +478,10 @@ impl Pythons {
         true
     }
 
-    /// Resolves a completion a server gave, which says which it was.
+    /// Resolves a completion or a code action a server gave, which says which
+    /// it was.
     fn resolve(&mut self, request: &Request) -> bool {
+        let method = request.method.as_str();
         let given = &request.params["data"];
         let (Some(index), Some(document)) = (
             given["slidesServer"].as_u64(),
@@ -475,13 +492,21 @@ impl Pythons {
         let index = index as usize;
         let mut item = request.params.clone();
         item["data"] = given["data"].clone();
-        let asked = Asked::Completion {
-            document: document.to_string(),
+        let document = document.to_string();
+        let action = method == "codeAction/resolve";
+        let asked = if action {
+            Asked::Actions { document }
+        } else {
+            Asked::Completion { document }
         };
+        // A server that does not resolve its completions gave them whole.
         let Some(server) = self.servers.get_mut(index).and_then(Option::as_mut) else {
             return false;
         };
-        let id = server.request("completionItem/resolve", item);
+        if !(if action { server.resolves_actions } else { server.resolves }) {
+            return false;
+        }
+        let id = server.request(method, item);
         self.pending
             .insert((index, id), (request.id.clone(), asked));
         true
@@ -522,11 +547,21 @@ impl Pythons {
             let Some(server) = self.servers[index].as_mut() else {
                 return;
             };
-            if let Err(error) = response.response_result {
-                eprintln!("{} could not start: {}", server.name, error.message);
-                self.stop(index);
-                return;
-            }
+            let result = match response.response_result {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{} could not start: {}", server.name, error.message);
+                    self.stop(index);
+                    return;
+                }
+            };
+            server.resolves = result["capabilities"]["completionProvider"]["resolveProvider"]
+                .as_bool()
+                .unwrap_or(false);
+            server.resolves_actions = result["capabilities"]["codeActionProvider"]
+                ["resolveProvider"]
+                .as_bool()
+                .unwrap_or(false);
             let _ = server.writer.send(Message::Notification(Notification::new(
                 "initialized".to_string(),
                 json!({}),
@@ -550,6 +585,11 @@ impl Pythons {
                     Asked::Plain => {}
                     Asked::Completion { document } => {
                         self.completions(index, &document, &mut result)
+                    }
+                    Asked::Actions { document } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            actions(&mut result, index, &document, &tracked.shadow);
+                        }
                     }
                     Asked::Locations { document } => {
                         if let Some(tracked) = self.documents.get(&document) {
@@ -748,6 +788,49 @@ fn keep_in_cells(edits: Vec<Value>, cells: &[(usize, usize)]) -> Vec<Value> {
                 .then_some(edit)
         })
         .collect()
+}
+
+/// Code actions on a deck's cells, or one resolved, each saying which server
+/// gave it, to be resolved, and with its edits of the cells' file made of the
+/// markdown, within the cells.
+fn actions(result: &mut Value, index: usize, document: &str, shadow: &Shadow) {
+    let actions = match result {
+        Value::Array(actions) => actions,
+        Value::Object(_) => std::slice::from_mut(result),
+        _ => return,
+    };
+    for action in actions.iter_mut() {
+        // A command alone, run by the server, has no edits nor data.
+        if action.get("title").is_none() || action["command"].is_string() {
+            continue;
+        }
+        let data = action.get("data").cloned().unwrap_or(Value::Null);
+        action["data"] = json!({ "slidesServer": index, "slidesDocument": document, "data": data });
+        if let Some(edit) = action.get_mut("edit") {
+            in_deck_edit(edit, &shadow.uri, document, &shadow.cells);
+        }
+    }
+}
+
+/// A workspace edit of the cells' file, made of the markdown, within the cells.
+fn in_deck_edit(edit: &mut Value, shadow: &str, document: &str, cells: &[(usize, usize)]) {
+    if let Some(changes) = edit.get_mut("changes").and_then(Value::as_object_mut)
+        && let Some(Value::Array(edits)) = changes.remove(shadow)
+    {
+        changes.insert(document.to_string(), json!(keep_in_cells(edits, cells)));
+    }
+    if let Some(Value::Array(changes)) = edit.get_mut("documentChanges") {
+        for change in changes.iter_mut() {
+            if change["textDocument"]["uri"].as_str() != Some(shadow) {
+                continue;
+            }
+            // The version is the server's of the cells' file, not the deck's.
+            change["textDocument"] = json!({ "uri": document, "version": null });
+            if let Some(Value::Array(edits)) = change.get_mut("edits") {
+                *edits = keep_in_cells(std::mem::take(edits), cells);
+            }
+        }
+    }
 }
 
 /// Locations in the cells' file, which are in the markdown.
@@ -966,6 +1049,33 @@ mod tests {
             .map(|d| d["range"]["start"]["line"].as_u64().unwrap())
             .collect();
         assert_eq!(lines, [6, 2]);
+    }
+
+    #[test]
+    fn a_code_actions_edits_of_the_cells_file_are_of_the_deck() {
+        let at = |line: u32| json!({ "line": line, "character": 0 });
+        let import = json!({ "range": { "start": at(0), "end": at(0) }, "newText": "import os\n" });
+        let shadow = Shadow {
+            uri: "file:///d/.talk.md.py".to_string(),
+            version: 3,
+            text: String::new(),
+            cells: vec![(11, 13)],
+        };
+        let mut result = json!([
+            { "title": "Import os", "kind": "quickfix", "data": 7, "edit": { "changes": { "file:///d/.talk.md.py": [import] } } },
+            { "title": "Import os", "edit": { "documentChanges": [{ "textDocument": { "uri": "file:///d/.talk.md.py", "version": 3 }, "edits": [import] }] } },
+            { "title": "Run", "command": "server.run" },
+        ]);
+        actions(&mut result, 1, "file:///d/talk.md", &shadow);
+        let first = &result[0];
+        assert_eq!(first["data"], json!({ "slidesServer": 1, "slidesDocument": "file:///d/talk.md", "data": 7 }));
+        let edits = &first["edit"]["changes"]["file:///d/talk.md"];
+        assert_eq!(edits[0]["range"]["start"]["line"], 11);
+        assert!(first["edit"]["changes"].get("file:///d/.talk.md.py").is_none());
+        let change = &result[1]["edit"]["documentChanges"][0];
+        assert_eq!(change["textDocument"], json!({ "uri": "file:///d/talk.md", "version": null }));
+        assert_eq!(change["edits"][0]["range"]["start"]["line"], 11);
+        assert!(result[2].get("data").is_none());
     }
 
     #[test]
