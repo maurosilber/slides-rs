@@ -97,6 +97,29 @@ pub fn serve() -> Result<()> {
         implementation_provider: Some(lsp_types::ImplementationProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
         document_highlight_provider: Some(OneOf::Left(true)),
+        // The cells' tokens, of the kinds their servers have, told as the
+        // deck's.
+        semantic_tokens_provider: Some(
+            lsp_types::SemanticTokensServerCapabilities::SemanticTokensOptions(
+                lsp_types::SemanticTokensOptions {
+                    legend: lsp_types::SemanticTokensLegend {
+                        token_types: python::TOKEN_TYPES
+                            .iter()
+                            .map(|kind| lsp_types::SemanticTokenType::new(kind))
+                            .collect(),
+                        token_modifiers: python::TOKEN_MODIFIERS
+                            .iter()
+                            .map(|modifier| lsp_types::SemanticTokenModifier::new(modifier))
+                            .collect(),
+                    },
+                    full: Some(lsp_types::SemanticTokensFullOptions::Bool(true)),
+                    range: Some(true),
+                    ..Default::default()
+                },
+            ),
+        ),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
+        call_hierarchy_provider: Some(lsp_types::CallHierarchyServerCapability::Simple(true)),
         // A name in the cells, renamed in all of them.
         rename_provider: Some(OneOf::Right(lsp_types::RenameOptions {
             prepare_provider: Some(true),
@@ -119,7 +142,19 @@ pub fn serve() -> Result<()> {
         experimental: Some(json!({ "executable": std::env::current_exe()? })),
         ..Default::default()
     };
-    let params = connection.initialize(serde_json::to_value(capabilities)?)?;
+    let mut capabilities = serde_json::to_value(capabilities)?;
+    // Which lsp-types has no field for.
+    capabilities["typeHierarchyProvider"] = json!(true);
+    // The cells' folds, along with those the editor has of markdown, which
+    // it has not of a `.slides.md`: there, it folds the cells as it folds
+    // the rest, by their indentation, which a provider would replace.
+    capabilities["foldingRangeProvider"] =
+        json!({ "documentSelector": [{ "language": "markdown" }] });
+    // The outline of a `.slides.md`, which the editor has not of its own,
+    // as it has of markdown.
+    capabilities["documentSymbolProvider"] =
+        json!({ "documentSelector": [{ "language": "slides" }] });
+    let params = connection.initialize(capabilities)?;
     let (events, heard) = std::sync::mpsc::channel();
     let receiver = connection.receiver.clone();
     let client = events.clone();
@@ -378,13 +413,32 @@ impl Server {
             | "textDocument/selectionRange"
             | "textDocument/inlayHint"
             | "textDocument/codeAction"
-            | "textDocument/rename" => Value::Null,
+            | "textDocument/rename"
+            | "textDocument/semanticTokens/full"
+            | "textDocument/semanticTokens/range"
+            | "textDocument/foldingRange"
+            | "workspace/symbol"
+            | "textDocument/prepareCallHierarchy"
+            | "callHierarchy/incomingCalls"
+            | "callHierarchy/outgoingCalls"
+            | "textDocument/prepareTypeHierarchy"
+            | "typeHierarchy/supertypes"
+            | "typeHierarchy/subtypes" => Value::Null,
             // Not `null`, which the extension takes as refusing to rename, but
             // leaving it to what else renames the markdown.
             "textDocument/prepareRename" => json!({ "defaultBehavior": true }),
             // The deck's own completions, and what a server gave that it does
             // not resolve, are whole already.
             "completionItem/resolve" | "codeAction/resolve" | "inlayHint/resolve" => params,
+            // Its headings, without a server for its cells.
+            "textDocument/documentSymbol" => {
+                let params: lsp_types::DocumentSymbolParams = parse(params)?;
+                let text = self
+                    .documents
+                    .get(params.text_document.uri.as_str())
+                    .map_or("", |document| document.text.as_str());
+                json!(python::outline(text, Vec::new()))
+            }
             "textDocument/documentLink" => {
                 let params: lsp_types::DocumentLinkParams = parse(params)?;
                 serde_json::to_value(self.import_links(params.text_document.uri.as_str()))?

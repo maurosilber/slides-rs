@@ -54,9 +54,10 @@ describes it. Both come from the deck's
 [`frontmatter.schema.json`](../src/frontmatter.schema.json).
 
 In the text editor, the Python cells have the diagnostics, hovers, signature
-help, completions, code actions, inlay hints, definitions, type definitions,
-declarations, implementations, references, highlights, selection ranges and
-renames of a Python language server
+help, completions, code actions, inlay hints, semantic highlighting,
+definitions, type definitions, declarations, implementations, references,
+highlights, selection ranges, renames, symbols, and call and type hierarchies
+of a Python language server, as far as it has them
 that `slides-rs lsp` starts in the environment the cells run in, so that it
 resolves their imports as the kernel does, in the environment the deck's lock
 file pins. It is the first of `basedpyright-langserver`, `ty`,
@@ -66,7 +67,9 @@ the project's `pixi.toml` can add as any other dependency. The
 of the file's Python cells, in order, as the cells before each one run, each
 line where it is in the deck and the rest blank, as a file that is never
 written. An expression left unused at the end of a cell is not reported, as
-the kernel shows it. Its log is in the *Slides Notebook* output. In a
+the kernel shows it. The outline of a `.slides.md` is its slides' headings,
+with the symbols of the cells under theirs. In other markdown, the cells fold
+as the server folds them, along with the markdown. Its log is in the *Slides Notebook* output. In a
 notebook, its cells are Python documents the editor's own Python language
 server completes.
 

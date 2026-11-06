@@ -34,6 +34,6 @@ await runTests({
 	extensionDevelopmentPath: root,
 	extensionTestsPath: path.join(root, 'test', 'suite.cjs'),
 	launchArgs: ['--extensions-dir', extensions, '--user-data-dir', path.join(root, '.vscode-test', 'user-data'), '--disable-workspace-trust', workspace],
-	extensionTestsEnv: { SLIDES_DECK: deck, SLIDES_RS: slidesRs },
+	extensionTestsEnv: { SLIDES_DECK: deck, SLIDES_RS: slidesRs, SLIDES_PYTHON_SERVER: process.env.SLIDES_PYTHON_SERVER ?? '' },
 });
 console.log(`deck: ${deck}`);

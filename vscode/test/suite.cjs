@@ -185,7 +185,15 @@ const tests = {
 			'~~~python', 'import math', '', 'def double(x: float) -> float:', '    return 2 * x', '~~~', '',
 			'Some text.', '',
 			'~~~python', 'x = double(math.pi)', 'missing_name', '~~~', '',
+			'~~~python', 'class Base: ...', 'class Child(Base): ...', '~~~', '',
 		].join('\n');
+		// What each server has, of what the cells are asked.
+		const server = process.env.SLIDES_PYTHON_SERVER || 'basedpyright';
+		const has = {
+			tokens: server !== 'pyrefly',
+			folds: server !== 'basedpyright',
+			types: server !== 'basedpyright',
+		};
 		fs.writeFileSync(file, content);
 		const document = await vscode.workspace.openTextDocument(file);
 		await vscode.window.showTextDocument(document);
@@ -217,6 +225,59 @@ const tests = {
 		const renamed = rename.entries();
 		assert.deepStrictEqual(renamed.map(([uri]) => uri.toString()), [document.uri.toString()]);
 		assert.deepStrictEqual(renamed[0][1].map((edit) => [edit.range.start.line, edit.newText]), [[5, 'twice'], [12, 'twice']]);
+		// The cells' symbols, along with the markdown's.
+		const symbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', document.uri);
+		const flat = (symbols) => symbols.flatMap((symbol) => [symbol, ...flat(symbol.children ?? [])]);
+		const double = flat(symbols).find((symbol) => symbol.name === 'double');
+		assert.ok(double, `double is a symbol of ${flat(symbols).map((symbol) => symbol.name)}`);
+		assert.strictEqual((double.range ?? double.location.range).start.line, 5);
+		const found = await until(async () => {
+			const found = await vscode.commands.executeCommand('vscode.executeWorkspaceSymbolProvider', 'double');
+			return found.some((symbol) => symbol.location.uri.toString() === document.uri.toString()) && found;
+		});
+		assert.ok(found.every((symbol) => !symbol.location.uri.path.endsWith('.md.py')), 'the cells\' file is never shown');
+		// What calls double, in the deck.
+		const [callee] = await vscode.commands.executeCommand('vscode.prepareCallHierarchy', document.uri, new vscode.Position(12, 6));
+		assert.strictEqual(callee.uri.toString(), document.uri.toString());
+		assert.strictEqual(callee.range.start.line, 5);
+		const incoming = await vscode.commands.executeCommand('vscode.provideIncomingCalls', callee);
+		assert.deepStrictEqual([...new Set(incoming.flatMap((call) => call.fromRanges.map((range) => range.start.line)))], [12]);
+		if (has.types) {
+			const [child] = await vscode.commands.executeCommand('vscode.prepareTypeHierarchy', document.uri, new vscode.Position(18, 7));
+			const supertypes = await vscode.commands.executeCommand('vscode.provideSupertypes', child);
+			// And object, for pyrefly.
+			const base = supertypes.find((type) => type.name === 'Base');
+			assert.deepStrictEqual([base.uri.toString(), base.range.start.line], [document.uri.toString(), 17]);
+		}
+		if (has.tokens) {
+			const legend = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokensLegend', document.uri);
+			const data = await until(async () => (await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokens', document.uri))?.data);
+			const tokens = [];
+			for (let i = 0, line = 0, start = 0; i < data.length; i += 5) {
+				line += data[i];
+				start = data[i] ? data[i + 1] : start + data[i + 1];
+				tokens.push({ line, start, type: legend.tokenTypes[data[i + 3]] });
+			}
+			assert.ok(tokens.some((token) => token.line === 12 && token.start === 4 && token.type === 'function'), JSON.stringify(tokens));
+			assert.ok(tokens.every((token) => [3, 5, 6, 12, 13, 17, 18].includes(token.line)), 'tokens are in the cells');
+		}
+		// The deck's outline: its headings, with the cells' symbols under them.
+		assert.deepStrictEqual(symbols.map((symbol) => symbol.name), ['Code']);
+		assert.ok(symbols[0].children.some((symbol) => symbol.name === 'double'));
+		// In markdown, the cells' folds are along with the markdown's, which the
+		// editor has. A `.slides.md` folds them by their indentation.
+		if (has.folds) {
+			const markdown = path.join(dir, 'talk.md');
+			fs.writeFileSync(markdown, content);
+			const other = await vscode.workspace.openTextDocument(markdown);
+			await vscode.window.showTextDocument(other);
+			const folds = await until(async () => {
+				const folds = await vscode.commands.executeCommand('vscode.executeFoldingRangeProvider', other.uri);
+				return folds.some((fold) => fold.start === 5 && fold.end === 6) && folds;
+			}, 30000);
+			assert.ok(folds.some((fold) => fold.start === 0), `the heading folds too: ${JSON.stringify(folds)}`);
+			fs.rmSync(markdown);
+		}
 		// Outside the cells, it has nothing to say.
 		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(9, 2)), []);
 		// The cells' file is never written.

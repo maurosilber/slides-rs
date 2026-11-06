@@ -16,9 +16,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
-use lsp_server::{Message, Notification, Request, RequestId, Response};
+use lsp_server::{ErrorCode, Message, Notification, Request, RequestId, Response};
 use serde_json::{Value, json};
-use slides::markdown::code_cells;
+use slides::markdown::{breaks, code_cells};
 use slides::paths::parent;
 
 use super::{Event, file_path, file_uri};
@@ -30,6 +30,54 @@ const SERVERS: &[(&str, &[&str])] = &[
     ("ty", &["server"]),
     ("pyright-langserver", &["--stdio"]),
     ("pyrefly", &["lsp"]),
+];
+
+/// The kinds of semantic tokens the deck declares, which each server's are
+/// told as: those of the protocol, and those of a Python server that are not.
+pub const TOKEN_TYPES: &[&str] = &[
+    "namespace",
+    "type",
+    "class",
+    "enum",
+    "interface",
+    "struct",
+    "typeParameter",
+    "parameter",
+    "variable",
+    "property",
+    "enumMember",
+    "event",
+    "function",
+    "method",
+    "macro",
+    "keyword",
+    "modifier",
+    "comment",
+    "string",
+    "number",
+    "regexp",
+    "operator",
+    "decorator",
+    "selfParameter",
+    "clsParameter",
+    "builtinConstant",
+];
+
+/// The modifiers of semantic tokens the deck declares, as `TOKEN_TYPES`.
+pub const TOKEN_MODIFIERS: &[&str] = &[
+    "declaration",
+    "definition",
+    "readonly",
+    "static",
+    "deprecated",
+    "abstract",
+    "async",
+    "modification",
+    "documentation",
+    "defaultLibrary",
+    "builtin",
+    "classMember",
+    "parameter",
 ];
 
 /// What sends a message to the extension.
@@ -78,12 +126,8 @@ struct Server {
     writer: Sender<Message>,
     /// Whether it has answered `initialize`, before which what it is told waits.
     ready: bool,
-    /// Whether it resolves its completions, as ty does not.
-    resolves: bool,
-    /// Whether it resolves its code actions.
-    resolves_actions: bool,
-    /// Whether it resolves its inlay hints.
-    resolves_hints: bool,
+    /// What it said it does, in `initialize` or registering it since.
+    capabilities: Value,
     queue: Vec<Message>,
     /// The cells' interpreter, which pyright asks for as `python.pythonPath`.
     python: Option<PathBuf>,
@@ -118,6 +162,59 @@ impl Server {
             params,
         )));
     }
+
+    /// Whether it does what a method asks, as it said: as basedpyright does
+    /// not select ranges, nor ty resolve its completions. Before it says,
+    /// it is taken to.
+    fn provides(&self, method: &str) -> bool {
+        if !self.ready {
+            return true;
+        }
+        let Some(path) = capability(method) else {
+            return true;
+        };
+        path.iter()
+            .try_fold(&self.capabilities, |value, key| value.get(*key))
+            .is_some_and(|value| !value.is_null() && *value != Value::Bool(false))
+    }
+}
+
+/// Where in a server's capabilities it says it does what a method asks.
+fn capability(method: &str) -> Option<&'static [&'static str]> {
+    Some(match method {
+        "textDocument/completion" => &["completionProvider"],
+        "completionItem/resolve" => &["completionProvider", "resolveProvider"],
+        "textDocument/hover" => &["hoverProvider"],
+        "textDocument/signatureHelp" => &["signatureHelpProvider"],
+        "textDocument/definition" => &["definitionProvider"],
+        "textDocument/typeDefinition" => &["typeDefinitionProvider"],
+        "textDocument/declaration" => &["declarationProvider"],
+        "textDocument/implementation" => &["implementationProvider"],
+        "textDocument/references" => &["referencesProvider"],
+        "textDocument/documentHighlight" => &["documentHighlightProvider"],
+        "textDocument/selectionRange" => &["selectionRangeProvider"],
+        "textDocument/inlayHint" => &["inlayHintProvider"],
+        "inlayHint/resolve" => &["inlayHintProvider", "resolveProvider"],
+        "textDocument/codeAction" => &["codeActionProvider"],
+        "codeAction/resolve" => &["codeActionProvider", "resolveProvider"],
+        "textDocument/prepareRename" => &["renameProvider", "prepareProvider"],
+        "textDocument/rename" => &["renameProvider"],
+        // As a server registers them, for both.
+        "textDocument/semanticTokens" | "textDocument/semanticTokens/range" => {
+            &["semanticTokensProvider"]
+        }
+        "textDocument/semanticTokens/full" => &["semanticTokensProvider", "full"],
+        "textDocument/foldingRange" => &["foldingRangeProvider"],
+        "textDocument/documentSymbol" => &["documentSymbolProvider"],
+        "workspace/symbol" => &["workspaceSymbolProvider"],
+        "textDocument/prepareCallHierarchy"
+        | "callHierarchy/incomingCalls"
+        | "callHierarchy/outgoingCalls" => &["callHierarchyProvider"],
+        "textDocument/prepareTypeHierarchy"
+        | "typeHierarchy/supertypes"
+        | "typeHierarchy/subtypes" => &["typeHierarchyProvider"],
+        _ => return None,
+    })
 }
 
 /// A deck whose cells a server was told of.
@@ -140,6 +237,29 @@ enum Asked {
     Ranges { document: String },
     /// Inlay hints, of which those in the cells are kept.
     Hints { document: String },
+    /// Semantic tokens, of the server's kinds, which are told as the deck's,
+    /// in the cells, and on the lines asked for, if a range was.
+    Tokens {
+        document: String,
+        types: Vec<Option<u32>>,
+        modifiers: Vec<Option<u32>>,
+        lines: Option<(usize, usize)>,
+    },
+    /// Folding ranges, of which those within a cell are kept.
+    Folds { document: String },
+    /// The symbols of the cells' file, of which those in the cells are kept,
+    /// under the deck's headings they are under.
+    Symbols {
+        document: String,
+        headings: Vec<Value>,
+    },
+    /// Call or type hierarchy items, which say which server gave them.
+    Items,
+    /// Calls, whose hierarchy items say which server gave them.
+    Calls,
+    /// Workspace symbols, one server's of those asked of all, of which those
+    /// in the decks' cells are kept.
+    Gather { key: i32 },
     /// A workspace edit, as a rename's, whose edits of the cells' file are of
     /// the markdown, and of other files as they are.
     Edit { document: String },
@@ -163,6 +283,10 @@ pub struct Pythons {
     documents: HashMap<String, Tracked>,
     /// The extension's requests asked of a server, by the server and its id.
     pending: HashMap<(usize, RequestId), (RequestId, Asked)>,
+    /// The workspace symbols asked of every server, by a key of their own:
+    /// the extension's request, how many servers are still to answer, and
+    /// the symbols the others did.
+    gathers: HashMap<i32, (RequestId, usize, Vec<Value>)>,
     /// A server's requests asked of the extension, by their id there.
     forwarded: HashMap<RequestId, (usize, RequestId, Value)>,
     next: i32,
@@ -200,6 +324,7 @@ impl Pythons {
             by_lock: HashMap::new(),
             documents: HashMap::new(),
             pending: HashMap::new(),
+            gathers: HashMap::new(),
             forwarded: HashMap::new(),
             next: 0,
             diagnostics: HashMap::new(),
@@ -350,9 +475,7 @@ impl Pythons {
             child,
             writer,
             ready: false,
-            resolves: false,
-            resolves_actions: false,
-            resolves_hints: false,
+            capabilities: Value::Null,
             queue: Vec::new(),
             python,
             folders: HashSet::new(),
@@ -421,6 +544,7 @@ impl Pythons {
                     "textDocument/didOpen",
                     json!({ "textDocument": { "uri": shadow.uri, "languageId": "python", "version": 1, "text": shadow.text } }),
                 );
+                let ready = server.ready;
                 self.documents.insert(
                     uri.to_string(),
                     Tracked {
@@ -428,6 +552,9 @@ impl Pythons {
                         shadow,
                     },
                 );
+                if ready {
+                    self.refresh();
+                }
             }
         }
     }
@@ -436,11 +563,16 @@ impl Pythons {
     /// whether it did: outside them, or without a server, the deck answers.
     pub fn forward(&mut self, request: &Request, text: &str) -> bool {
         let method = request.method.as_str();
-        if matches!(
-            method,
-            "completionItem/resolve" | "codeAction/resolve" | "inlayHint/resolve"
-        ) {
-            return self.resolve(request);
+        match method {
+            "completionItem/resolve" | "codeAction/resolve" | "inlayHint/resolve" => {
+                return self.resolve(request);
+            }
+            "callHierarchy/incomingCalls"
+            | "callHierarchy/outgoingCalls"
+            | "typeHierarchy/supertypes"
+            | "typeHierarchy/subtypes" => return self.hierarchy(request),
+            "workspace/symbol" => return self.workspace_symbols(request),
+            _ => {}
         }
         if !matches!(
             method,
@@ -458,6 +590,12 @@ impl Pythons {
                 | "textDocument/codeAction"
                 | "textDocument/prepareRename"
                 | "textDocument/rename"
+                | "textDocument/semanticTokens/full"
+                | "textDocument/semanticTokens/range"
+                | "textDocument/foldingRange"
+                | "textDocument/documentSymbol"
+                | "textDocument/prepareCallHierarchy"
+                | "textDocument/prepareTypeHierarchy"
         ) {
             return false;
         }
@@ -467,6 +605,20 @@ impl Pythons {
         else {
             return false;
         };
+        // What the editor asks of every document it shows, rather than of
+        // what the cursor is on, starts no server for a markdown file that is
+        // not a deck: a deck's is started as its slides are checked.
+        let unasked = matches!(
+            method,
+            "textDocument/inlayHint"
+                | "textDocument/semanticTokens/full"
+                | "textDocument/semanticTokens/range"
+                | "textDocument/foldingRange"
+                | "textDocument/documentSymbol"
+        );
+        if unasked && !self.documents.contains_key(&uri) {
+            return false;
+        }
         self.track(&uri, text);
         let Some(tracked) = self.documents.get(&uri) else {
             return false;
@@ -475,9 +627,48 @@ impl Pythons {
             return false;
         }
         let index = tracked.server;
+        let Some(server) = self.servers[index].as_ref() else {
+            return false;
+        };
+        if !server.provides(method) {
+            return false;
+        }
         let mut params = request.params.clone();
         params["textDocument"]["uri"] = json!(tracked.shadow.uri);
+        let mut method = method;
         let asked = match method {
+            "textDocument/semanticTokens/full" | "textDocument/semanticTokens/range" => {
+                // Its kinds are not known before it says them.
+                if !server.ready {
+                    return false;
+                }
+                let provider = &server.capabilities["semanticTokensProvider"];
+                let lines = (method == "textDocument/semanticTokens/range").then(|| {
+                    let line = |at: &str| params["range"][at]["line"].as_u64().unwrap_or(0);
+                    (line("start") as usize, line("end") as usize)
+                });
+                // Asked for the whole file, of a server that has no range.
+                if lines.is_some() && !provider["range"].as_bool().unwrap_or(false) {
+                    method = "textDocument/semanticTokens/full";
+                    if let Some(params) = params.as_object_mut() {
+                        params.remove("range");
+                    }
+                }
+                Asked::Tokens {
+                    document: uri,
+                    types: legend(&provider["legend"]["tokenTypes"], TOKEN_TYPES),
+                    modifiers: legend(&provider["legend"]["tokenModifiers"], TOKEN_MODIFIERS),
+                    lines,
+                }
+            }
+            "textDocument/foldingRange" => Asked::Folds { document: uri },
+            "textDocument/documentSymbol" => Asked::Symbols {
+                document: uri,
+                headings: outline(text, Vec::new()),
+            },
+            "textDocument/prepareCallHierarchy" | "textDocument/prepareTypeHierarchy" => {
+                Asked::Items
+            }
             "textDocument/completion" => Asked::Completion { document: uri },
             "textDocument/codeAction" => Asked::Actions { document: uri },
             "textDocument/documentHighlight" => Asked::Ranges { document: uri },
@@ -517,32 +708,136 @@ impl Pythons {
         let Some(server) = self.servers.get_mut(index).and_then(Option::as_mut) else {
             return false;
         };
-        let (asked, resolves) = match method {
-            "codeAction/resolve" => (Asked::Actions { document }, server.resolves_actions),
-            "inlayHint/resolve" => (Asked::Hints { document }, server.resolves_hints),
-            _ => (Asked::Completion { document }, server.resolves),
-        };
         // A server that does not resolve what it gives gave it whole.
-        if !resolves {
+        if !server.provides(method) {
             return false;
         }
+        let asked = match method {
+            "codeAction/resolve" => Asked::Actions { document },
+            "inlayHint/resolve" => Asked::Hints { document },
+            _ => Asked::Completion { document },
+        };
         let id = server.request(method, item);
         self.pending
             .insert((index, id), (request.id.clone(), asked));
         true
     }
 
-    /// Cancels what a server was asked, once the extension cancels it.
+    /// The calls or the types of a call or type hierarchy item, asked of the
+    /// server that gave it.
+    fn hierarchy(&mut self, request: &Request) -> bool {
+        let method = request.method.as_str();
+        let item = &request.params["item"];
+        let Some(index) = item["data"]["slidesServer"].as_u64() else {
+            return false;
+        };
+        let index = index as usize;
+        let mut params = request.params.clone();
+        params["item"]["data"] = item["data"]["data"].clone();
+        if let Some(tracked) = item["uri"].as_str().and_then(|uri| self.documents.get(uri))
+            && tracked.server == index
+        {
+            params["item"]["uri"] = json!(tracked.shadow.uri);
+        }
+        let Some(server) = self.servers.get_mut(index).and_then(Option::as_mut) else {
+            return false;
+        };
+        if !server.provides(method) {
+            return false;
+        }
+        let asked = if method.starts_with("callHierarchy/") {
+            Asked::Calls
+        } else {
+            Asked::Items
+        };
+        let id = server.request(method, params);
+        self.pending
+            .insert((index, id), (request.id.clone(), asked));
+        true
+    }
+
+    /// The symbols of the decks' cells, asked of every server that was told
+    /// of a deck, and answered once all have.
+    fn workspace_symbols(&mut self, request: &Request) -> bool {
+        let asked: Vec<usize> = (0..self.servers.len())
+            .filter(|&index| {
+                self.servers[index]
+                    .as_ref()
+                    .is_some_and(|server| server.ready && server.provides(&request.method))
+                    && self
+                        .documents
+                        .values()
+                        .any(|tracked| tracked.server == index)
+            })
+            .collect();
+        if asked.is_empty() {
+            return false;
+        }
+        self.next += 1;
+        let key = self.next;
+        self.gathers
+            .insert(key, (request.id.clone(), asked.len(), Vec::new()));
+        for index in asked {
+            if let Some(server) = self.servers[index].as_mut() {
+                let id = server.request(&request.method, request.params.clone());
+                self.pending
+                    .insert((index, id), (request.id.clone(), Asked::Gather { key }));
+            }
+        }
+        true
+    }
+
+    /// One server's workspace symbols, answering the extension once all the
+    /// servers asked have.
+    fn gathered(&mut self, key: i32, symbols: Vec<Value>) {
+        let Some((_, remaining, found)) = self.gathers.get_mut(&key) else {
+            return;
+        };
+        found.extend(symbols);
+        *remaining -= 1;
+        if *remaining == 0
+            && let Some((id, _, found)) = self.gathers.remove(&key)
+        {
+            (self.client)(Message::Response(Response::new_ok(id, found)));
+        }
+    }
+
+    /// Has the extension ask again for what it asks of every document it
+    /// shows, as it does not once a deck has a server to answer.
+    fn refresh(&mut self) {
+        for kind in ["inlayHint", "semanticTokens", "foldingRange"] {
+            if self.capabilities["workspace"][kind]["refreshSupport"] == true {
+                self.next += 1;
+                (self.client)(Message::Request(Request::new(
+                    RequestId::from(format!("python-{}", self.next)),
+                    format!("workspace/{kind}/refresh"),
+                    Value::Null,
+                )));
+            }
+        }
+    }
+
+    /// The decks, by the uri of their cells' file, that a server was told of.
+    fn decks_of(&self, index: usize) -> HashMap<String, String> {
+        self.documents
+            .iter()
+            .filter(|(_, tracked)| tracked.server == index)
+            .map(|(uri, tracked)| (tracked.shadow.uri.clone(), uri.clone()))
+            .collect()
+    }
+
+    /// Cancels what servers were asked, once the extension cancels it.
     pub fn cancel(&mut self, id: &RequestId) {
-        let asked = self
+        let asked: Vec<(usize, RequestId)> = self
             .pending
             .iter()
-            .find(|(_, (client, _))| client == id)
-            .map(|((index, asked), _)| (*index, asked.clone()));
-        if let Some((index, asked)) = asked
-            && let Some(server) = self.servers[index].as_mut()
-        {
-            server.notify("$/cancelRequest", json!({ "id": asked }));
+            .filter(|(_, (client, _))| client == id)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for (index, asked) in asked {
+            if let Some(server) = self.servers[index].as_mut() {
+                server.notify("$/cancelRequest", json!({ "id": asked }));
+            }
         }
     }
 
@@ -575,16 +870,7 @@ impl Pythons {
                     return;
                 }
             };
-            server.resolves = result["capabilities"]["completionProvider"]["resolveProvider"]
-                .as_bool()
-                .unwrap_or(false);
-            server.resolves_actions =
-                result["capabilities"]["codeActionProvider"]["resolveProvider"]
-                    .as_bool()
-                    .unwrap_or(false);
-            server.resolves_hints = result["capabilities"]["inlayHintProvider"]["resolveProvider"]
-                .as_bool()
-                .unwrap_or(false);
+            server.capabilities = result["capabilities"].clone();
             let _ = server.writer.send(Message::Notification(Notification::new(
                 "initialized".to_string(),
                 json!({}),
@@ -593,12 +879,28 @@ impl Pythons {
             for message in std::mem::take(&mut server.queue) {
                 let _ = server.writer.send(message);
             }
+            // The decks asked before the server could answer.
+            self.refresh();
             return;
         }
         let Some((id, asked)) = self.pending.remove(&(index, response.id)) else {
             return;
         };
-        let response = match response.response_result {
+        let result = match response.response_result {
+            // What a server does not do, it has nothing of.
+            Err(error) if error.code == ErrorCode::MethodNotFound as i32 => Ok(Value::Null),
+            result => result,
+        };
+        if let Asked::Gather { key } = asked {
+            let decks = self.decks_of(index);
+            let symbols = match result {
+                Ok(Value::Array(symbols)) => in_decks_symbols(symbols, &decks),
+                _ => Vec::new(),
+            };
+            self.gathered(key, symbols);
+            return;
+        }
+        let response = match result {
             Err(error) => Response {
                 id,
                 response_result: Err(error),
@@ -629,6 +931,58 @@ impl Pythons {
                             hints(&mut result, index, &document, &tracked.shadow);
                         }
                     }
+                    Asked::Tokens {
+                        document,
+                        types,
+                        modifiers,
+                        lines,
+                    } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            tokens(
+                                &mut result,
+                                &types,
+                                &modifiers,
+                                &tracked.shadow.cells,
+                                lines,
+                            );
+                        }
+                    }
+                    Asked::Folds { document } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            folds_in_cells(&mut result, &tracked.shadow.cells);
+                        }
+                    }
+                    Asked::Symbols { document, headings } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            symbols_in_cells(&mut result, &tracked.shadow, &document);
+                        }
+                        let symbols = match result {
+                            Value::Array(symbols) => symbols,
+                            _ => Vec::new(),
+                        };
+                        result = json!(nest(headings, symbols));
+                    }
+                    Asked::Items => {
+                        let decks = self.decks_of(index);
+                        if let Value::Array(items) = &mut result {
+                            for item in items {
+                                hierarchy_item(item, index, &decks);
+                            }
+                        }
+                    }
+                    Asked::Calls => {
+                        let decks = self.decks_of(index);
+                        if let Value::Array(calls) = &mut result {
+                            for call in calls {
+                                for key in ["from", "to"] {
+                                    if let Some(item) = call.get_mut(key) {
+                                        hierarchy_item(item, index, &decks);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Asked::Gather { .. } => {}
                     Asked::Edit { document } => {
                         if let Some(tracked) = self.documents.get(&document)
                             && result.is_object()
@@ -670,12 +1024,34 @@ impl Pythons {
 
     /// Answers what a server asks of the extension.
     fn asked(&mut self, index: usize, request: Request) {
+        if request.method == "client/registerCapability"
+            && let Some(server) = self.servers[index].as_mut()
+        {
+            // As it said it does in `initialize`.
+            let registrations = request.params["registrations"].as_array();
+            for registration in registrations.into_iter().flatten() {
+                let method = registration["method"].as_str().unwrap_or("");
+                if let Some(&[key, ..]) = capability(method)
+                    && let Some(capabilities) = server.capabilities.as_object_mut()
+                {
+                    let options = match &registration["registerOptions"] {
+                        Value::Null => json!(true),
+                        options => options.clone(),
+                    };
+                    capabilities.insert(key.to_string(), options);
+                }
+            }
+        }
         if matches!(
             request.method.as_str(),
-            "workspace/configuration" | "workspace/inlayHint/refresh"
+            "workspace/configuration"
+                | "workspace/inlayHint/refresh"
+                | "workspace/semanticTokens/refresh"
+                | "workspace/foldingRange/refresh"
         ) {
             // Asked of the extension: its configuration, with the cells'
-            // interpreter for pyright, or to ask for the inlay hints again.
+            // interpreter for pyright, or to ask for the inlay hints, tokens
+            // or folding ranges again.
             self.next += 1;
             let id = RequestId::from(format!("python-{}", self.next));
             self.forwarded
@@ -774,8 +1150,12 @@ impl Pythons {
             .cloned()
             .collect();
         for key in pending {
-            if let Some((id, _)) = self.pending.remove(&key) {
-                (self.client)(Message::Response(Response::new_ok(id, Value::Null)));
+            match self.pending.remove(&key) {
+                Some((_, Asked::Gather { key })) => self.gathered(key, Vec::new()),
+                Some((id, _)) => {
+                    (self.client)(Message::Response(Response::new_ok(id, Value::Null)))
+                }
+                None => {}
             }
         }
         documents
@@ -940,7 +1320,11 @@ fn asks_of_cells(method: &str, params: &Value, cells: &[(usize, usize)]) -> bool
                     .iter()
                     .all(|at| line(at).is_some_and(|line| in_cells(cells, line)))
         }),
-        "textDocument/inlayHint" => {
+        // Of the whole file.
+        "textDocument/semanticTokens/full"
+        | "textDocument/foldingRange"
+        | "textDocument/documentSymbol" => !cells.is_empty(),
+        "textDocument/inlayHint" | "textDocument/semanticTokens/range" => {
             let (Some(start), Some(end)) = (
                 line(&params["range"]["start"]),
                 line(&params["range"]["end"]),
@@ -951,6 +1335,231 @@ fn asks_of_cells(method: &str, params: &Value, cells: &[(usize, usize)]) -> bool
         }
         _ => line(&params["position"]).is_some_and(|line| in_cells(cells, line)),
     }
+}
+
+/// The index in `ours` of each of a server's names, of its semantic tokens'
+/// kinds or modifiers.
+fn legend(names: &Value, ours: &[&str]) -> Vec<Option<u32>> {
+    names
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|name| {
+            let name = name.as_str()?;
+            ours.iter()
+                .position(|our| *our == name)
+                .map(|index| index as u32)
+        })
+        .collect()
+}
+
+/// Semantic tokens of the cells' file, as `{ data }`, with the deck's kinds
+/// and modifiers: those of a kind the deck has, in the cells, and on the
+/// lines asked for, if any.
+fn tokens(
+    result: &mut Value,
+    types: &[Option<u32>],
+    modifiers: &[Option<u32>],
+    cells: &[(usize, usize)],
+    lines: Option<(usize, usize)>,
+) {
+    let Some(data) = result.get_mut("data").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let numbers: Vec<u64> = data.iter().map(|n| n.as_u64().unwrap_or(0)).collect();
+    let (mut line, mut start) = (0, 0);
+    let (mut last_line, mut last_start) = (0, 0);
+    let mut kept = Vec::new();
+    for &[delta_line, delta_start, length, kind, bits] in numbers.as_chunks::<5>().0 {
+        if delta_line > 0 {
+            line += delta_line;
+            start = delta_start;
+        } else {
+            start += delta_start;
+        }
+        let Some(Some(kind)) = types.get(kind as usize) else {
+            continue;
+        };
+        let at = line as usize;
+        if !in_cells(cells, at) || lines.is_some_and(|(from, to)| at < from || to < at) {
+            continue;
+        }
+        let bits = (0..modifiers.len().min(64))
+            .filter(|bit| bits & (1 << bit) != 0)
+            .filter_map(|bit| modifiers[bit])
+            .fold(0u64, |bits, ours| bits | (1 << ours));
+        let delta_start = if line == last_line {
+            start - last_start
+        } else {
+            start
+        };
+        kept.extend([
+            line - last_line,
+            delta_start,
+            length,
+            u64::from(*kind),
+            bits,
+        ]);
+        (last_line, last_start) = (line, start);
+    }
+    *data = kept.into_iter().map(Value::from).collect();
+}
+
+/// The folding ranges that are within a cell.
+fn folds_in_cells(result: &mut Value, cells: &[(usize, usize)]) {
+    if let Value::Array(folds) = result {
+        folds.retain(|fold| {
+            let line = |key: &str| fold[key].as_u64().map(|line| line as usize);
+            let (Some(start), Some(end)) = (line("startLine"), line("endLine")) else {
+                return false;
+            };
+            cells.iter().any(|&(from, to)| from <= start && end < to)
+        });
+    }
+}
+
+/// The symbols of the cells' file that are in the cells, as document symbols
+/// or as symbols with their location, which is then in the markdown.
+fn symbols_in_cells(result: &mut Value, shadow: &Shadow, document: &str) {
+    let Value::Array(symbols) = result else {
+        return;
+    };
+    symbols.retain(|symbol| match symbol.get("location") {
+        Some(location) => {
+            location["uri"].as_str() == Some(shadow.uri.as_str())
+                && starts_in_cells(&location["range"], &shadow.cells)
+        }
+        None => starts_in_cells(&symbol["range"], &shadow.cells),
+    });
+    for symbol in symbols {
+        if let Some(location) = symbol.get_mut("location") {
+            location["uri"] = json!(document);
+        }
+    }
+}
+
+/// The outline of a deck: its slides' headings, each over what follows it up
+/// to the next of its level or above, with the symbols of its cells, as
+/// document symbols or with their location, under the heading they are in.
+pub fn outline(markdown: &str, symbols: Vec<Value>) -> Vec<Value> {
+    let lines: Vec<&str> = markdown.split('\n').collect();
+    let end_of = |line: usize| {
+        let text = lines.get(line).copied().unwrap_or("");
+        json!({ "line": line, "character": text.trim_end_matches('\r').encode_utf16().count() })
+    };
+    let headings = breaks(markdown).headings;
+    let mut outline = Vec::new();
+    for (i, heading) in headings.iter().enumerate() {
+        let end = headings[i + 1..]
+            .iter()
+            .find(|next| next.level <= heading.level)
+            .map_or(lines.len().saturating_sub(1), |next| {
+                next.line.saturating_sub(1)
+            })
+            .max(heading.last);
+        let start = json!({ "line": heading.line, "character": 0 });
+        outline.push(json!({
+            "name": heading_name(lines.get(heading.line).copied().unwrap_or("")),
+            // As the editor's own markdown outline has them.
+            "kind": 15,
+            "range": { "start": start, "end": end_of(end) },
+            "selectionRange": { "start": start, "end": end_of(heading.last) },
+        }));
+    }
+    outline.extend(symbols);
+    nest(Vec::new(), outline)
+}
+
+/// The text of a heading's line, without its `#`s nor its attributes.
+fn heading_name(line: &str) -> String {
+    let text = line
+        .trim()
+        .trim_start_matches('#')
+        .trim_end_matches('#')
+        .trim();
+    let text = match text.rfind('{') {
+        Some(at) if text.ends_with('}') => text[..at].trim_end(),
+        _ => text,
+    };
+    if text.is_empty() {
+        line.trim().to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// Document symbols, each under the deepest of `outline`, or of the symbols
+/// before it, whose range holds it. A symbol with its location is made one.
+fn nest(mut outline: Vec<Value>, symbols: Vec<Value>) -> Vec<Value> {
+    let mut symbols: Vec<Value> = symbols
+        .into_iter()
+        .map(|mut symbol| {
+            if let Some(location) = symbol.as_object_mut().and_then(|s| s.remove("location")) {
+                symbol["range"] = location["range"].clone();
+                symbol["selectionRange"] = location["range"].clone();
+                if let Some(symbol) = symbol.as_object_mut() {
+                    symbol.remove("containerName");
+                }
+            }
+            symbol
+        })
+        .collect();
+    let at = |position: &Value| {
+        (
+            position["line"].as_u64().unwrap_or(0),
+            position["character"].as_u64().unwrap_or(0),
+        )
+    };
+    symbols.sort_by_key(|symbol| {
+        let range = &symbol["range"];
+        (at(&range["start"]), std::cmp::Reverse(at(&range["end"])))
+    });
+    fn insert(nodes: &mut Vec<Value>, symbol: Value, at: &dyn Fn(&Value) -> (u64, u64)) {
+        let (inner, outer) = (&symbol["range"], |node: &Value| node["range"].clone());
+        let holds = |node: &Value| {
+            let range = outer(node);
+            at(&range["start"]) <= at(&inner["start"]) && at(&inner["end"]) <= at(&range["end"])
+        };
+        match nodes.iter_mut().rev().find(|node| holds(node)) {
+            Some(node) => {
+                if !node["children"].is_array() {
+                    node["children"] = json!([]);
+                }
+                if let Value::Array(children) = &mut node["children"] {
+                    insert(children, symbol, at);
+                }
+            }
+            None => nodes.push(symbol),
+        }
+    }
+    for symbol in symbols {
+        insert(&mut outline, symbol, &at);
+    }
+    outline
+}
+
+/// The workspace symbols that are in the decks' cells, by the uri of their
+/// cells' file, which are then in the markdown. Those of other files, the
+/// extension has of Python's own servers.
+fn in_decks_symbols(symbols: Vec<Value>, decks: &HashMap<String, String>) -> Vec<Value> {
+    symbols
+        .into_iter()
+        .filter_map(|mut symbol| {
+            let deck = decks.get(symbol["location"]["uri"].as_str()?)?;
+            symbol["location"]["uri"] = json!(deck);
+            Some(symbol)
+        })
+        .collect()
+}
+
+/// A call or type hierarchy item, in a deck if it is in its cells' file,
+/// saying which server gave it, to ask it of its calls or types.
+fn hierarchy_item(item: &mut Value, index: usize, decks: &HashMap<String, String>) {
+    if let Some(deck) = item["uri"].as_str().and_then(|uri| decks.get(uri)) {
+        item["uri"] = json!(deck);
+    }
+    let data = item.get("data").cloned().unwrap_or(Value::Null);
+    item["data"] = json!({ "slidesServer": index, "data": data });
 }
 
 /// The items with a range, as highlights, that are in the cells.
@@ -1242,6 +1851,16 @@ mod tests {
             "textDocument/inlayHint",
             json!({ "range": { "start": at(5), "end": at(9) } })
         ));
+        assert!(asks(
+            "textDocument/semanticTokens/range",
+            json!({ "range": { "start": at(9), "end": at(10) } })
+        ));
+        assert!(asks("textDocument/foldingRange", json!({})));
+        assert!(!asks_of_cells(
+            "textDocument/documentSymbol",
+            &json!({}),
+            &[]
+        ));
     }
 
     #[test]
@@ -1314,6 +1933,176 @@ mod tests {
                 rename,
             ] })
         );
+    }
+
+    #[test]
+    fn a_server_is_asked_only_what_it_said_it_does() {
+        let (writer, _) = std::sync::mpsc::channel();
+        let mut server = Server {
+            name: "ty".to_string(),
+            child: Command::new("true").spawn().unwrap(),
+            writer,
+            ready: false,
+            capabilities: Value::Null,
+            queue: Vec::new(),
+            python: None,
+            folders: HashSet::new(),
+            next: 0,
+        };
+        // Before it says, it is asked, and answers what it does not do.
+        assert!(server.provides("textDocument/foldingRange"));
+        server.ready = true;
+        server.capabilities = json!({
+            "completionProvider": {},
+            "inlayHintProvider": true,
+            "renameProvider": { "prepareProvider": true },
+            "semanticTokensProvider": { "full": { "delta": true }, "legend": {} },
+            "foldingRangeProvider": false,
+        });
+        assert!(server.provides("textDocument/completion"));
+        assert!(!server.provides("completionItem/resolve"));
+        assert!(server.provides("textDocument/inlayHint"));
+        assert!(!server.provides("inlayHint/resolve"));
+        assert!(server.provides("textDocument/prepareRename"));
+        assert!(server.provides("textDocument/semanticTokens/full"));
+        assert!(!server.provides("textDocument/foldingRange"));
+        assert!(!server.provides("textDocument/selectionRange"));
+        assert!(!server.provides("callHierarchy/incomingCalls"));
+        let _ = server.child.wait();
+    }
+
+    #[test]
+    fn semantic_tokens_are_of_the_decks_kinds_and_in_the_cells() {
+        let types = legend(&json!(["function", "unknownKind", "variable"]), TOKEN_TYPES);
+        let modifiers = legend(
+            &json!(["definition", "unknownModifier", "readonly"]),
+            TOKEN_MODIFIERS,
+        );
+        let kind = |name: &str| TOKEN_TYPES.iter().position(|kind| *kind == name).unwrap() as u64;
+        let bit = |name: &str| 1u64 << TOKEN_MODIFIERS.iter().position(|m| *m == name).unwrap();
+        // Lines 1 (outside), 3, 3 (of an unknown kind), 3 and 4.
+        let mut result = json!({ "resultId": "1", "data": [
+            1, 0, 3, 0, 0,
+            2, 4, 6, 0, 0b001,
+            0, 7, 2, 1, 0,
+            0, 3, 1, 2, 0b110,
+            1, 2, 5, 2, 0,
+        ] });
+        tokens(&mut result, &types, &modifiers, &[(3, 5)], None);
+        assert_eq!(
+            result,
+            json!({ "resultId": "1", "data": [
+                3, 4, 6, kind("function"), bit("definition"),
+                0, 10, 1, kind("variable"), bit("readonly"),
+                1, 2, 5, kind("variable"), 0,
+            ] })
+        );
+        // Asked for line 4 alone.
+        let mut result = json!({ "data": [3, 4, 6, 0, 0, 1, 2, 5, 2, 0] });
+        tokens(&mut result, &types, &modifiers, &[(3, 5)], Some((4, 4)));
+        assert_eq!(result, json!({ "data": [4, 2, 5, kind("variable"), 0] }));
+    }
+
+    #[test]
+    fn the_folds_within_a_cell_are_kept() {
+        let fold = |start: u32, end: u32| json!({ "startLine": start, "endLine": end });
+        let mut result = json!([fold(3, 4), fold(4, 11), fold(10, 12), fold(12, 13)]);
+        folds_in_cells(&mut result, &[(3, 5), (10, 13)]);
+        assert_eq!(result, json!([fold(3, 4), fold(10, 12)]));
+    }
+
+    #[test]
+    fn the_symbols_in_the_cells_are_kept_in_the_deck() {
+        let at = |line: u32| json!({ "start": { "line": line, "character": 0 }, "end": { "line": line, "character": 3 } });
+        let shadow = Shadow {
+            uri: "file:///d/.talk.md.py".to_string(),
+            version: 1,
+            text: String::new(),
+            cells: vec![(3, 5)],
+        };
+        let mut result = json!([
+            { "name": "f", "kind": 12, "location": { "uri": shadow.uri, "range": at(3) } },
+            { "name": "g", "kind": 12, "location": { "uri": shadow.uri, "range": at(7) } },
+        ]);
+        symbols_in_cells(&mut result, &shadow, "file:///d/talk.md");
+        assert_eq!(
+            result,
+            json!([{ "name": "f", "kind": 12, "location": { "uri": "file:///d/talk.md", "range": at(3) } }])
+        );
+        let mut result = json!([
+            { "name": "f", "kind": 12, "range": at(4), "selectionRange": at(4) },
+            { "name": "g", "kind": 12, "range": at(0), "selectionRange": at(0) },
+        ]);
+        symbols_in_cells(&mut result, &shadow, "file:///d/talk.md");
+        assert_eq!(result.as_array().unwrap().len(), 1);
+        assert_eq!(result[0]["name"], "f");
+    }
+
+    #[test]
+    fn the_outline_is_the_headings_with_the_cells_symbols_under_theirs() {
+        let markdown =
+            "# One { center }\n\n~~~python\ndef f(x):\n    return x\n~~~\n\n## Two\n\n# Thrée\n";
+        let at = |line: u32, character: u32| json!({ "line": line, "character": character });
+        let range = |from, to| json!({ "start": from, "end": to });
+        let symbols = vec![
+            json!({ "name": "x", "kind": 13, "containerName": "f", "location": { "uri": "file:///d/talk.md", "range": range(at(3, 6), at(3, 7)) } }),
+            json!({ "name": "f", "kind": 12, "location": { "uri": "file:///d/talk.md", "range": range(at(3, 0), at(4, 12)) } }),
+        ];
+        let outline = outline(markdown, symbols);
+        let names = |nodes: &Value| -> Vec<String> {
+            nodes
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| node["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(names(&json!(outline)), ["One", "Thrée"]);
+        assert_eq!(outline[0]["range"], range(at(0, 0), at(8, 0)));
+        assert_eq!(outline[0]["selectionRange"], range(at(0, 0), at(0, 16)));
+        assert_eq!(names(&outline[0]["children"]), ["f", "Two"]);
+        let f = &outline[0]["children"][0];
+        assert_eq!(f["selectionRange"], range(at(3, 0), at(4, 12)));
+        assert_eq!(names(&f["children"]), ["x"]);
+        assert!(f["children"][0].get("location").is_none());
+        // Up to the end of the file, in UTF-16.
+        assert_eq!(outline[1]["range"], range(at(9, 0), at(10, 0)));
+        assert_eq!(outline[1]["selectionRange"]["end"], at(9, 7));
+    }
+
+    #[test]
+    fn the_workspace_symbols_kept_are_those_of_the_decks() {
+        let decks = HashMap::from([(
+            "file:///d/.talk.md.py".to_string(),
+            "file:///d/talk.md".to_string(),
+        )]);
+        let symbol = |uri: &str| json!({ "name": "f", "kind": 12, "location": { "uri": uri } });
+        let kept = in_decks_symbols(
+            vec![
+                symbol("file:///d/.talk.md.py"),
+                symbol("file:///d/module.py"),
+            ],
+            &decks,
+        );
+        assert_eq!(kept, [symbol("file:///d/talk.md")]);
+    }
+
+    #[test]
+    fn a_hierarchy_item_is_in_its_deck_and_says_its_server() {
+        let decks = HashMap::from([(
+            "file:///d/.talk.md.py".to_string(),
+            "file:///d/talk.md".to_string(),
+        )]);
+        let mut item = json!({ "name": "f", "uri": "file:///d/.talk.md.py", "data": 3 });
+        hierarchy_item(&mut item, 2, &decks);
+        assert_eq!(
+            item,
+            json!({ "name": "f", "uri": "file:///d/talk.md", "data": { "slidesServer": 2, "data": 3 } })
+        );
+        let mut item = json!({ "name": "g", "uri": "file:///d/module.py" });
+        hierarchy_item(&mut item, 2, &decks);
+        assert_eq!(item["uri"], "file:///d/module.py");
+        assert_eq!(item["data"], json!({ "slidesServer": 2, "data": null }));
     }
 
     #[test]
