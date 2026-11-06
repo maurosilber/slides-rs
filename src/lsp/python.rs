@@ -139,6 +139,9 @@ enum Asked {
     Ranges { document: String },
     /// Inlay hints, of which those in the cells are kept.
     Hints { document: String },
+    /// A workspace edit, as a rename's, whose edits of the cells' file are of
+    /// the markdown, and of other files as they are.
+    Edit { document: String },
 }
 
 pub struct Pythons {
@@ -452,6 +455,8 @@ impl Pythons {
                 | "textDocument/selectionRange"
                 | "textDocument/inlayHint"
                 | "textDocument/codeAction"
+                | "textDocument/prepareRename"
+                | "textDocument/rename"
         ) {
             return false;
         }
@@ -476,6 +481,7 @@ impl Pythons {
             "textDocument/codeAction" => Asked::Actions { document: uri },
             "textDocument/documentHighlight" => Asked::Ranges { document: uri },
             "textDocument/inlayHint" => Asked::Hints { document: uri },
+            "textDocument/rename" => Asked::Edit { document: uri },
             "textDocument/definition"
             | "textDocument/typeDefinition"
             | "textDocument/declaration"
@@ -620,6 +626,14 @@ impl Pythons {
                     Asked::Hints { document } => {
                         if let Some(tracked) = self.documents.get(&document) {
                             hints(&mut result, index, &document, &tracked.shadow);
+                        }
+                    }
+                    Asked::Edit { document } => {
+                        if let Some(tracked) = self.documents.get(&document)
+                            && result.is_object()
+                        {
+                            let shadow = &tracked.shadow;
+                            in_deck_edit(&mut result, &shadow.uri, &document, &shadow.cells);
                         }
                     }
                 }
@@ -1267,6 +1281,38 @@ mod tests {
         assert_eq!(hints[0]["textEdits"], json!([edit(4)]));
         assert_eq!(hints[0]["label"][1]["location"]["uri"], "file:///d/talk.md");
         assert_eq!(hints[0]["label"][2]["location"], elsewhere);
+    }
+
+    #[test]
+    fn a_rename_edits_the_cells_and_other_files_but_not_the_markdown() {
+        let at = |line: u32| json!({ "line": line, "character": 4 });
+        let edit = |line: u32| json!({ "range": { "start": at(line), "end": at(line) }, "newText": "twice" });
+        let cells = [(5, 7), (12, 14)];
+        let shadow = "file:///d/.talk.md.py";
+        let module = "file:///d/module.py";
+        let mut changes =
+            json!({ "changes": { shadow: [edit(5), edit(9), edit(12)], module: [edit(1)] } });
+        in_deck_edit(&mut changes, shadow, "file:///d/talk.md", &cells);
+        assert_eq!(
+            changes,
+            json!({ "changes": { "file:///d/talk.md": [edit(5), edit(12)], module: [edit(1)] } })
+        );
+        let rename =
+            json!({ "kind": "rename", "oldUri": "file:///d/a.py", "newUri": "file:///d/b.py" });
+        let mut changes = json!({ "documentChanges": [
+            { "textDocument": { "uri": shadow, "version": 2 }, "edits": [edit(5), edit(9)] },
+            { "textDocument": { "uri": module, "version": 1 }, "edits": [edit(1)] },
+            rename,
+        ] });
+        in_deck_edit(&mut changes, shadow, "file:///d/talk.md", &cells);
+        assert_eq!(
+            changes,
+            json!({ "documentChanges": [
+                { "textDocument": { "uri": "file:///d/talk.md", "version": null }, "edits": [edit(5)] },
+                { "textDocument": { "uri": module, "version": 1 }, "edits": [edit(1)] },
+                rename,
+            ] })
+        );
     }
 
     #[test]

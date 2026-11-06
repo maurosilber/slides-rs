@@ -212,6 +212,11 @@ const tests = {
 		assert.deepStrictEqual(new Set(hints.map((hint) => hint.position.line)), new Set([12]));
 		const highlights = await vscode.commands.executeCommand('vscode.executeDocumentHighlights', document.uri, new vscode.Position(12, 6));
 		assert.deepStrictEqual(highlights.map((highlight) => highlight.range.start.line), [5, 12]);
+		// A rename edits both cells, and nothing outside them.
+		const rename = await vscode.commands.executeCommand('vscode.executeDocumentRenameProvider', document.uri, new vscode.Position(12, 6), 'twice');
+		const renamed = rename.entries();
+		assert.deepStrictEqual(renamed.map(([uri]) => uri.toString()), [document.uri.toString()]);
+		assert.deepStrictEqual(renamed[0][1].map((edit) => [edit.range.start.line, edit.newText]), [[5, 'twice'], [12, 'twice']]);
 		// Outside the cells, it has nothing to say.
 		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(9, 2)), []);
 		// The cells' file is never written.

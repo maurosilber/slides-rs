@@ -97,6 +97,11 @@ pub fn serve() -> Result<()> {
         implementation_provider: Some(lsp_types::ImplementationProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
         document_highlight_provider: Some(OneOf::Left(true)),
+        // A name in the cells, renamed in all of them.
+        rename_provider: Some(OneOf::Right(lsp_types::RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         selection_range_provider: Some(lsp_types::SelectionRangeProviderCapability::Simple(true)),
         // The cells' inferred types, as of a variable, from their Python server.
         inlay_hint_provider: Some(OneOf::Right(
@@ -372,7 +377,11 @@ impl Server {
             | "textDocument/documentHighlight"
             | "textDocument/selectionRange"
             | "textDocument/inlayHint"
-            | "textDocument/codeAction" => Value::Null,
+            | "textDocument/codeAction"
+            | "textDocument/rename" => Value::Null,
+            // Not `null`, which the extension takes as refusing to rename, but
+            // leaving it to what else renames the markdown.
+            "textDocument/prepareRename" => json!({ "defaultBehavior": true }),
             // The deck's own completions, and what a server gave that it does
             // not resolve, are whole already.
             "completionItem/resolve" | "codeAction/resolve" | "inlayHint/resolve" => params,
