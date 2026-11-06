@@ -54,11 +54,13 @@ describes it. Both come from the deck's
 [`frontmatter.schema.json`](../src/frontmatter.schema.json).
 
 In the text editor, the Python cells have the diagnostics, hovers, signature
-help, definitions, references and completions of a Python language server
+help, completions, code actions, inlay hints, definitions, type definitions,
+declarations, implementations, references, highlights, selection ranges and
+renames of a Python language server
 that `slides-rs lsp` starts in the environment the cells run in, so that it
 resolves their imports as the kernel does, in the environment the deck's lock
-file pins. It is the first of `basedpyright-langserver`, `ty` and
-`pyright-langserver` installed in that environment, or on the `PATH`, which
+file pins. It is the first of `basedpyright-langserver`, `ty`,
+`pyright-langserver` and `pyrefly` installed in that environment, or on the `PATH`, which
 the project's `pixi.toml` can add as any other dependency. The
 `slides.pythonServer` setting names another, or is `off`. The server is told
 of the file's Python cells, in order, as the cells before each one run, each

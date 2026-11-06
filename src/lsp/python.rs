@@ -29,6 +29,7 @@ const SERVERS: &[(&str, &[&str])] = &[
     ("basedpyright-langserver", &["--stdio"]),
     ("ty", &["server"]),
     ("pyright-langserver", &["--stdio"]),
+    ("pyrefly", &["lsp"]),
 ];
 
 /// What sends a message to the extension.
@@ -292,7 +293,7 @@ impl Pythons {
         let Some((name, command, args)) = choose(&self.setting, &path) else {
             if self.setting.is_empty() {
                 eprintln!(
-                    "no Python language server for {where_}: install basedpyright or ty in it, for the code cells to have one"
+                    "no Python language server for {where_}: install basedpyright, ty or pyrefly in it, for the code cells to have one"
                 );
             } else {
                 eprintln!(

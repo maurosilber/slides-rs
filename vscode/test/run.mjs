@@ -18,7 +18,11 @@ const extensions = path.join(root, '.vscode-test', 'extensions');
 // whose setting holds over its folder's.
 const slidesRs = path.join(path.dirname(root), 'target', 'debug', 'slides-rs');
 const workspace = path.join(root, '.vscode-test', 'tests.code-workspace');
-fs.writeFileSync(workspace, JSON.stringify({ folders: [{ path: path.dirname(root) }], settings: { 'slides.path': slidesRs } }, null, '\t'));
+// SLIDES_PYTHON_SERVER names the Python language server the code cells have, as
+// `SLIDES_PYTHON_SERVER=ty pixi run vscode-test`, or else it is the first one found.
+const settings = { 'slides.path': slidesRs };
+if (process.env.SLIDES_PYTHON_SERVER) settings['slides.pythonServer'] = process.env.SLIDES_PYTHON_SERVER;
+fs.writeFileSync(workspace, JSON.stringify({ folders: [{ path: path.dirname(root) }], settings }, null, '\t'));
 
 // Run from VS Code's own terminal, it would start as Node rather than as VS Code.
 delete process.env.ELECTRON_RUN_AS_NODE;

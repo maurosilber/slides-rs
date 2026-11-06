@@ -553,7 +553,7 @@
 				"slides.pythonServer": {
 					"type": "string",
 					"default": "",
-					"markdownDescription": "The Python language server for the code cells in the markdown text editor, which the language server starts in the environment they run in: a command, such as `basedpyright-langserver`, `ty` or `pyright-langserver`, or its path. Empty, the first of those installed in that environment, or on the `PATH`. `off`, none."
+					"markdownDescription": "The Python language server for the code cells in the markdown text editor, which the language server starts in the environment they run in: a command, such as `basedpyright-langserver`, `ty`, `pyright-langserver` or `pyrefly`, or its path. Empty, the first of those installed in that environment, or on the `PATH`. `off`, none."
 				},
 				"slides.path": {
 					"type": "string",
