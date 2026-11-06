@@ -81,6 +81,8 @@ struct Server {
     resolves: bool,
     /// Whether it resolves its code actions.
     resolves_actions: bool,
+    /// Whether it resolves its inlay hints.
+    resolves_hints: bool,
     queue: Vec<Message>,
     /// The cells' interpreter, which pyright asks for as `python.pythonPath`.
     python: Option<PathBuf>,
@@ -133,6 +135,10 @@ enum Asked {
     Locations { document: String },
     /// Code actions, whose edits of the cells' file are of the markdown.
     Actions { document: String },
+    /// Ranges, as of highlights, of which those in the cells are kept.
+    Ranges { document: String },
+    /// Inlay hints, of which those in the cells are kept.
+    Hints { document: String },
 }
 
 pub struct Pythons {
@@ -342,6 +348,7 @@ impl Pythons {
             ready: false,
             resolves: false,
             resolves_actions: false,
+            resolves_hints: false,
             queue: Vec::new(),
             python,
             folders: HashSet::new(),
@@ -425,7 +432,10 @@ impl Pythons {
     /// whether it did: outside them, or without a server, the deck answers.
     pub fn forward(&mut self, request: &Request, text: &str) -> bool {
         let method = request.method.as_str();
-        if method == "completionItem/resolve" || method == "codeAction/resolve" {
+        if matches!(
+            method,
+            "completionItem/resolve" | "codeAction/resolve" | "inlayHint/resolve"
+        ) {
             return self.resolve(request);
         }
         if !matches!(
@@ -434,7 +444,13 @@ impl Pythons {
                 | "textDocument/hover"
                 | "textDocument/signatureHelp"
                 | "textDocument/definition"
+                | "textDocument/typeDefinition"
+                | "textDocument/declaration"
+                | "textDocument/implementation"
                 | "textDocument/references"
+                | "textDocument/documentHighlight"
+                | "textDocument/selectionRange"
+                | "textDocument/inlayHint"
                 | "textDocument/codeAction"
         ) {
             return false;
@@ -449,13 +465,7 @@ impl Pythons {
         let Some(tracked) = self.documents.get(&uri) else {
             return false;
         };
-        let at = if method == "textDocument/codeAction" {
-            &request.params["range"]["start"]
-        } else {
-            &request.params["position"]
-        };
-        let line = at["line"].as_u64().unwrap_or(0) as usize;
-        if !in_cells(&tracked.shadow.cells, line) {
+        if !asks_of_cells(method, &request.params, &tracked.shadow.cells) {
             return false;
         }
         let index = tracked.server;
@@ -464,9 +474,13 @@ impl Pythons {
         let asked = match method {
             "textDocument/completion" => Asked::Completion { document: uri },
             "textDocument/codeAction" => Asked::Actions { document: uri },
-            "textDocument/definition" | "textDocument/references" => {
-                Asked::Locations { document: uri }
-            }
+            "textDocument/documentHighlight" => Asked::Ranges { document: uri },
+            "textDocument/inlayHint" => Asked::Hints { document: uri },
+            "textDocument/definition"
+            | "textDocument/typeDefinition"
+            | "textDocument/declaration"
+            | "textDocument/implementation"
+            | "textDocument/references" => Asked::Locations { document: uri },
             _ => Asked::Plain,
         };
         let Some(server) = self.servers[index].as_mut() else {
@@ -478,8 +492,8 @@ impl Pythons {
         true
     }
 
-    /// Resolves a completion or a code action a server gave, which says which
-    /// it was.
+    /// Resolves a completion, a code action or an inlay hint a server gave,
+    /// which says which it was.
     fn resolve(&mut self, request: &Request) -> bool {
         let method = request.method.as_str();
         let given = &request.params["data"];
@@ -493,17 +507,16 @@ impl Pythons {
         let mut item = request.params.clone();
         item["data"] = given["data"].clone();
         let document = document.to_string();
-        let action = method == "codeAction/resolve";
-        let asked = if action {
-            Asked::Actions { document }
-        } else {
-            Asked::Completion { document }
-        };
-        // A server that does not resolve its completions gave them whole.
         let Some(server) = self.servers.get_mut(index).and_then(Option::as_mut) else {
             return false;
         };
-        if !(if action { server.resolves_actions } else { server.resolves }) {
+        let (asked, resolves) = match method {
+            "codeAction/resolve" => (Asked::Actions { document }, server.resolves_actions),
+            "inlayHint/resolve" => (Asked::Hints { document }, server.resolves_hints),
+            _ => (Asked::Completion { document }, server.resolves),
+        };
+        // A server that does not resolve what it gives gave it whole.
+        if !resolves {
             return false;
         }
         let id = server.request(method, item);
@@ -558,8 +571,11 @@ impl Pythons {
             server.resolves = result["capabilities"]["completionProvider"]["resolveProvider"]
                 .as_bool()
                 .unwrap_or(false);
-            server.resolves_actions = result["capabilities"]["codeActionProvider"]
-                ["resolveProvider"]
+            server.resolves_actions =
+                result["capabilities"]["codeActionProvider"]["resolveProvider"]
+                    .as_bool()
+                    .unwrap_or(false);
+            server.resolves_hints = result["capabilities"]["inlayHintProvider"]["resolveProvider"]
                 .as_bool()
                 .unwrap_or(false);
             let _ = server.writer.send(Message::Notification(Notification::new(
@@ -596,6 +612,16 @@ impl Pythons {
                             in_document(&mut result, &tracked.shadow.uri, &document);
                         }
                     }
+                    Asked::Ranges { document } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            ranges_in_cells(&mut result, &tracked.shadow.cells);
+                        }
+                    }
+                    Asked::Hints { document } => {
+                        if let Some(tracked) = self.documents.get(&document) {
+                            hints(&mut result, index, &document, &tracked.shadow);
+                        }
+                    }
                 }
                 Response::new_ok(id, result)
             }
@@ -629,8 +655,12 @@ impl Pythons {
 
     /// Answers what a server asks of the extension.
     fn asked(&mut self, index: usize, request: Request) {
-        if request.method == "workspace/configuration" {
-            // Asked of the extension, with the cells' interpreter for pyright.
+        if matches!(
+            request.method.as_str(),
+            "workspace/configuration" | "workspace/inlayHint/refresh"
+        ) {
+            // Asked of the extension: its configuration, with the cells'
+            // interpreter for pyright, or to ask for the inlay hints again.
             self.next += 1;
             let id = RequestId::from(format!("python-{}", self.next));
             self.forwarded
@@ -848,6 +878,78 @@ fn in_document(result: &mut Value, shadow: &str, document: &str) {
         }
         _ => {}
     }
+}
+
+/// Inlay hints on a deck's cells, or one resolved: those in the cells, each
+/// saying which server gave it, to be resolved, with its edits within the
+/// cells and the locations of its label in the markdown.
+fn hints(result: &mut Value, index: usize, document: &str, shadow: &Shadow) {
+    let hints = match result {
+        Value::Array(hints) => {
+            hints.retain(|hint| {
+                let line = hint["position"]["line"].as_u64();
+                line.is_some_and(|line| in_cells(&shadow.cells, line as usize))
+            });
+            hints
+        }
+        Value::Object(_) => std::slice::from_mut(result),
+        _ => return,
+    };
+    for hint in hints.iter_mut() {
+        let data = hint.get("data").cloned().unwrap_or(Value::Null);
+        hint["data"] = json!({ "slidesServer": index, "slidesDocument": document, "data": data });
+        if let Some(edits) = hint.get_mut("textEdits").and_then(Value::as_array_mut) {
+            *edits = keep_in_cells(std::mem::take(edits), &shadow.cells);
+        }
+        if let Some(parts) = hint.get_mut("label").and_then(Value::as_array_mut) {
+            for part in parts {
+                if let Some(location) = part.get_mut("location") {
+                    in_document(location, &shadow.uri, document);
+                }
+            }
+        }
+    }
+}
+
+/// Whether what the extension asks with these parameters is of the cells: at
+/// a position in them, or for a range that overlaps them, as inlay hints are
+/// asked for what the editor shows.
+fn asks_of_cells(method: &str, params: &Value, cells: &[(usize, usize)]) -> bool {
+    let line = |at: &Value| at["line"].as_u64().map(|line| line as usize);
+    match method {
+        "textDocument/codeAction" => starts_in_cells(&params["range"], cells),
+        // Each of the positions, or else the editor selects as it would.
+        "textDocument/selectionRange" => params["positions"].as_array().is_some_and(|positions| {
+            !positions.is_empty()
+                && positions
+                    .iter()
+                    .all(|at| line(at).is_some_and(|line| in_cells(cells, line)))
+        }),
+        "textDocument/inlayHint" => {
+            let (Some(start), Some(end)) = (
+                line(&params["range"]["start"]),
+                line(&params["range"]["end"]),
+            ) else {
+                return false;
+            };
+            cells.iter().any(|&(from, to)| from <= end && start < to)
+        }
+        _ => line(&params["position"]).is_some_and(|line| in_cells(cells, line)),
+    }
+}
+
+/// The items with a range, as highlights, that are in the cells.
+fn ranges_in_cells(result: &mut Value, cells: &[(usize, usize)]) {
+    if let Value::Array(items) = result {
+        items.retain(|item| starts_in_cells(&item["range"], cells));
+    }
+}
+
+/// Whether a range starts in one of the cells.
+fn starts_in_cells(range: &Value, cells: &[(usize, usize)]) -> bool {
+    range["start"]["line"]
+        .as_u64()
+        .is_some_and(|line| in_cells(cells, line as usize))
 }
 
 /// The diagnostics of a deck's cells, but for an expression left unused at
@@ -1068,14 +1170,103 @@ mod tests {
         ]);
         actions(&mut result, 1, "file:///d/talk.md", &shadow);
         let first = &result[0];
-        assert_eq!(first["data"], json!({ "slidesServer": 1, "slidesDocument": "file:///d/talk.md", "data": 7 }));
+        assert_eq!(
+            first["data"],
+            json!({ "slidesServer": 1, "slidesDocument": "file:///d/talk.md", "data": 7 })
+        );
         let edits = &first["edit"]["changes"]["file:///d/talk.md"];
         assert_eq!(edits[0]["range"]["start"]["line"], 11);
-        assert!(first["edit"]["changes"].get("file:///d/.talk.md.py").is_none());
+        assert!(
+            first["edit"]["changes"]
+                .get("file:///d/.talk.md.py")
+                .is_none()
+        );
         let change = &result[1]["edit"]["documentChanges"][0];
-        assert_eq!(change["textDocument"], json!({ "uri": "file:///d/talk.md", "version": null }));
+        assert_eq!(
+            change["textDocument"],
+            json!({ "uri": "file:///d/talk.md", "version": null })
+        );
         assert_eq!(change["edits"][0]["range"]["start"]["line"], 11);
         assert!(result[2].get("data").is_none());
+    }
+
+    #[test]
+    fn what_is_asked_at_positions_or_for_a_range_is_of_the_cells_if_they_are() {
+        let cells = [(3, 5), (10, 12)];
+        let at = |line: u32| json!({ "line": line, "character": 0 });
+        let asks = |method: &str, params: Value| asks_of_cells(method, &params, &cells);
+        assert!(asks("textDocument/hover", json!({ "position": at(4) })));
+        assert!(!asks("textDocument/hover", json!({ "position": at(5) })));
+        assert!(asks(
+            "textDocument/codeAction",
+            json!({ "range": { "start": at(10), "end": at(10) } })
+        ));
+        // Each position, or else none.
+        assert!(asks(
+            "textDocument/selectionRange",
+            json!({ "positions": [at(3), at(11)] })
+        ));
+        assert!(!asks(
+            "textDocument/selectionRange",
+            json!({ "positions": [at(3), at(7)] })
+        ));
+        assert!(!asks(
+            "textDocument/selectionRange",
+            json!({ "positions": [] })
+        ));
+        // Inlay hints for what the editor shows, which starts before a cell.
+        assert!(asks(
+            "textDocument/inlayHint",
+            json!({ "range": { "start": at(0), "end": at(20) } })
+        ));
+        assert!(asks(
+            "textDocument/inlayHint",
+            json!({ "range": { "start": at(0), "end": at(3) } })
+        ));
+        assert!(!asks(
+            "textDocument/inlayHint",
+            json!({ "range": { "start": at(5), "end": at(9) } })
+        ));
+    }
+
+    #[test]
+    fn the_highlights_in_the_cells_are_kept() {
+        let at = |line: u32| json!({ "line": line, "character": 0 });
+        let highlight =
+            |line: u32| json!({ "range": { "start": at(line), "end": at(line) }, "kind": 1 });
+        let mut result = json!([highlight(4), highlight(7), highlight(11)]);
+        ranges_in_cells(&mut result, &[(3, 5), (10, 12)]);
+        assert_eq!(result, json!([highlight(4), highlight(11)]));
+    }
+
+    #[test]
+    fn the_inlay_hints_in_the_cells_are_kept_with_their_edits_and_locations_in_the_deck() {
+        let at = |line: u32| json!({ "line": line, "character": 1 });
+        let edit = |line: u32| json!({ "range": { "start": at(line), "end": at(line) }, "newText": ": float" });
+        let shadow = Shadow {
+            uri: "file:///d/.talk.md.py".to_string(),
+            version: 1,
+            text: String::new(),
+            cells: vec![(3, 5)],
+        };
+        let place =
+            json!({ "uri": "file:///d/.talk.md.py", "range": { "start": at(3), "end": at(3) } });
+        let elsewhere =
+            json!({ "uri": "file:///lib/math.pyi", "range": { "start": at(9), "end": at(9) } });
+        let mut result = json!([
+            { "position": at(4), "label": [{ "value": ": " }, { "value": "Point", "location": place }, { "value": "float", "location": elsewhere }], "textEdits": [edit(4), edit(7)], "data": 2 },
+            { "position": at(8), "label": ": int" },
+        ]);
+        hints(&mut result, 1, "file:///d/talk.md", &shadow);
+        let hints = result.as_array().unwrap();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(
+            hints[0]["data"],
+            json!({ "slidesServer": 1, "slidesDocument": "file:///d/talk.md", "data": 2 })
+        );
+        assert_eq!(hints[0]["textEdits"], json!([edit(4)]));
+        assert_eq!(hints[0]["label"][1]["location"]["uri"], "file:///d/talk.md");
+        assert_eq!(hints[0]["label"][2]["location"], elsewhere);
     }
 
     #[test]

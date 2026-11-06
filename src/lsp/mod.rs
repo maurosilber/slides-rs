@@ -92,7 +92,19 @@ pub fn serve() -> Result<()> {
             ..Default::default()
         }),
         definition_provider: Some(OneOf::Left(true)),
+        type_definition_provider: Some(lsp_types::TypeDefinitionProviderCapability::Simple(true)),
+        declaration_provider: Some(lsp_types::DeclarationCapability::Simple(true)),
+        implementation_provider: Some(lsp_types::ImplementationProviderCapability::Simple(true)),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
+        selection_range_provider: Some(lsp_types::SelectionRangeProviderCapability::Simple(true)),
+        // The cells' inferred types, as of a variable, from their Python server.
+        inlay_hint_provider: Some(OneOf::Right(
+            lsp_types::InlayHintServerCapabilities::Options(lsp_types::InlayHintOptions {
+                resolve_provider: Some(true),
+                ..Default::default()
+            }),
+        )),
         document_link_provider: Some(DocumentLinkOptions {
             resolve_provider: Some(false),
             work_done_progress_options: Default::default(),
@@ -350,13 +362,20 @@ impl Server {
                 serde_json::to_value(hover.flatten())?
             }
             // Outside the code cells, there is no Python to ask of.
+            // The editor selects as it would without a selection range.
             "textDocument/signatureHelp"
             | "textDocument/definition"
+            | "textDocument/typeDefinition"
+            | "textDocument/declaration"
+            | "textDocument/implementation"
             | "textDocument/references"
+            | "textDocument/documentHighlight"
+            | "textDocument/selectionRange"
+            | "textDocument/inlayHint"
             | "textDocument/codeAction" => Value::Null,
-            // The deck's own completions, and a server's that it does not
-            // resolve, are whole already.
-            "completionItem/resolve" | "codeAction/resolve" => params,
+            // The deck's own completions, and what a server gave that it does
+            // not resolve, are whole already.
+            "completionItem/resolve" | "codeAction/resolve" | "inlayHint/resolve" => params,
             "textDocument/documentLink" => {
                 let params: lsp_types::DocumentLinkParams = parse(params)?;
                 serde_json::to_value(self.import_links(params.text_document.uri.as_str()))?

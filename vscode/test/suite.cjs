@@ -205,6 +205,13 @@ const tests = {
 		assert.strictEqual((definition.targetRange ?? definition.range).start.line, 5);
 		const list = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', document.uri, new vscode.Position(12, 18));
 		assert.ok(list.items.some((item) => (item.label.label ?? item.label) === 'pi'), 'math. completes pi');
+		// Asked for the whole deck, the inlay hints are those of the cells.
+		const whole = new vscode.Range(0, 0, document.lineCount, 0);
+		const hints = await vscode.commands.executeCommand('vscode.executeInlayHintProvider', document.uri, whole);
+		assert.ok(hints.length > 0, 'x = double(math.pi) has a hint');
+		assert.deepStrictEqual(new Set(hints.map((hint) => hint.position.line)), new Set([12]));
+		const highlights = await vscode.commands.executeCommand('vscode.executeDocumentHighlights', document.uri, new vscode.Position(12, 6));
+		assert.deepStrictEqual(highlights.map((highlight) => highlight.range.start.line), [5, 12]);
 		// Outside the cells, it has nothing to say.
 		assert.deepStrictEqual(await vscode.commands.executeCommand('vscode.executeHoverProvider', document.uri, new vscode.Position(9, 2)), []);
 		// The cells' file is never written.
