@@ -40,7 +40,8 @@ const SPEAKER_SHORTCUTS = [
     ["Esc", "Overview, on the deck: pick a slide with the arrows and Enter"],
     ["T", "Start, pause or resume the timer"],
     ["L", "Layout: the slide and the step after it, or the slide alone, with the step after it highlighted"],
-    ["?", "Show or hide these shortcuts"],
+    ["F", "Full screen, or out of it, for the speaker view"],
+    ["? or H", "Show or hide these shortcuts"],
 ];
 
 const speakerShortcuts = shortcutsDialog(SPEAKER_SHORTCUTS);
@@ -176,10 +177,8 @@ function markNext(highlight) {
 }
 
 function speakerKey(event) {
-    if (event.key == "?") {
-        speakerShortcuts.open ? speakerShortcuts.close() : speakerShortcuts.showModal();
-        return;
-    }
+    if (asksForHelp(event)) return toggleShortcuts(speakerShortcuts);
+    if (event.code == "KeyF") return toggleFullscreen();
     if (speakerShortcuts.open) return;
     if (event.code == "KeyT") return toggleTimer();
     if (event.code == "KeyL") return switchLayout();

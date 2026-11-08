@@ -229,7 +229,7 @@ function goTo(i, step, steps, finished = false) {
     }
 }
 
-// The keys the page answers to, which `?` lists, in a dialog of its own,
+// The keys the page answers to, which `?` or `H` lists, in a dialog of its own,
 // rather than a slide, which is a section.
 const SHORTCUTS = [
     ["→", "Next step, or next slide"],
@@ -239,7 +239,8 @@ const SHORTCUTS = [
     ["A", "Show every step, or step again"],
     ["Esc", "Overview: click a slide, or pick it with the arrows and Enter"],
     ["S", "Speaker view, in a window of its own: the notes, what comes next, and a timer"],
-    ["?", "Show or hide these shortcuts"],
+    ["F", "Full screen, or out of it"],
+    ["? or H", "Show or hide these shortcuts"],
 ];
 
 // The dialog that lists `keys`, each with what it does.
@@ -258,6 +259,23 @@ function shortcutsDialog(keys) {
 }
 
 const shortcuts = shortcutsDialog(SHORTCUTS);
+
+// Whether a key asks for the shortcuts: `?`, which is where the keyboard puts
+// it, which `code` does not say, or `H`.
+function asksForHelp(event) {
+    return event.key == "?" || event.code == "KeyH";
+}
+
+function toggleShortcuts(dialog) {
+    dialog.open ? dialog.close() : dialog.showModal();
+}
+
+// The page, in full screen or out of it. Only a key pressed on the page
+// itself can ask for it, not one the speaker view sends.
+function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.().catch(() => {});
+}
 
 // The overview, which Escape toggles: every slide in a row, shrunk, as
 // slides.css lays them out, each at its end, as if stepped through, but the
@@ -342,11 +360,8 @@ addEventListener("keydown", (event) => {
     // A slide the speaker view shows follows it, rather than the keys.
     if (preview || !forSlides(event)) return;
     if (speaker) return speakerKey(event);
-    // `?` is where the keyboard puts it, which `code` does not say.
-    if (event.key == "?") {
-        shortcuts.open ? shortcuts.close() : shortcuts.showModal();
-        return;
-    }
+    if (asksForHelp(event)) return toggleShortcuts(shortcuts);
+    if (event.code == "KeyF") return toggleFullscreen();
     press(event);
 });
 
