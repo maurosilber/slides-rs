@@ -550,10 +550,8 @@ impl Server {
                     self.rescan(uri);
                     // Where the cursor is, found as the save has it, before
                     // the render that follows it is done.
-                    if let (Some(path), Some(fragment)) = (file_path(uri), self.cursor(uri)) {
-                        for index in self.watches.of(&path) {
-                            self.watches.after_render(index, fragment.clone());
-                        }
+                    for (index, fragment) in self.fragments(uri) {
+                        self.watches.after_render(index, fragment);
                     }
                 }
             }
@@ -562,13 +560,10 @@ impl Server {
                     return;
                 };
                 self.cursors.insert(uri.clone(), line);
-                let (Some(path), true) = (file_path(&uri), follow) else {
+                if !follow {
                     return;
-                };
-                let Some(fragment) = self.cursor(&uri) else {
-                    return;
-                };
-                for index in self.watches.of(&path) {
+                }
+                for (index, fragment) in self.fragments(&uri) {
                     if let Some(id) = self.watches.id(index) {
                         self.watches.follow.send(id, &fragment);
                     }
@@ -685,6 +680,12 @@ impl Server {
 
     /// Where the cursor of a document is on its page, as `slide.step`.
     fn cursor(&self, uri: &str) -> Option<String> {
+        self.cursor_on(uri, 0)
+    }
+
+    /// Where the cursor of a document is, as `slide.step`, on a page where
+    /// `offset` slides come before its file's.
+    fn cursor_on(&self, uri: &str, offset: usize) -> Option<String> {
         let path = file_path(uri)?;
         let line = *self.cursors.get(uri)?;
         let text = match self.documents.get(uri) {
@@ -692,7 +693,24 @@ impl Server {
             None => std::fs::read_to_string(&path).ok()?,
         };
         let position = Disk.position(&path, &text, line);
-        Some(format!("{}.{}", position.slide, position.step))
+        Some(format!("{}.{}", offset + position.slide, position.step))
+    }
+
+    /// Where the cursor of a document is on each page being rendered that
+    /// shows its file: its own, or that of a deck that imports it, as the
+    /// page opened from the deck follows the cursor into a file it imports.
+    fn fragments(&self, uri: &str) -> Vec<(usize, String)> {
+        let Some(path) = file_path(uri) else {
+            return Vec::new();
+        };
+        self.watches
+            .files()
+            .into_iter()
+            .filter_map(|(index, page)| {
+                let offset = Disk.offset(&page, &path)?;
+                Some((index, self.cursor_on(uri, offset)?))
+            })
+            .collect()
     }
 
     /// Reads the file of a document again, from the disk, for whether it is a

@@ -145,14 +145,10 @@ impl Watches {
         }
     }
 
-    /// The decks rendering the file at `path`.
-    pub fn of(&self, path: &Path) -> Vec<usize> {
+    /// Each deck being rendered, by its index, with the file it shows.
+    pub fn files(&self) -> Vec<(usize, PathBuf)> {
         (0..self.watches.len())
-            .filter(|&index| {
-                self.watches[index]
-                    .as_ref()
-                    .is_some_and(|watch| watch.file == path)
-            })
+            .filter_map(|index| Some((index, self.watches[index].as_ref()?.file.clone())))
             .collect()
     }
 

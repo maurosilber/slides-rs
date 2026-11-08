@@ -6,7 +6,7 @@
 // server sends it, as telling the browser to go there would bring its tab to the front.
 
 import * as vscode from 'vscode';
-import type { Shown, SlidesServer } from './server';
+import { SELECTOR, type Shown, type SlidesServer } from './server';
 import { previewFollowsCursor } from './settings';
 
 /** The integrated browser's command, which older versions of VS Code do not have. */
@@ -16,7 +16,7 @@ const INTEGRATED_BROWSER = 'workbench.action.browser.open';
 const FOLLOW_DELAY = 100;
 
 export class Previews implements vscode.Disposable {
-	/** The files shown, by uri, whose cursor the server is told of. */
+	/** The files shown, by uri. */
 	private readonly shown = new Set<string>();
 	/** The timer of the cursor of each document, by uri, which the page follows. */
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -64,11 +64,12 @@ export class Previews implements vscode.Disposable {
 			&& (await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER);
 	}
 
-	/** Tells the server where the cursor of a file shown is, once it rests there. */
+	/** Tells the server where the cursor of a file is, once it rests there, while a page is
+	 * shown: of the file, or of a deck that imports it, which the server finds. */
 	private moved(editor: vscode.TextEditor) {
 		const { document } = editor;
 		const key = document.uri.toString();
-		if (!this.shown.has(key)) {
+		if (this.shown.size === 0 || !SELECTOR.some(({ language }) => language === document.languageId)) {
 			return;
 		}
 		clearTimeout(this.timers.get(key));

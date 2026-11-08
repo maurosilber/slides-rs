@@ -487,6 +487,48 @@ pub trait Files {
         Position { slide, step }
     }
 
+    /// How many slides come before those of the file at `target` on the page
+    /// of the file at `page`, which imports it, directly or through other
+    /// files, or is it. Nothing, if it does not. Imported more than once, it
+    /// is where it is first.
+    fn offset(&mut self, page: &Path, target: &Path) -> Option<usize> {
+        self.offset_in(page, target, &mut Importing::default())
+    }
+
+    fn offset_in(
+        &mut self,
+        page: &Path,
+        target: &Path,
+        importing: &mut Importing,
+    ) -> Option<usize> {
+        if page == target {
+            return Some(0);
+        }
+        if !importing.enter(page) {
+            return None;
+        }
+        let Some(markdown) = self.load(page) else {
+            importing.leave();
+            return None;
+        };
+        let slides = steps(&markdown, |codes| self.outputs(page, codes));
+        let mut before = 0;
+        for import in breaks(&markdown).imports {
+            let file = paths::joined(parent(page), &import.src);
+            if let Some(offset) = self.offset_in(&file, target, importing) {
+                // The page's own slides up to the import, as `position` has them.
+                let own = slides
+                    .iter()
+                    .filter(|slide| slide.line <= import.line && !slide.empty);
+                importing.leave();
+                return Some(before + own.count() + offset);
+            }
+            before += self.count(&file, importing);
+        }
+        importing.leave();
+        None
+    }
+
     /// How many slides the file at `path` brings, along with those its
     /// imports bring, but the empty ones, which the deck leaves out.
     fn slide_count(&mut self, path: &Path) -> usize {
@@ -1047,6 +1089,30 @@ mod tests {
         assert_eq!(at(6), position(4, 1));
         // The empty slide between two rules is left out.
         assert_eq!(at(12), position(5, 1));
+    }
+
+    #[test]
+    fn an_imported_file_is_on_its_importer_s_page_after_what_comes_before_it() {
+        let mut files = files(&[
+            (
+                "/deck/a.md",
+                "# A\n\n<import-slide src=\"b.md\" />\n\n# D\n\n<import-slide src=\"part/c.md\" />\n",
+            ),
+            ("/deck/b.md", "# B\n\n---\n\n# C\n"),
+            (
+                "/deck/part/c.md",
+                "# E\n\n<import-slide src=\"../b.md\" />\n<import-slide src=\"f.md\" />\n",
+            ),
+            ("/deck/part/f.md", "# F\n"),
+        ]);
+        let mut offset =
+            |page: &str, target: &str| files.offset(Path::new(page), Path::new(target));
+        assert_eq!(offset("/deck/a.md", "/deck/a.md"), Some(0));
+        assert_eq!(offset("/deck/a.md", "/deck/b.md"), Some(1));
+        assert_eq!(offset("/deck/a.md", "/deck/part/c.md"), Some(4));
+        // Through another import, after the slides of what it imports first.
+        assert_eq!(offset("/deck/a.md", "/deck/part/f.md"), Some(7));
+        assert_eq!(offset("/deck/b.md", "/deck/a.md"), None);
     }
 
     #[test]
