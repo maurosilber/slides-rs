@@ -312,7 +312,7 @@ def test_it_does_not_rotate_as_it_accumulates(figure):
         ("timing", (), {"duration": 0}),
         ("timing", (), {"duration": 1, "fraction": [0, 1]}),
         ("timing", ([0, 2, 1],), {"fraction": [0, 0.5, 1]}),
-        ("timing", ([-1, 1],), {"fraction": [0, 1]}),
+        ("timing", ([1, 1],), {"fraction": [0, 1]}),
         ("timing", ([0, 1],), {"fraction": [0, 0.5, 1]}),
         ("timing", ([0, 1],), {"fraction": [0, 2]}),
         ("timing", ([0, 1, 2],), {}),  # The line has 20 vertices.
@@ -386,3 +386,10 @@ def test_a_slide_moves_it_when_its_step_shows(render, tmp_path):
     )
     # The line keeps its step, and its path is named for the motion to follow.
     assert re.search(rf'<g step="1"[^>]*>\s*<path [^>]*id="{path}"', html)
+
+
+def test_in_a_deck_its_times_go_on_from_0(figure):
+    figure, line, dot = figure
+    Motion(dot, along=line).timing(duration=1).timing([-1, 1], fraction=[0, 1])
+    with pytest.raises(ValueError, match="Slider"):
+        figure.savefig(io.StringIO(), format="svg")

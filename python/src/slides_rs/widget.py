@@ -2,7 +2,8 @@
 
 A :class:`Slider` shows a figure along with a slider, as html, which scrubs
 through the figure's motions rather than the deck playing them: the slider's
-value is the time, in seconds, the motions are at. Its methods set it up,
+value is the time the motions are at, as they are timed, which can be the
+values of any parameter, below 0 too. Its methods set it up,
 each returning the slider, for the next one::
 
     from slides_rs import Motion, Slider
@@ -207,10 +208,10 @@ SCRIPT = """\
   const input = root.querySelector("input");
   const output = root.querySelector("output");
   const button = root.querySelector("button");
-  const { start, stop, step, digits, speed } = %(options)s;
+  const { start, stop, step, origin, digits, speed } = %(options)s;
   let time = start + Number(input.value) * step;
   const show = () => {
-    svg.setCurrentTime(time);
+    svg.setCurrentTime(time - origin);
     output.value = time.toFixed(digits);
     input.style.setProperty("--progress", `${(100 * input.value) / input.max}%%`);
   };
@@ -276,7 +277,9 @@ class Slider:
                 raise ValueError(f"{motion!r} is not in the figure")
         self.figure = figure
         self.motions = motions
-        self._start, self._stop, self._step = 0.0, None, None
+        self._start: float | None = None
+        self._stop: float | None = None
+        self._step: float | None = None
         self._value: float | None = None
         self._label: str | None = None
         self._speed: float | None = 1.0
@@ -286,16 +289,17 @@ class Slider:
     def __repr__(self):
         return f"Slider({self.figure!r}, {', '.join(map(repr, self.motions))})"
 
-    def range(self, start: float = 0, stop: float | None = None, *, step: float | None = None) -> Slider:
-        """Goes from ``start`` to ``stop`` seconds, or the end of the longest motion,
-        by ``step``, or in a hundred ticks."""
-        if not _real(start):
+    def range(self, start: float | None = None, stop: float | None = None, *, step: float | None = None) -> Slider:
+        """Goes from ``start``, or 0, or the earliest the motions start at if before
+        0, to ``stop``, or the end of the longest motion, by ``step``, or in a
+        hundred ticks. Its values are the motions' times, as they are timed."""
+        if not (start is None or _real(start)):
             raise ValueError(f"the slider starts at a number, not {start!r}")
-        if not (stop is None or (_real(stop) and stop > start)):
+        if not (stop is None or (_real(stop) and (start is None or stop > start))):
             raise ValueError(f"the slider goes from {start} up to a later stop, not {stop!r}")
         if not (step is None or (_real(step) and step > 0)):
             raise ValueError(f"the slider goes by a positive step, not {step!r}")
-        self._start = float(start)
+        self._start = None if start is None else float(start)
         self._stop = None if stop is None else float(stop)
         self._step = None if step is None else float(step)
         return self
@@ -373,12 +377,21 @@ class Slider:
 
     def _range(self) -> tuple[float, float, int]:
         """Where it starts and stops, and in how many ticks."""
-        start = self._start
+        start = self._start if self._start is not None else min(0.0, self._first())
         stop = self._stop if self._stop is not None else max(motion._times[-1] for motion in self.motions)
         if not stop > start:
             raise ValueError(f"the slider starts at {start}, after the motions end, at {stop}")
         step = self._step if self._step is not None else (stop - start) / 100
         return start, stop, max(1, round((stop - start) / step))
+
+    def _first(self) -> float:
+        """The earliest time a motion starts at."""
+        return float(min(motion._times[0] for motion in self.motions))
+
+    def _origin(self) -> float:
+        """The value the figure's timeline starts at, at time 0: where the slider
+        starts, or a motion, if before."""
+        return min(self._range()[0], self._first())
 
     def _repr_html_(self) -> str:
         start, stop, ticks = self._range()
@@ -386,7 +399,9 @@ class Slider:
         value = start if self._value is None else self._value
         tick = min(max(round((value - start) / step), 0), ticks)
         digits = max(0, -int(f"{step:e}".split("e")[1]))
-        options = json.dumps(dict(start=start, stop=stop, step=step, digits=digits, speed=self._speed or 0))
+        options = json.dumps(
+            dict(start=start, stop=stop, step=step, digits=digits, speed=self._speed or 0, origin=self._origin())
+        )
         # The value takes as much space as the widest it is, not to move the slider.
         width = max(len(f"{start:.{digits}f}"), len(f"{stop:.{digits}f}"))
         output = (
@@ -417,7 +432,7 @@ class Slider:
         """The figure as an SVG, its motions beginning with it, and its ids the same
         each time it is drawn."""
         buffer = io.StringIO()
-        with _beginning(self.motions), matplotlib.rc_context({"svg.hashsalt": "slides-rs"}):
+        with _beginning(self.motions, self._origin()), matplotlib.rc_context({"svg.hashsalt": "slides-rs"}):
             self.figure.savefig(buffer, format="svg")
         return buffer.getvalue()
 
@@ -427,16 +442,17 @@ def _real(value) -> bool:
 
 
 @contextlib.contextmanager
-def _beginning(motions):
-    """The motions begin with the SVG, rather than as the deck says, while drawn."""
-    begins = [motion._begin for motion in motions]
+def _beginning(motions, origin: float):
+    """The motions begin with the SVG, rather than as the deck says, and its timeline
+    starts at ``origin``, while drawn."""
+    settings = [(motion._begin, motion._origin) for motion in motions]
     for motion in motions:
-        motion._begin = "0s"
+        motion._begin, motion._origin = "0s", origin
     try:
         yield
     finally:
-        for motion, begin in zip(motions, begins):
-            motion._begin = begin
+        for motion, (begin, origin) in zip(motions, settings):
+            motion._begin, motion._origin = begin, origin
 
 
 def _inline(svg: str, style: str = "") -> str:

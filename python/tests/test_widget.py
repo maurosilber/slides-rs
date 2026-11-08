@@ -133,3 +133,22 @@ def test_a_motion_of_another_figure_is_refused(figure):
 def test_the_slider_is_no_step_of_the_deck(figure):
     (input,) = re.findall(r"<input[^>]*>", Slider(*figure)._repr_html_())
     assert not re.search(r"\s(step|data-step)=", input)
+
+
+def test_its_values_are_those_the_motions_are_timed_at(figure):
+    figure, motion = figure
+    motion.timing(np.linspace(-1, 3, 20))
+    html = Slider(figure, motion)._repr_html_()
+    assert '"start": -1.0, "stop": 3.0, "step": 0.04' in html
+    assert '"origin": -1.0}' in html
+    (animation,) = svg_of(html).iter(f"{SVG}animateMotion")
+    assert animation.get("dur") == "4s"
+    assert motion._origin == 0
+
+
+def test_a_motion_before_the_slider_starts_is_on_the_timeline(figure):
+    figure, motion = figure
+    motion.timing(np.linspace(-1, 3, 20))
+    html = Slider(figure, motion).range(0, 3)._repr_html_()
+    assert '"start": 0.0, "stop": 3.0, "step": 0.03' in html
+    assert '"origin": -1.0}' in html

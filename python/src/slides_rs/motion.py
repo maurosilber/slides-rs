@@ -80,6 +80,9 @@ class Motion:
         self._fill = "freeze"
         # When it begins: when the deck says, or, driven by a widget, with the SVG.
         self._begin = "indefinite"
+        # The time the SVG's timeline starts at: 0 in a deck, or, driven by a widget,
+        # where its values start, for times before 0 to be on it.
+        self._origin = 0.0
         # The artist draws itself through the motion, where the axes draw it, and the
         # path it follows with its name.
         self._draws = {artist: artist.__dict__.get("draw") for artist in (artist, along)}
@@ -122,6 +125,11 @@ class Motion:
         line plotted from ``x(t), y(t)`` is followed as it was plotted. It
         takes ``t[-1]`` seconds, and waits where it starts up to ``t[0]``.
 
+        Driven by a :class:`~slides_rs.Slider`, the times are the slider's
+        values, and can be any that go on, as those of a parameter the line was
+        plotted along, below 0 too: ``timing(t)`` puts it where the line is at
+        the value the slider shows. In a deck, they go on from 0.
+
         Between them, it goes at the pace ``easing`` says, for every interval
         or for each: ``"linear"``, one of the easings CSS names, or the control
         points of a cubic Bézier curve, as ``cubic-bezier()`` takes them. Or,
@@ -137,8 +145,8 @@ class Motion:
             times = np.asarray(t, dtype=float)
         if times.ndim != 1 or len(times) < 2 or not np.isfinite(times).all():
             raise ValueError(f"the times must be two or more numbers, not {t!r}")
-        if not (times[0] >= 0 and (np.diff(times) >= 0).all() and times[-1] > 0):
-            raise ValueError(f"the times must go on from 0 and end after it, not {times!r}")
+        if not ((np.diff(times) >= 0).all() and times[-1] > times[0]):
+            raise ValueError(f"the times must go on and end after they start, not {times!r}")
         if fraction is not None:
             points = np.asarray(fraction, dtype=float)
             if points.shape != times.shape:
@@ -315,7 +323,12 @@ class Motion:
 
     def _attributes(self, svg: RendererSVG) -> dict[str, str] | None:
         """The animation's attributes, or none if it has nowhere to move."""
-        times, points, curves = self._times, self._fraction, self._curves
+        times, points, curves = self._times - self._origin, self._fraction, self._curves
+        if times[0] < 0:
+            raise ValueError(
+                f"{self!r} starts at {self._times[0]}, before 0, where the deck starts it: "
+                "only a Slider, whose values they can be, takes times before 0"
+            )
         attributes = {
             # The deck begins it when its step shows, unless a widget drives it.
             "begin": self._begin,
