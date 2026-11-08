@@ -230,7 +230,10 @@ pre:not(:has(> code[class^="language-"])) {
 }
 
 /* Figures. KaTeX draws parts of its math, like braces and roots, as SVGs
-   of its own, which are left to it. */
+   of its own, which are left to it. An SVG, as matplotlib's, is as wide as
+   its slide or column, rather than the size it was drawn at, which would
+   not grow with the slide; one capped by its height keeps its shape, with
+   its drawing centred in its box. */
 
 img,
 svg:not(.katex *) {
@@ -239,6 +242,10 @@ svg:not(.katex *) {
     max-height: 70cqh;
     height: auto;
     margin: 0.4em auto;
+}
+
+svg:not(.katex *) {
+    width: 100%;
 }
 
 section svg:not(.katex *) {

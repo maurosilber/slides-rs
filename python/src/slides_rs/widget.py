@@ -80,8 +80,7 @@ CSS = """\
   --slider-thumb-size: 1.1em;
   display: flex;
   flex-direction: column;
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
   margin: 0.4em auto;
 }
 .slides-rs-slider > svg {
@@ -98,6 +97,7 @@ CSS = """\
   font-variant-numeric: tabular-nums;
 }
 :where(.slides-rs-slider-controls) button {
+  font: inherit;
   flex: none;
   display: grid;
   place-items: center;
@@ -134,6 +134,7 @@ CSS = """\
   font-style: italic;
 }
 :where(.slides-rs-slider-controls) input {
+  font: inherit;
   --progress: 0%;
   flex: 1;
   min-width: 6em;

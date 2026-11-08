@@ -110,7 +110,8 @@ section:has([data-center]) {
 :is([data-center="both"], [data-center="horizontal"]) {
     text-align: center;
 
-    &>:not(.columns) {
+    /* But figures, which fill the width, as the theme has them. */
+    &>:not(.columns, svg, :has(> svg:not(.katex *))) {
         width: fit-content;
         max-width: 100%;
         margin-inline: auto;
