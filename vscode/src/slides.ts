@@ -408,17 +408,29 @@ function columnsOf(layout: Layout): Column[] {
 		.map(({ line, last, index }) => ({ range: new vscode.Range(line, 0, last, 0), index }));
 }
 
+/** What is written for a line that steps, and each of its steps, to list in its hover
+ * if there is more than one. */
+interface LineSteps {
+	mark: string;
+	steps: string[];
+}
+
 /** The steps written for each line that steps, by line: `3` from the third step on,
  * `2..4` from the second up to the fourth, excluded, as a range of the deck is written,
- * and with a `*` if it takes no space while hidden. */
-function stepMarks(slides: SlideSteps[], show: Shown): Map<number, string> {
+ * and with a `*` if it takes no space while hidden. A line that steps more than once, as
+ * a code cell's does with all its outputs, has its first step and how many more, so that
+ * it does not widen the column of every line, and all of them in its hover. */
+function stepMarks(slides: SlideSteps[], show: Shown): Map<number, LineSteps> {
 	const marks = show.stepMarks;
 	const lines = new Map<number, string[]>();
 	for (const { line, from, to, collapse } of slides.flatMap((slide) => slide.steps)) {
 		const text = `${to === null ? from : `${from}${marks.range}${to}`}${collapse ? marks.noSpace : ''}`;
 		lines.set(line, [...(lines.get(line) ?? []), text]);
 	}
-	return new Map([...lines].map(([line, steps]) => [line, steps.join(marks.separator)]));
+	return new Map([...lines].map(([line, steps]) => [line, {
+		mark: steps.length === 1 ? steps[0] : `${steps[0]}${fill(marks.more, { more: steps.length - 1 })}`,
+		steps,
+	}]));
 }
 
 /** A space that is kept, as one at the start of a decoration's text is not. */
@@ -434,7 +446,7 @@ const NBSP = '\u00a0';
 function gutterOf(
 	lineCount: number,
 	columns: Column[],
-	steps: Map<number, string> | undefined,
+	steps: Map<number, LineSteps> | undefined,
 	collapsed: boolean,
 	show: Shown,
 	style: Style,
@@ -455,25 +467,32 @@ function gutterOf(
 		}
 	}
 	const padding = spacing.stepPadding;
-	const widest = Math.max(1, ...[...(steps?.values() ?? [])].map((text) => text.length));
+	const widest = Math.max(1, ...[...(steps?.values() ?? [])].map(({ mark }) => mark.length));
 	const stepsWidth = steps === undefined ? 0 : (collapsed ? 1 : widest) + 2 * padding;
 	const background = steps === undefined ? undefined : style.colors.stepColumn;
 	const barColors = style.colors.columns;
-	let hover: vscode.MarkdownString | undefined;
-	if (steps !== undefined) {
-		const [icon, verb] = collapsed ? ['unfold', 'Expand'] : ['fold', 'Collapse'];
-		hover = new vscode.MarkdownString(`[$(${icon}) ${verb} the steps' column](command:slides.toggleStepColumn)`, true);
+	const [icon, verb] = collapsed ? ['unfold', 'Expand'] : ['fold', 'Collapse'];
+	const toggle = `[$(${icon}) ${verb} the steps' column](command:slides.toggleStepColumn)`;
+	const hoverOf = (text: string) => {
+		const hover = new vscode.MarkdownString(text, true);
 		hover.isTrusted = { enabledCommands: ['slides.toggleStepColumn'] };
-	}
+		return hover;
+	};
+	const hover = steps === undefined ? undefined : hoverOf(toggle);
+	// A line that steps more than once lists its steps, in order, above the toggle.
+	const listed = (line: LineSteps) => line.steps.length === 1 ? hover : hoverOf(
+		`${line.steps.length} steps: \`${line.steps.join(show.stepMarks.separator)}\`\n\n${toggle}`,
+	);
 	const pad = NBSP.repeat(padding);
 	const options: vscode.DecorationOptions[] = [];
 	for (let line = 0; line < lineCount; line++) {
-		const text = steps?.get(line);
+		const stepped = steps?.get(line);
+		const text = stepped?.mark;
 		const bar = inner[line];
 		const shift = (depths[line] ?? 0) * indent;
 		options.push({
 			range: new vscode.Range(line, 0, line, 0),
-			hoverMessage: hover,
+			hoverMessage: stepped === undefined ? hover : listed(stepped),
 			renderOptions: {
 				before: {
 					// Never empty, for the editor to write it at all.

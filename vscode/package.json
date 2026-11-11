@@ -524,12 +524,17 @@
 						"separator": {
 							"type": "string",
 							"default": " · ",
-							"markdownDescription": "Between the steps of a line that steps more than once."
+							"markdownDescription": "Between the steps of a line that steps more than once, as they are listed in its hover."
 						},
 						"range": {
 							"type": "string",
 							"default": "..",
 							"markdownDescription": "Between the first step of a range and the one it ends before."
+						},
+						"more": {
+							"type": "string",
+							"default": " +${more}",
+							"markdownDescription": "After the first step of a line that steps more than once, as a code cell does with its outputs, `${more}` how many more steps it has. They are all listed in its hover."
 						},
 						"noSpace": {
 							"type": "string",
@@ -546,6 +551,7 @@
 					"default": {
 						"separator": " · ",
 						"range": "..",
+						"more": " +${more}",
 						"noSpace": "*",
 						"collapsed": "•"
 					}

@@ -111,6 +111,7 @@ const LABELS: Labels = {
 export interface StepMarks {
 	separator: string;
 	range: string;
+	more: string;
 	noSpace: string;
 	collapsed: string;
 }
@@ -118,6 +119,7 @@ export interface StepMarks {
 const STEP_MARKS: StepMarks = {
 	separator: ' · ',
 	range: '..',
+	more: ' +${more}',
 	noSpace: '*',
 	collapsed: '•',
 };
